@@ -23,6 +23,8 @@ The server never opens 易协作 or popo-cli.
 Keep this running for live bidirectional updates:
 
   multica yixiezuo sync --watch
+
+A saved 易协作 query_id is required. Unscoped full-board pulls are refused.
 `,
 }
 
@@ -224,11 +226,18 @@ func yixiezuoRuntime(cmd *cobra.Command) (*cli.APIClient, yixiezuo.Driver, error
 	if override := strings.TrimSpace(os.Getenv("MULTICA_YIXIEZUO_GCP_HOST")); override != "" {
 		host = override
 	}
+	queryID := strings.TrimSpace(env.Connection.ListQueryID)
+	if override := strings.TrimSpace(os.Getenv("MULTICA_YIXIEZUO_QUERY_ID")); override != "" {
+		queryID = override
+	}
+	if queryID == "" {
+		return nil, nil, fmt.Errorf("list_query_id is required; save a 易协作 filter id before sync. Unscoped kanban pulls are refused")
+	}
 	return client, yixiezuo.NewExecDriver(yixiezuo.ExecOptions{
 		Bin:               bin,
 		GCPHost:           host,
 		ExternalProjectID: env.Connection.ExternalProjectID,
-		ListQueryID:       env.Connection.ListQueryID,
+		ListQueryID:       queryID,
 		TrackerID:         env.Connection.TrackerID,
 	}), nil
 }

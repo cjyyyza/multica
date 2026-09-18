@@ -92,6 +92,10 @@ export function YixiezuoTab() {
 
   async function handleSave() {
     if (!canManage || saving) return;
+    if (!listQueryId.trim()) {
+      toast.error(t(($) => $.yixiezuo.toast_query_required));
+      return;
+    }
     setSaving(true);
     try {
       await api.upsertYixiezuoConnection(wsId, {
@@ -203,6 +207,7 @@ export function YixiezuoTab() {
               value={listQueryId}
               onChange={(event) => setListQueryId(event.target.value)}
               disabled={!canManage || saving}
+              required
             />
             <p className="text-caption text-muted-foreground">
               {t(($) => $.yixiezuo.list_query_help)}
@@ -280,7 +285,12 @@ export function YixiezuoTab() {
                   {t(($) => $.yixiezuo.disconnect)}
                 </Button>
               ) : null}
-              <Button type="button" size="sm" onClick={handleSave} disabled={saving}>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleSave}
+                disabled={saving || !listQueryId.trim()}
+              >
                 {saving ? t(($) => $.yixiezuo.saving) : t(($) => $.yixiezuo.save)}
               </Button>
             </div>

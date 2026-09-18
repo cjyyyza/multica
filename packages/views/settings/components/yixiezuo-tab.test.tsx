@@ -100,6 +100,14 @@ describe("YixiezuoTab", () => {
     };
   });
 
+  it("does not save without a query_id", async () => {
+    const user = userEvent.setup();
+    renderWithI18n(<YixiezuoTab />);
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
   it("shows the local-only sync command and saves the connection", async () => {
     const user = userEvent.setup();
     renderWithI18n(<YixiezuoTab />);

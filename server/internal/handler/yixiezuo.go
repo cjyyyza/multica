@@ -146,6 +146,11 @@ func (h *Handler) UpsertYixiezuoConnection(w http.ResponseWriter, r *http.Reques
 	if cliBin == "" {
 		cliBin = "popo-cli"
 	}
+	listQueryID := strings.TrimSpace(req.ListQueryID)
+	if listQueryID == "" {
+		writeError(w, http.StatusBadRequest, "list_query_id is required; unscoped 易协作 kanban pulls are refused")
+		return
+	}
 	projectID := pgtype.UUID{}
 	if req.ProjectID != nil && strings.TrimSpace(*req.ProjectID) != "" {
 		parsed, parsedOK := parseUUIDOrBadRequest(w, strings.TrimSpace(*req.ProjectID), "project_id")
@@ -177,7 +182,7 @@ func (h *Handler) UpsertYixiezuoConnection(w http.ResponseWriter, r *http.Reques
 		WorkspaceID:       wsUUID,
 		CliBin:            cliBin,
 		GcpHost:           strings.TrimSpace(req.GCPHost),
-		ListQueryID:       strings.TrimSpace(req.ListQueryID),
+		ListQueryID:       listQueryID,
 		ExternalProjectID: strings.TrimSpace(req.ExternalProjectID),
 		TrackerID:         strings.TrimSpace(req.TrackerID),
 		StatusMap:         rawMap,

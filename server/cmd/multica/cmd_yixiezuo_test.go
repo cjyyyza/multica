@@ -122,8 +122,8 @@ func main() {
 	}
 	switch tool {
 	case "list_issues":
-		if !strings.Contains(argsJSON, "kanban") {
-			fmt.Fprintln(os.Stderr, "missing kanban context")
+		if !strings.Contains(argsJSON, "kanban") || !strings.Contains(argsJSON, "query_id") {
+			fmt.Fprintln(os.Stderr, "missing kanban query_id")
 			os.Exit(1)
 		}
 		fabric(map[string]any{
@@ -168,6 +168,30 @@ func main() {
 		t.Fatalf("build fake popo-cli: %v\n%s", err, out)
 	}
 	return bin
+}
+
+func TestYixiezuoRuntimeRefusesMissingQueryID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"connection": map[string]any{
+				"id":      "conn-1",
+				"cli_bin": "popo-cli",
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_YIXIEZUO_QUERY_ID", "")
+	cmd := &cobra.Command{Use: "pull"}
+	cmd.SetOut(&strings.Builder{})
+	cmd.PersistentFlags().String("server-url", srv.URL, "")
+	cmd.PersistentFlags().String("workspace-id", "ws-1", "")
+	cmd.PersistentFlags().String("profile", "", "")
+	if err := runYixiezuoPull(cmd, nil); err == nil {
+		t.Fatal("expected missing query_id to fail")
+	}
 }
 
 func TestYixiezuoAPIPath(t *testing.T) {

@@ -81,8 +81,8 @@ func TestExecDriverListAndUpdate(t *testing.T) {
 			switch tool {
 			case "list_issues":
 				argJSON := argumentsFromArgs(args)
-				if !strings.Contains(argJSON, `"context":"kanban"`) {
-					return nil, fmt.Errorf("expected pmmcp list_issues, got %v", args)
+				if !strings.Contains(argJSON, `"context":"kanban"`) || !strings.Contains(argJSON, `"query_id":9`) {
+					return nil, fmt.Errorf("expected pmmcp list_issues with query_id, got %v", args)
 				}
 				payload := mustJSON(map[string]any{
 					"res_code": 1,
@@ -139,7 +139,7 @@ func TestExecDriverRefusesUnscopedKanban(t *testing.T) {
 		GCPHost:  "dj01.pm.netease.com",
 		LookPath: func(file string) (string, error) { return file, nil },
 		Run: func(context.Context, string, []string) ([]byte, error) {
-			t.Fatal("should not call CLI without a scope")
+			t.Fatal("should not call CLI without a query_id")
 			return nil, nil
 		},
 	})
@@ -148,31 +148,20 @@ func TestExecDriverRefusesUnscopedKanban(t *testing.T) {
 	}
 }
 
-func TestExecDriverRefusesUnfilteredProjectScope(t *testing.T) {
+func TestExecDriverRefusesProjectScopeWithoutQueryID(t *testing.T) {
 	t.Parallel()
 	drv := NewExecDriver(ExecOptions{
 		Bin:               "popo-cli",
 		GCPHost:           "dj01.pm.netease.com",
 		ExternalProjectID: "7",
 		LookPath:          func(file string) (string, error) { return file, nil },
-		Run: func(_ context.Context, _ string, args []string) ([]byte, error) {
-			if toolNameFromArgs(args) != "list_issues" {
-				return nil, fmt.Errorf("unexpected %v", args)
-			}
-			return fabricText(mustJSON(map[string]any{
-				"res_code": 1,
-				"data": map[string]any{
-					"list": []any{
-						map[string]any{"id": 1, "project_id": 10, "subject": "其他项目", "status": "新建"},
-						map[string]any{"id": 2, "project_id": 7, "subject": "本项目", "status": "新建"},
-					},
-					"page": 1, "total_page": 100, "total_count": 16943,
-				},
-			})), nil
+		Run: func(context.Context, string, []string) ([]byte, error) {
+			t.Fatal("should not call CLI without a query_id")
+			return nil, nil
 		},
 	})
 	if _, err := drv.ListCards(context.Background()); err == nil {
-		t.Fatal("expected mixed unfiltered kanban to fail without query_id")
+		t.Fatal("expected project-only list to fail without query_id")
 	}
 }
 

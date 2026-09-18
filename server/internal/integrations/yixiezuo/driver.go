@@ -15,7 +15,6 @@ const (
 	defaultCLIBin    = "popo-cli"
 	defaultMCPTarget = "gcp"
 	listPerPage      = 50
-	maxUnscopedPages = 20
 )
 
 // Driver is the local 易协作 CLI surface. The Multica server never implements this.
@@ -86,14 +85,14 @@ func (d *ExecDriver) resolveBin() (string, error) {
 }
 
 func (d *ExecDriver) ListCards(ctx context.Context) ([]Card, error) {
-	if strings.TrimSpace(d.opts.ListQueryID) == "" && strings.TrimSpace(d.opts.ExternalProjectID) == "" {
-		return nil, fmt.Errorf("set a 易协作 saved query_id or project id; the kanban list is tens of thousands of cards")
+	queryID, err := parseIntish(d.opts.ListQueryID)
+	if err != nil {
+		return nil, fmt.Errorf("set list_query_id to a saved 易协作 filter; unscoped kanban pulls are refused")
 	}
 	var all []Card
-	mixed := false
 	totalPages := 1
 	for page := 1; page <= totalPages; page++ {
-		payload, err := d.listIssuesPage(ctx, page)
+		payload, err := d.listIssuesPage(ctx, page, queryID)
 		if err != nil {
 			return nil, err
 		}
@@ -109,18 +108,11 @@ func (d *ExecDriver) ListCards(ctx context.Context) ([]Card, error) {
 			if pid := strings.TrimSpace(d.opts.ExternalProjectID); pid != "" {
 				rowProject := stringifyID(row.ProjectID)
 				if rowProject != "" && rowProject != pid {
-					mixed = true
 					continue
 				}
 			}
 			all = append(all, card)
 			pageCards++
-		}
-		if page == 1 && mixed && payload.TotalCount > 500 && strings.TrimSpace(d.opts.ListQueryID) == "" {
-			return nil, fmt.Errorf("易协作 list_issues context=kanban does not honor project_id on this instance (total_count=%d); set list_query_id to a saved filter", payload.TotalCount)
-		}
-		if strings.TrimSpace(d.opts.ListQueryID) == "" && page >= maxUnscopedPages && payload.TotalPage > maxUnscopedPages {
-			return nil, fmt.Errorf("易协作 kanban has %d pages; set list_query_id to a saved filter before syncing", payload.TotalPage)
 		}
 		if pageCards == 0 && page >= payload.TotalPage {
 			break
@@ -227,26 +219,14 @@ type listIssuesPage struct {
 	TotalCount int       `json:"total_count"`
 }
 
-func (d *ExecDriver) listIssuesPage(ctx context.Context, page int) (listIssuesPage, error) {
+func (d *ExecDriver) listIssuesPage(ctx context.Context, page, queryID int) (listIssuesPage, error) {
 	args := map[string]any{
 		"set_filter": 1,
 		"page":       page,
 		"per_page":   listPerPage,
 		"context":    "kanban",
+		"query_id":   queryID,
 		"c":          []string{"id", "subject", "status", "description", "start_date", "due_date", "priority", "updated_on"},
-	}
-	if qid, err := parseIntish(d.opts.ListQueryID); err == nil {
-		args["query_id"] = qid
-	}
-	if pid, err := parseIntish(d.opts.ExternalProjectID); err == nil {
-		args["project_id"] = pid
-		args["filter_mode"] = "simple"
-		args["filters"] = map[string]any{
-			"project_id": map[string]any{
-				"operator": "=",
-				"values":   []string{strconv.Itoa(pid)},
-			},
-		}
 	}
 	raw, err := d.toolCall(ctx, "list_issues", args)
 	if err != nil {

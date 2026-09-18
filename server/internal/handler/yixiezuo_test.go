@@ -18,6 +18,15 @@ func yixiezuoRequest(method, path string, body any) *http.Request {
 	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 }
 
+func TestYixiezuoUpsertRequiresListQueryID(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	testutil.Call(t, testHandler.UpsertYixiezuoConnection, yixiezuoRequest(http.MethodPut, "/api/workspaces/"+testWorkspaceID+"/yixiezuo", map[string]any{
+		"cli_bin": "popo-cli",
+	})).Want(http.StatusBadRequest)
+}
+
 func TestYixiezuoBidirectionalSync(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -29,7 +38,8 @@ func TestYixiezuoBidirectionalSync(t *testing.T) {
 
 	var created yixiezuoConnectionEnvelope
 	testutil.Call(t, testHandler.UpsertYixiezuoConnection, yixiezuoRequest(http.MethodPut, "/api/workspaces/"+testWorkspaceID+"/yixiezuo", map[string]any{
-		"cli_bin": "pm-cli",
+		"cli_bin":       "pm-cli",
+		"list_query_id": "9",
 		"status_map": map[string]string{
 			"开发中": "in_progress",
 		},
@@ -117,7 +127,8 @@ func TestYixiezuoSkipDirtyNewerLocal(t *testing.T) {
 		testPool.Exec(context.Background(), `DELETE FROM yixiezuo_connection WHERE workspace_id = $1`, testWorkspaceID)
 	})
 	testutil.Call(t, testHandler.UpsertYixiezuoConnection, yixiezuoRequest(http.MethodPut, "/api/workspaces/"+testWorkspaceID+"/yixiezuo", map[string]any{
-		"cli_bin": "pm-cli",
+		"cli_bin":       "pm-cli",
+		"list_query_id": "9",
 	})).Want(http.StatusOK)
 
 	var pulled yixiezuoPullResult
