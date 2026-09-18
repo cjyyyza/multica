@@ -19,12 +19,15 @@ const registerPopoBot = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (opts: { queryKey: unknown[]; enabled?: boolean }) => {
-    if (opts.enabled === false) return { data: undefined };
-    const key = JSON.stringify(opts.queryKey);
+    if (opts.enabled === false) return { data: undefined, isLoading: false };
+    const key = JSON.stringify(opts.queryKey ?? []);
     if (key.includes("members")) {
-      return { data: [{ user_id: "user-1", role: "admin" }] };
+      return { data: [{ user_id: "user-1", role: "admin" }], isLoading: false };
     }
-    return { data: listingRef.current, isLoading: false, isError: false };
+    if (key.includes("installations") || key.includes("popo")) {
+      return { data: listingRef.current, isLoading: false, isError: false };
+    }
+    return { data: undefined, isLoading: false };
   },
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
   queryOptions: <T,>(opts: T) => opts,
@@ -109,9 +112,13 @@ describe("PopoAgentBindButton", () => {
   });
 
   it("shows the connected badge when this agent already has a robot", () => {
-    listingRef.current.installations = [
-      { id: "inst-1", agent_id: "agent-1", status: "active", robot_id: "default" },
-    ];
+    listingRef.current = {
+      installations: [
+        { id: "inst-1", agent_id: "agent-1", status: "active", robot_id: "default" },
+      ],
+      configured: true,
+      install_supported: true,
+    };
     renderUI(<PopoAgentBindButton agentId="agent-1" />);
     expect(screen.getByTestId("popo-agent-bot-connected")).toBeTruthy();
     expect(screen.queryByTestId("popo-agent-connect")).toBeNull();
