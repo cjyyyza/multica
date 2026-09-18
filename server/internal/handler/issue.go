@@ -3836,6 +3836,10 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.notifyParentOfChildDone(r.Context(), prevIssue, issue)
 	}
 
+	if titleChanged || statusChanged || priorityChanged || descriptionChanged || startDateChanged || dueDateChanged {
+		h.markYixiezuoDirty(r.Context(), issue)
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 

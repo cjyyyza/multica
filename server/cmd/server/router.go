@@ -1605,6 +1605,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// for the same reason as GitHub installations; connect /
 					// disconnect are admin-gated in the group below.
 					r.Get("/vcs/connections", h.ListVCSConnections)
+					r.Get("/yixiezuo", h.GetYixiezuoConnection)
+					r.Post("/yixiezuo/pull", h.PullYixiezuoCards)
+					r.Get("/yixiezuo/export", h.ExportYixiezuoChanges)
+					r.Post("/yixiezuo/push-ack", h.AckYixiezuoPush)
 					// Custom runtime profiles — listing/reading is member-visible
 					// (the Runtime page renders for everyone; create/edit/delete
 					// are admin-gated below).
@@ -1692,6 +1696,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/vcs/connections", h.ConnectVCS)
 					r.Post("/vcs/connections/{connectionId}/rotate-webhook", h.RotateVCSConnectionWebhook)
 					r.Delete("/vcs/connections/{connectionId}", h.DeleteVCSConnection)
+					r.Put("/yixiezuo", h.UpsertYixiezuoConnection)
+					r.Delete("/yixiezuo", h.DeleteYixiezuoConnection)
 				})
 
 				// Lark integration. Every endpoint here only requires

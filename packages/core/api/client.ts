@@ -196,6 +196,8 @@ import type {
   ListTelegramInstallationsResponse,
   RegisterTelegramRequest,
   RedeemTelegramBindingTokenResponse,
+  YixiezuoConnectionEnvelope,
+  UpsertYixiezuoConnectionRequest,
   Squad,
   SquadMember,
   SquadMemberStatusListResponse,
@@ -368,6 +370,8 @@ import {
   EMPTY_TELEGRAM_INSTALLATION,
   EMPTY_LIST_TELEGRAM_INSTALLATIONS_RESPONSE,
   EMPTY_REDEEM_TELEGRAM_BINDING_TOKEN_RESPONSE,
+  YixiezuoConnectionEnvelopeSchema,
+  EMPTY_YIXIEZUO_CONNECTION_ENVELOPE,
   EMPTY_BILLING_BALANCE,
   EMPTY_BILLING_TRANSACTIONS_PAGE,
   EMPTY_BILLING_BATCHES_PAGE,
@@ -4947,5 +4951,39 @@ export class ApiClient {
       EMPTY_REDEEM_TELEGRAM_BINDING_TOKEN_RESPONSE,
       { endpoint: "POST /api/telegram/binding/redeem" },
     );
+  }
+
+  // 易协作 kanban sync. The server only stores the connection and card links;
+  // the local CLI is the only process that talks to 易协作.
+  async getYixiezuoConnection(workspaceId: string): Promise<YixiezuoConnectionEnvelope> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/yixiezuo`);
+    return parseWithFallback(
+      raw,
+      YixiezuoConnectionEnvelopeSchema,
+      EMPTY_YIXIEZUO_CONNECTION_ENVELOPE,
+      { endpoint: "GET /api/workspaces/:id/yixiezuo" },
+    );
+  }
+
+  async upsertYixiezuoConnection(
+    workspaceId: string,
+    body: UpsertYixiezuoConnectionRequest,
+  ): Promise<YixiezuoConnectionEnvelope> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/yixiezuo`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+    return parseWithFallback(
+      raw,
+      YixiezuoConnectionEnvelopeSchema,
+      EMPTY_YIXIEZUO_CONNECTION_ENVELOPE,
+      { endpoint: "PUT /api/workspaces/:id/yixiezuo" },
+    );
+  }
+
+  async deleteYixiezuoConnection(workspaceId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/yixiezuo`, {
+      method: "DELETE",
+    });
   }
 }

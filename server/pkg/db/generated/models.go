@@ -1609,3 +1609,36 @@ type WorkspaceShareLink struct {
 	IsActive    bool               `json:"is_active"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
+
+type YixiezuoCardLink struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	ConnectionID      pgtype.UUID        `json:"connection_id"`
+	IssueID           pgtype.UUID        `json:"issue_id"`
+	ExternalIssueID   string             `json:"external_issue_id"`
+	ExternalUpdatedAt pgtype.Timestamptz `json:"external_updated_at"`
+	IssueRevision     int64              `json:"issue_revision"`
+	Dirty             bool               `json:"dirty"`
+	LastDirection     string             `json:"last_direction"`
+	LastError         string             `json:"last_error"`
+	LastSyncAt        pgtype.Timestamptz `json:"last_sync_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
+type YixiezuoConnection struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	ProjectID         pgtype.UUID        `json:"project_id"`
+	CliBin            string             `json:"cli_bin"`
+	GcpHost           string             `json:"gcp_host"`
+	ListQueryID       string             `json:"list_query_id"`
+	ExternalProjectID string             `json:"external_project_id"`
+	TrackerID         string             `json:"tracker_id"`
+	StatusMap         []byte             `json:"status_map"`
+	LastPulledAt      pgtype.Timestamptz `json:"last_pulled_at"`
+	LastPushedAt      pgtype.Timestamptz `json:"last_pushed_at"`
+	CreatedByID       pgtype.UUID        `json:"created_by_id"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
