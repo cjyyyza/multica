@@ -80,7 +80,8 @@ func TestExecDriverListAndUpdate(t *testing.T) {
 			tool := toolNameFromArgs(args)
 			switch tool {
 			case "list_issues":
-				if !containsArg(args, "context=kanban") || !containsArgPrefix(args, `arguments=`) {
+				argJSON := argumentsFromArgs(args)
+				if !strings.Contains(argJSON, `"context":"kanban"`) {
 					return nil, fmt.Errorf("expected pmmcp list_issues, got %v", args)
 				}
 				payload := mustJSON(map[string]any{
@@ -211,22 +212,4 @@ func argumentsFromArgs(args []string) string {
 		}
 	}
 	return ""
-}
-
-func containsArg(args []string, want string) bool {
-	for _, arg := range args {
-		if arg == want {
-			return true
-		}
-	}
-	return false
-}
-
-func containsArgPrefix(args []string, prefix string) bool {
-	for _, arg := range args {
-		if strings.HasPrefix(arg, prefix) {
-			return true
-		}
-	}
-	return false
 }

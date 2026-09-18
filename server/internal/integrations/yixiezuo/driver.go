@@ -426,19 +426,27 @@ func unwrapFabric(raw []byte) (json.RawMessage, error) {
 			return json.RawMessage(data), nil
 		}
 		var peek map[string]json.RawMessage
-		if json.Unmarshal(data, &peek) == nil {
-			_, hasData := peek["data"]
-			_, hasCode := peek["code"]
-			_, hasHint := peek["hint"]
-			_, hasOK := peek["ok"]
-			if hasData && (hasCode || hasHint || hasOK) {
-				current = json.RawMessage(data)
-				continue
-			}
+		if json.Unmarshal(data, &peek) == nil && isFabricEnvelope(peek) {
+			current = json.RawMessage(data)
+			continue
 		}
 		return json.RawMessage(data), nil
 	}
 	return current, nil
+}
+
+func isFabricEnvelope(peek map[string]json.RawMessage) bool {
+	if _, hasData := peek["data"]; !hasData {
+		return false
+	}
+	for _, key := range []string{"list", "base", "res_code", "issues", "issue"} {
+		if _, ok := peek[key]; ok {
+			return false
+		}
+	}
+	_, hasID := peek["id"]
+	_, hasSubject := peek["subject"]
+	return !(hasID && hasSubject)
 }
 
 func unwrapContentText(raw json.RawMessage) (json.RawMessage, error) {
