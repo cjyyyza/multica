@@ -8,6 +8,7 @@ describe("settings location", () => {
     ["chat", "preferences", "chat", null],
     ["github", "integrations", null, "github"],
     ["lark", "integrations", null, "lark"],
+    ["yixiezuo", "integrations", null, "yixiezuo"],
     ["labs", "workspace", null, null],
   ])("resolves the retired %s entry", (old, tab, section, integration) => {
     expect(resolveSettingsLocation(new URLSearchParams({ tab: old! }))).toEqual(

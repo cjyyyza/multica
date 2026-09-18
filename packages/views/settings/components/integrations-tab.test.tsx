@@ -45,6 +45,7 @@ vi.mock("@tanstack/react-query", () => ({
         : {
             installations: [{ id: "one", status: state.installationStatus }],
             connections: [],
+            connection: { id: "c1" },
           };
     return {
       data: opts.select?.(data),
@@ -66,6 +67,9 @@ vi.mock("./vcs-tab", () => ({ VCSTab: () => <div>VCS detail</div> }));
 vi.mock("./wecom-tab", () => ({ WecomTab: () => <div>WeCom detail</div> }));
 vi.mock("./telegram-tab", () => ({
   TelegramTab: () => <div>Telegram detail</div>,
+}));
+vi.mock("./yixiezuo-tab", () => ({
+  YixiezuoTab: () => <div>Yixiezuo detail</div>,
 }));
 
 import { IntegrationsTab } from "./integrations-tab";
@@ -178,6 +182,14 @@ describe("Integration directory", () => {
         screen.getByRole("link", { name: new RegExp(`${channel} Not connected`) }),
       ).toBeInTheDocument();
     }
+  });
+  it("lists 易协作 in the boards group and opens its page", () => {
+    const { unmount } = renderWithI18n(<IntegrationsTab />);
+    expect(screen.getByRole("link", { name: /易协作 Connected/ })).toBeInTheDocument();
+    unmount();
+    state.search = "tab=integrations&integration=yixiezuo";
+    renderWithI18n(<IntegrationsTab />);
+    expect(screen.getByText("Yixiezuo detail")).toBeInTheDocument();
   });
   it("does not report failed status reads as disconnected", () => {
     state.connectionError = true;

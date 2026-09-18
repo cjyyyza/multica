@@ -13,6 +13,10 @@ import {
   EMPTY_TELEGRAM_INSTALLATION,
   EMPTY_LIST_TELEGRAM_INSTALLATIONS_RESPONSE,
   EMPTY_REDEEM_TELEGRAM_BINDING_TOKEN_RESPONSE,
+  YixiezuoConnectionSchema,
+  YixiezuoConnectionEnvelopeSchema,
+  EMPTY_YIXIEZUO_CONNECTION,
+  EMPTY_YIXIEZUO_CONNECTION_ENVELOPE,
   AgentTaskListSchema,
   TaskMessageListSchema,
   AutopilotQuotaUsageSchema,
@@ -2284,5 +2288,55 @@ describe("TaskMessageListSchema", () => {
   it("downgrades an unknown message type instead of dropping the transcript", () => {
     const parsed = TaskMessageListSchema.parse([{ ...row, type: "video" }]);
     expect(parsed[0]?.type).toBe("text");
+  });
+});
+
+describe("Yixiezuo connection schemas", () => {
+  it("parses a well-formed connection", () => {
+    const parsed = YixiezuoConnectionSchema.parse({
+      id: "c1",
+      workspace_id: "w1",
+      project_id: "p1",
+      cli_bin: "/usr/local/bin/pm-cli",
+      list_query_id: "q1",
+      status_map: { 开发中: "in_progress" },
+      last_pulled_at: "2026-01-01T00:00:00Z",
+      last_pushed_at: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    });
+    expect(parsed.cli_bin).toBe("/usr/local/bin/pm-cli");
+    expect(parsed.status_map["开发中"]).toBe("in_progress");
+  });
+
+  it("defaults optional fields so a partial row still renders", () => {
+    const parsed = YixiezuoConnectionSchema.parse({ id: "c1" });
+    expect(parsed.cli_bin).toBe("pm-cli");
+    expect(parsed.status_map).toEqual({});
+    expect(parsed.project_id).toBeNull();
+  });
+
+  it("treats a missing connection as disconnected, never connected", () => {
+    const parsed = YixiezuoConnectionEnvelopeSchema.parse({});
+    expect(parsed.connection).toBeNull();
+    expect(parsed.can_manage).toBe(false);
+  });
+
+  it("falls back to the empty envelope when the response is not an object", () => {
+    const parsed = parseWithFallback(
+      "not json",
+      YixiezuoConnectionEnvelopeSchema,
+      EMPTY_YIXIEZUO_CONNECTION_ENVELOPE,
+      { endpoint: "GET /api/workspaces/:id/yixiezuo" },
+    );
+    expect(parsed).toEqual(EMPTY_YIXIEZUO_CONNECTION_ENVELOPE);
+    expect(parsed.connection).toBeNull();
+  });
+
+  it("falls back on a malformed connection", () => {
+    const parsed = parseWithFallback(42, YixiezuoConnectionSchema, EMPTY_YIXIEZUO_CONNECTION, {
+      endpoint: "PUT /api/workspaces/:id/yixiezuo",
+    });
+    expect(parsed).toEqual(EMPTY_YIXIEZUO_CONNECTION);
   });
 });

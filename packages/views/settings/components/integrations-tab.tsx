@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { ArrowLeft, ChevronRight, FolderGit2, Blocks } from "lucide-react";
+import { ArrowLeft, ChevronRight, FolderGit2, Blocks, FolderKanban } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, errorCode } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -17,6 +17,7 @@ import { dingtalkInstallationsOptions } from "@multica/core/dingtalk";
 import { wecomInstallationsOptions } from "@multica/core/wecom";
 import { telegramInstallationsOptions } from "@multica/core/telegram";
 import { vcsConnectionsOptions } from "@multica/core/vcs";
+import { yixiezuoConnectionOptions } from "@multica/core/yixiezuo";
 import { useConfigStore, useFeatureEnabled } from "@multica/core/config";
 import { COMPOSIO_MCP_APPS_FLAG } from "@multica/core/feature-flags";
 import { cn } from "@multica/ui/lib/utils";
@@ -30,6 +31,7 @@ import { VCSTab } from "./vcs-tab";
 import { WecomTab } from "./wecom-tab";
 import { TelegramTab } from "./telegram-tab";
 import { GitHubTab } from "./github-tab";
+import { YixiezuoTab } from "./yixiezuo-tab";
 import { GitHubMark } from "./github-mark";
 import { SettingsCard, SettingsSection, SettingsTab } from "./settings-layout";
 import { IntegrationChannelIcon } from "./integration-channel-icon";
@@ -112,6 +114,11 @@ export function IntegrationsTab() {
     enabled: canView && vcsAvailable,
     select: (data) => (data.connections?.length ?? 0) > 0,
   });
+  const yixiezuo = useQuery({
+    ...yixiezuoConnectionOptions(wsId),
+    enabled: canView,
+    select: (data) => data.connection != null,
+  });
   const composio = useQuery({
     ...composioConnectionsOptions(),
     enabled: composioAvailable,
@@ -147,6 +154,20 @@ export function IntegrationsTab() {
               },
             ]
           : []),
+      ],
+    },
+    {
+      id: "boards",
+      label: t(($) => $.integrations.boards_title),
+      entries: [
+        {
+          id: "yixiezuo",
+          label: t(($) => $.yixiezuo.section_title),
+          description: t(($) => $.yixiezuo.page_constraint),
+          icon: <FolderKanban className="size-5" />,
+          content: <YixiezuoTab />,
+          state: yixiezuo,
+        },
       ],
     },
     {

@@ -144,6 +144,8 @@ var concurrentIndexCleanups = map[string]string{
 	"496_chat_session_agent_id_index":                           "idx_chat_session_agent_id",
 	"497_agent_task_queue_delegated_failure_evidence_index":     "idx_agent_task_queue_delegated_failure_evidence",
 	"498_chat_session_runtime_id_index":                         "idx_chat_session_runtime_id",
+	"501_yixiezuo_card_link_workspace_index":                    "idx_yixiezuo_card_link_workspace",
+	"502_yixiezuo_card_link_dirty_index":                        "idx_yixiezuo_card_link_dirty",
 	"486_maintenance_job_id_index":                              "idx_maintenance_job_id",
 	"487_maintenance_job_idempotency_index":                     "idx_maintenance_job_idempotency",
 	"488_maintenance_job_active_index":                          "idx_maintenance_job_active",

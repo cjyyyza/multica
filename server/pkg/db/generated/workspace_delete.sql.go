@@ -217,6 +217,10 @@ const deleteWorkspaceConnections = `-- name: DeleteWorkspaceConnections :exec
 WITH deleted_github_installations AS (
     DELETE FROM github_installation
     WHERE github_installation.workspace_id = $1
+),
+deleted_yixiezuo AS (
+    DELETE FROM yixiezuo_connection
+    WHERE yixiezuo_connection.workspace_id = $1
 )
 DELETE FROM vcs_connection WHERE vcs_connection.workspace_id = $1
 `
@@ -363,6 +367,9 @@ deleted_issue_vcs_links AS (
     DELETE FROM issue_vcs_pull_request
     WHERE issue_id IN (SELECT id FROM ws_issues)
        OR pull_request_id IN (SELECT id FROM ws_vcs_prs)
+),
+deleted_yixiezuo_card_links AS (
+    DELETE FROM yixiezuo_card_link WHERE workspace_id = $1
 ),
 deleted_agent_invocation_targets AS (
     DELETE FROM agent_invocation_target
