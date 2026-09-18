@@ -15,7 +15,10 @@ const envelopeRef = vi.hoisted(() => ({
     connection: null as null | {
       id: string;
       cli_bin: string;
+      gcp_host: string;
       list_query_id: string;
+      external_project_id: string;
+      tracker_id: string;
       project_id: string | null;
       status_map: Record<string, string>;
       last_pulled_at: string | null;
@@ -102,18 +105,22 @@ describe("YixiezuoTab", () => {
     renderWithI18n(<YixiezuoTab />);
     expect(screen.getByText("multica yixiezuo sync --watch")).toBeInTheDocument();
     expect(
-      screen.getByText(/The server cannot reach 易协作|After saving, keep this running/),
+      screen.getByText(/The server never calls 易协作|After saving, keep this running/),
     ).toBeInTheDocument();
 
     await user.clear(screen.getByLabelText("CLI"));
-    await user.type(screen.getByLabelText("CLI"), "/opt/pm-cli");
+    await user.type(screen.getByLabelText("CLI"), "popo-cli");
+    await user.type(screen.getByLabelText("易协作 host"), "dj01.pm.netease.com");
+    await user.type(screen.getByLabelText("Saved filter ID"), "9");
     await user.type(screen.getByLabelText("Status map"), "开发中=in_progress");
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(mockUpsert).toHaveBeenCalledWith(
       "workspace-1",
       expect.objectContaining({
-        cli_bin: "/opt/pm-cli",
+        cli_bin: "popo-cli",
+        gcp_host: "dj01.pm.netease.com",
+        list_query_id: "9",
         project_id: null,
         status_map: { 开发中: "in_progress" },
       }),
@@ -130,8 +137,11 @@ describe("YixiezuoTab", () => {
   it("disconnects an existing connection", async () => {
     envelopeRef.current.connection = {
       id: "c1",
-      cli_bin: "pm-cli",
-      list_query_id: "",
+      cli_bin: "popo-cli",
+      gcp_host: "dj01.pm.netease.com",
+      list_query_id: "9",
+      external_project_id: "7",
+      tracker_id: "34",
       project_id: null,
       status_map: {},
       last_pulled_at: null,

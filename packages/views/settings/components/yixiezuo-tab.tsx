@@ -69,8 +69,11 @@ export function YixiezuoTab() {
   const connection = data?.connection ?? null;
   const canManage = data?.can_manage === true;
 
-  const [cliBin, setCliBin] = useState("pm-cli");
+  const [cliBin, setCliBin] = useState("popo-cli");
+  const [gcpHost, setGcpHost] = useState("");
   const [listQueryId, setListQueryId] = useState("");
+  const [externalProjectId, setExternalProjectId] = useState("");
+  const [trackerId, setTrackerId] = useState("");
   const [projectId, setProjectId] = useState(NONE_PROJECT);
   const [statusMapText, setStatusMapText] = useState("");
   const [saving, setSaving] = useState(false);
@@ -78,8 +81,11 @@ export function YixiezuoTab() {
   const [disconnecting, setDisconnecting] = useState(false);
 
   useEffect(() => {
-    setCliBin(connection?.cli_bin || "pm-cli");
+    setCliBin(connection?.cli_bin || "popo-cli");
+    setGcpHost(connection?.gcp_host ?? "");
     setListQueryId(connection?.list_query_id ?? "");
+    setExternalProjectId(connection?.external_project_id ?? "");
+    setTrackerId(connection?.tracker_id ?? "");
     setProjectId(connection?.project_id || NONE_PROJECT);
     setStatusMapText(statusMapToText(connection?.status_map ?? {}));
   }, [connection]);
@@ -89,8 +95,11 @@ export function YixiezuoTab() {
     setSaving(true);
     try {
       await api.upsertYixiezuoConnection(wsId, {
-        cli_bin: cliBin.trim() || "pm-cli",
+        cli_bin: cliBin.trim() || "popo-cli",
+        gcp_host: gcpHost.trim(),
         list_query_id: listQueryId.trim(),
+        external_project_id: externalProjectId.trim(),
+        tracker_id: trackerId.trim(),
         project_id: projectId === NONE_PROJECT ? null : projectId,
         status_map: parseStatusMapText(statusMapText),
       });
@@ -164,6 +173,30 @@ export function YixiezuoTab() {
             />
           </div>
           <div className="space-y-1.5">
+            <Label htmlFor="yixiezuo-host">{t(($) => $.yixiezuo.gcp_host_label)}</Label>
+            <Input
+              id="yixiezuo-host"
+              value={gcpHost}
+              onChange={(event) => setGcpHost(event.target.value)}
+              disabled={!canManage || saving}
+            />
+            <p className="text-caption text-muted-foreground">
+              {t(($) => $.yixiezuo.gcp_host_help)}
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="yixiezuo-external-project">{t(($) => $.yixiezuo.external_project_label)}</Label>
+            <Input
+              id="yixiezuo-external-project"
+              value={externalProjectId}
+              onChange={(event) => setExternalProjectId(event.target.value)}
+              disabled={!canManage || saving}
+            />
+            <p className="text-caption text-muted-foreground">
+              {t(($) => $.yixiezuo.external_project_help)}
+            </p>
+          </div>
+          <div className="space-y-1.5">
             <Label htmlFor="yixiezuo-query">{t(($) => $.yixiezuo.list_query_label)}</Label>
             <Input
               id="yixiezuo-query"
@@ -171,6 +204,21 @@ export function YixiezuoTab() {
               onChange={(event) => setListQueryId(event.target.value)}
               disabled={!canManage || saving}
             />
+            <p className="text-caption text-muted-foreground">
+              {t(($) => $.yixiezuo.list_query_help)}
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="yixiezuo-tracker">{t(($) => $.yixiezuo.tracker_id_label)}</Label>
+            <Input
+              id="yixiezuo-tracker"
+              value={trackerId}
+              onChange={(event) => setTrackerId(event.target.value)}
+              disabled={!canManage || saving}
+            />
+            <p className="text-caption text-muted-foreground">
+              {t(($) => $.yixiezuo.tracker_id_help)}
+            </p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="yixiezuo-project">{t(($) => $.yixiezuo.project_label)}</Label>

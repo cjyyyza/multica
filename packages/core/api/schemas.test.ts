@@ -2297,21 +2297,25 @@ describe("Yixiezuo connection schemas", () => {
       id: "c1",
       workspace_id: "w1",
       project_id: "p1",
-      cli_bin: "/usr/local/bin/pm-cli",
+      cli_bin: "popo-cli",
+      gcp_host: "dj01.pm.netease.com",
       list_query_id: "q1",
+      external_project_id: "7",
+      tracker_id: "34",
       status_map: { 开发中: "in_progress" },
       last_pulled_at: "2026-01-01T00:00:00Z",
       last_pushed_at: null,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
     });
-    expect(parsed.cli_bin).toBe("/usr/local/bin/pm-cli");
+    expect(parsed.cli_bin).toBe("popo-cli");
+    expect(parsed.gcp_host).toBe("dj01.pm.netease.com");
     expect(parsed.status_map["开发中"]).toBe("in_progress");
   });
 
   it("defaults optional fields so a partial row still renders", () => {
     const parsed = YixiezuoConnectionSchema.parse({ id: "c1" });
-    expect(parsed.cli_bin).toBe("pm-cli");
+    expect(parsed.cli_bin).toBe("popo-cli");
     expect(parsed.status_map).toEqual({});
     expect(parsed.project_id).toBeNull();
   });

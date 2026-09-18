@@ -16,8 +16,9 @@ import (
 var yixiezuoCmd = &cobra.Command{
 	Use:   "yixiezuo",
 	Short: "Sync 易协作 with the Multica kanban from this machine",
-	Long: `易协作 is only reachable on your computer. These commands talk to the
-local 易协作 CLI and to the Multica API. The server never opens 易协作 itself.
+	Long: `易协作 and popo-cli are only reachable on this Windows computer.
+These commands call local popo-cli pmmcp and the Multica API.
+The server never opens 易协作 or popo-cli.
 
 Keep this running for live bidirectional updates:
 
@@ -56,10 +57,13 @@ func init() {
 }
 
 type yixiezuoConnectionJSON struct {
-	ID          string            `json:"id"`
-	CLIBin      string            `json:"cli_bin"`
-	ListQueryID string            `json:"list_query_id"`
-	StatusMap   map[string]string `json:"status_map"`
+	ID                string            `json:"id"`
+	CLIBin            string            `json:"cli_bin"`
+	GCPHost           string            `json:"gcp_host"`
+	ListQueryID       string            `json:"list_query_id"`
+	ExternalProjectID string            `json:"external_project_id"`
+	TrackerID         string            `json:"tracker_id"`
+	StatusMap         map[string]string `json:"status_map"`
 }
 
 type yixiezuoConnectionEnvelopeJSON struct {
@@ -112,8 +116,17 @@ func runYixiezuoStatus(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "cli_bin\t%s\n", env.Connection.CLIBin)
+	if env.Connection.GCPHost != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "gcp_host\t%s\n", env.Connection.GCPHost)
+	}
+	if env.Connection.ExternalProjectID != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "external_project_id\t%s\n", env.Connection.ExternalProjectID)
+	}
 	if env.Connection.ListQueryID != "" {
 		fmt.Fprintf(cmd.OutOrStdout(), "list_query_id\t%s\n", env.Connection.ListQueryID)
+	}
+	if env.Connection.TrackerID != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "tracker_id\t%s\n", env.Connection.TrackerID)
 	}
 	return nil
 }
@@ -207,9 +220,16 @@ func yixiezuoRuntime(cmd *cobra.Command) (*cli.APIClient, yixiezuo.Driver, error
 	if override := strings.TrimSpace(os.Getenv("MULTICA_YIXIEZUO_CLI")); override != "" {
 		bin = override
 	}
+	host := strings.TrimSpace(env.Connection.GCPHost)
+	if override := strings.TrimSpace(os.Getenv("MULTICA_YIXIEZUO_GCP_HOST")); override != "" {
+		host = override
+	}
 	return client, yixiezuo.NewExecDriver(yixiezuo.ExecOptions{
-		Bin:         bin,
-		ListQueryID: env.Connection.ListQueryID,
+		Bin:               bin,
+		GCPHost:           host,
+		ExternalProjectID: env.Connection.ExternalProjectID,
+		ListQueryID:       env.Connection.ListQueryID,
+		TrackerID:         env.Connection.TrackerID,
 	}), nil
 }
 

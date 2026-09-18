@@ -3,7 +3,10 @@ export interface YixiezuoConnection {
   workspace_id: string;
   project_id: string | null;
   cli_bin: string;
+  gcp_host: string;
   list_query_id: string;
+  external_project_id: string;
+  tracker_id: string;
   status_map: Record<string, string>;
   last_pulled_at: string | null;
   last_pushed_at: string | null;
@@ -19,6 +22,9 @@ export interface YixiezuoConnectionEnvelope {
 export interface UpsertYixiezuoConnectionRequest {
   project_id?: string | null;
   cli_bin: string;
+  gcp_host?: string;
   list_query_id?: string;
+  external_project_id?: string;
+  tracker_id?: string;
   status_map?: Record<string, string>;
 }

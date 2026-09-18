@@ -22,16 +22,19 @@ import (
 )
 
 type yixiezuoConnectionResponse struct {
-	ID           string            `json:"id"`
-	WorkspaceID  string            `json:"workspace_id"`
-	ProjectID    *string           `json:"project_id"`
-	CLIBin       string            `json:"cli_bin"`
-	ListQueryID  string            `json:"list_query_id"`
-	StatusMap    map[string]string `json:"status_map"`
-	LastPulledAt *string           `json:"last_pulled_at"`
-	LastPushedAt *string           `json:"last_pushed_at"`
-	CreatedAt    string            `json:"created_at"`
-	UpdatedAt    string            `json:"updated_at"`
+	ID                string            `json:"id"`
+	WorkspaceID       string            `json:"workspace_id"`
+	ProjectID         *string           `json:"project_id"`
+	CLIBin            string            `json:"cli_bin"`
+	GCPHost           string            `json:"gcp_host"`
+	ListQueryID       string            `json:"list_query_id"`
+	ExternalProjectID string            `json:"external_project_id"`
+	TrackerID         string            `json:"tracker_id"`
+	StatusMap         map[string]string `json:"status_map"`
+	LastPulledAt      *string           `json:"last_pulled_at"`
+	LastPushedAt      *string           `json:"last_pushed_at"`
+	CreatedAt         string            `json:"created_at"`
+	UpdatedAt         string            `json:"updated_at"`
 }
 
 type yixiezuoConnectionEnvelope struct {
@@ -40,10 +43,13 @@ type yixiezuoConnectionEnvelope struct {
 }
 
 type upsertYixiezuoConnectionRequest struct {
-	ProjectID   *string           `json:"project_id"`
-	CLIBin      string            `json:"cli_bin"`
-	ListQueryID string            `json:"list_query_id"`
-	StatusMap   map[string]string `json:"status_map"`
+	ProjectID         *string           `json:"project_id"`
+	CLIBin            string            `json:"cli_bin"`
+	GCPHost           string            `json:"gcp_host"`
+	ListQueryID       string            `json:"list_query_id"`
+	ExternalProjectID string            `json:"external_project_id"`
+	TrackerID         string            `json:"tracker_id"`
+	StatusMap         map[string]string `json:"status_map"`
 }
 
 type yixiezuoCardPayload struct {
@@ -138,7 +144,7 @@ func (h *Handler) UpsertYixiezuoConnection(w http.ResponseWriter, r *http.Reques
 	}
 	cliBin := strings.TrimSpace(req.CLIBin)
 	if cliBin == "" {
-		cliBin = "pm-cli"
+		cliBin = "popo-cli"
 	}
 	projectID := pgtype.UUID{}
 	if req.ProjectID != nil && strings.TrimSpace(*req.ProjectID) != "" {
@@ -168,12 +174,15 @@ func (h *Handler) UpsertYixiezuoConnection(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	row, err := h.Queries.UpsertYixiezuoConnection(r.Context(), db.UpsertYixiezuoConnectionParams{
-		WorkspaceID: wsUUID,
-		CliBin:      cliBin,
-		ListQueryID: strings.TrimSpace(req.ListQueryID),
-		StatusMap:   rawMap,
-		ProjectID:   projectID,
-		CreatedByID: member.UserID,
+		WorkspaceID:       wsUUID,
+		CliBin:            cliBin,
+		GcpHost:           strings.TrimSpace(req.GCPHost),
+		ListQueryID:       strings.TrimSpace(req.ListQueryID),
+		ExternalProjectID: strings.TrimSpace(req.ExternalProjectID),
+		TrackerID:         strings.TrimSpace(req.TrackerID),
+		StatusMap:         rawMap,
+		ProjectID:         projectID,
+		CreatedByID:       member.UserID,
 	})
 	if err != nil {
 		slog.Warn("upsert yixiezuo connection failed", append(logger.RequestAttrs(r), "error", err)...)
@@ -271,6 +280,7 @@ func (h *Handler) ExportYixiezuoChanges(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	statusMap := decodeYixiezuoStatusMap(conn.StatusMap)
+	_, catalogNames := h.yixiezuoCatalog(r.Context(), wsUUID)
 	dirty, err := h.Queries.ListDirtyYixiezuoCardLinks(r.Context(), conn.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list dirty 易协作 links")
@@ -287,7 +297,7 @@ func (h *Handler) ExportYixiezuoChanges(w http.ResponseWriter, r *http.Request) 
 		updates = append(updates, yixiezuoExportItem{
 			Issue:           yixiezuoExportFromIssue(issue),
 			ExternalIssueID: link.ExternalIssueID,
-			StatusName:      yixiezuo.MapOutgoingStatus(issue.Status, statusMap),
+			StatusName:      yixiezuo.ResolveOutgoingStatusName(issue.Status, statusMap, catalogNames),
 		})
 	}
 	creates := []yixiezuoExportItem{}
@@ -312,7 +322,7 @@ func (h *Handler) ExportYixiezuoChanges(w http.ResponseWriter, r *http.Request) 
 					UpdatedAt:   timestampToString(row.UpdatedAt),
 					Revision:    row.Revision,
 				},
-				StatusName: yixiezuo.MapOutgoingStatus(row.Status, statusMap),
+				StatusName: yixiezuo.ResolveOutgoingStatusName(row.Status, statusMap, catalogNames),
 			})
 		}
 	}
@@ -590,16 +600,19 @@ func (h *Handler) yixiezuoCatalog(ctx context.Context, workspaceID pgtype.UUID) 
 
 func yixiezuoConnectionToResponse(row db.YixiezuoConnection) yixiezuoConnectionResponse {
 	return yixiezuoConnectionResponse{
-		ID:           uuidToString(row.ID),
-		WorkspaceID:  uuidToString(row.WorkspaceID),
-		ProjectID:    uuidToPtr(row.ProjectID),
-		CLIBin:       row.CliBin,
-		ListQueryID:  row.ListQueryID,
-		StatusMap:    decodeYixiezuoStatusMap(row.StatusMap),
-		LastPulledAt: timestampToPtr(row.LastPulledAt),
-		LastPushedAt: timestampToPtr(row.LastPushedAt),
-		CreatedAt:    timestampToString(row.CreatedAt),
-		UpdatedAt:    timestampToString(row.UpdatedAt),
+		ID:                uuidToString(row.ID),
+		WorkspaceID:       uuidToString(row.WorkspaceID),
+		ProjectID:         uuidToPtr(row.ProjectID),
+		CLIBin:            row.CliBin,
+		GCPHost:           row.GcpHost,
+		ListQueryID:       row.ListQueryID,
+		ExternalProjectID: row.ExternalProjectID,
+		TrackerID:         row.TrackerID,
+		StatusMap:         decodeYixiezuoStatusMap(row.StatusMap),
+		LastPulledAt:      timestampToPtr(row.LastPulledAt),
+		LastPushedAt:      timestampToPtr(row.LastPushedAt),
+		CreatedAt:         timestampToString(row.CreatedAt),
+		UpdatedAt:         timestampToString(row.UpdatedAt),
 	}
 }
 

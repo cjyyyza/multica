@@ -35,6 +35,9 @@ func TestMapOutgoingStatusRoundTrip(t *testing.T) {
 	if got := MapOutgoingStatus("custom_qa", nil); got != "custom_qa" {
 		t.Fatalf("unmapped key passthrough: got %q", got)
 	}
+	if got := ResolveOutgoingStatusName("in_progress", nil, []string{"进行中", "新建"}); got != "进行中" {
+		t.Fatalf("catalog alias: got %q", got)
+	}
 }
 
 func TestPreferRemoteLastWriteWins(t *testing.T) {

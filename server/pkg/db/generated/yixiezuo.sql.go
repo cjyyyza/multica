@@ -99,7 +99,7 @@ func (q *Queries) GetYixiezuoCardLinkByIssue(ctx context.Context, arg GetYixiezu
 
 const getYixiezuoConnectionByWorkspace = `-- name: GetYixiezuoConnectionByWorkspace :one
 
-SELECT id, workspace_id, project_id, cli_bin, list_query_id, status_map, last_pulled_at, last_pushed_at, created_by_id, created_at, updated_at FROM yixiezuo_connection
+SELECT id, workspace_id, project_id, cli_bin, gcp_host, list_query_id, external_project_id, tracker_id, status_map, last_pulled_at, last_pushed_at, created_by_id, created_at, updated_at FROM yixiezuo_connection
 WHERE workspace_id = $1
 `
 
@@ -114,7 +114,10 @@ func (q *Queries) GetYixiezuoConnectionByWorkspace(ctx context.Context, workspac
 		&i.WorkspaceID,
 		&i.ProjectID,
 		&i.CliBin,
+		&i.GcpHost,
 		&i.ListQueryID,
+		&i.ExternalProjectID,
+		&i.TrackerID,
 		&i.StatusMap,
 		&i.LastPulledAt,
 		&i.LastPushedAt,
@@ -290,7 +293,7 @@ const touchYixiezuoConnectionPull = `-- name: TouchYixiezuoConnectionPull :one
 UPDATE yixiezuo_connection
 SET last_pulled_at = now(), updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, project_id, cli_bin, list_query_id, status_map, last_pulled_at, last_pushed_at, created_by_id, created_at, updated_at
+RETURNING id, workspace_id, project_id, cli_bin, gcp_host, list_query_id, external_project_id, tracker_id, status_map, last_pulled_at, last_pushed_at, created_by_id, created_at, updated_at
 `
 
 type TouchYixiezuoConnectionPullParams struct {
@@ -306,7 +309,10 @@ func (q *Queries) TouchYixiezuoConnectionPull(ctx context.Context, arg TouchYixi
 		&i.WorkspaceID,
 		&i.ProjectID,
 		&i.CliBin,
+		&i.GcpHost,
 		&i.ListQueryID,
+		&i.ExternalProjectID,
+		&i.TrackerID,
 		&i.StatusMap,
 		&i.LastPulledAt,
 		&i.LastPushedAt,
@@ -321,7 +327,7 @@ const touchYixiezuoConnectionPush = `-- name: TouchYixiezuoConnectionPush :one
 UPDATE yixiezuo_connection
 SET last_pushed_at = now(), updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, project_id, cli_bin, list_query_id, status_map, last_pulled_at, last_pushed_at, created_by_id, created_at, updated_at
+RETURNING id, workspace_id, project_id, cli_bin, gcp_host, list_query_id, external_project_id, tracker_id, status_map, last_pulled_at, last_pushed_at, created_by_id, created_at, updated_at
 `
 
 type TouchYixiezuoConnectionPushParams struct {
@@ -337,7 +343,10 @@ func (q *Queries) TouchYixiezuoConnectionPush(ctx context.Context, arg TouchYixi
 		&i.WorkspaceID,
 		&i.ProjectID,
 		&i.CliBin,
+		&i.GcpHost,
 		&i.ListQueryID,
+		&i.ExternalProjectID,
+		&i.TrackerID,
 		&i.StatusMap,
 		&i.LastPulledAt,
 		&i.LastPushedAt,
@@ -417,33 +426,43 @@ func (q *Queries) UpsertYixiezuoCardLink(ctx context.Context, arg UpsertYixiezuo
 
 const upsertYixiezuoConnection = `-- name: UpsertYixiezuoConnection :one
 INSERT INTO yixiezuo_connection (
-    workspace_id, project_id, cli_bin, list_query_id, status_map, created_by_id
+    workspace_id, project_id, cli_bin, gcp_host, list_query_id,
+    external_project_id, tracker_id, status_map, created_by_id
 ) VALUES (
-    $1, $5, $2, $3, $4, $6
+    $1, $8, $2, $3, $4, $5, $6, $7, $9
 )
 ON CONFLICT (workspace_id) DO UPDATE SET
-    project_id    = EXCLUDED.project_id,
-    cli_bin       = EXCLUDED.cli_bin,
-    list_query_id = EXCLUDED.list_query_id,
-    status_map    = EXCLUDED.status_map,
-    updated_at    = now()
-RETURNING id, workspace_id, project_id, cli_bin, list_query_id, status_map, last_pulled_at, last_pushed_at, created_by_id, created_at, updated_at
+    project_id           = EXCLUDED.project_id,
+    cli_bin              = EXCLUDED.cli_bin,
+    gcp_host             = EXCLUDED.gcp_host,
+    list_query_id        = EXCLUDED.list_query_id,
+    external_project_id  = EXCLUDED.external_project_id,
+    tracker_id           = EXCLUDED.tracker_id,
+    status_map           = EXCLUDED.status_map,
+    updated_at           = now()
+RETURNING id, workspace_id, project_id, cli_bin, gcp_host, list_query_id, external_project_id, tracker_id, status_map, last_pulled_at, last_pushed_at, created_by_id, created_at, updated_at
 `
 
 type UpsertYixiezuoConnectionParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	CliBin      string      `json:"cli_bin"`
-	ListQueryID string      `json:"list_query_id"`
-	StatusMap   []byte      `json:"status_map"`
-	ProjectID   pgtype.UUID `json:"project_id"`
-	CreatedByID pgtype.UUID `json:"created_by_id"`
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	CliBin            string      `json:"cli_bin"`
+	GcpHost           string      `json:"gcp_host"`
+	ListQueryID       string      `json:"list_query_id"`
+	ExternalProjectID string      `json:"external_project_id"`
+	TrackerID         string      `json:"tracker_id"`
+	StatusMap         []byte      `json:"status_map"`
+	ProjectID         pgtype.UUID `json:"project_id"`
+	CreatedByID       pgtype.UUID `json:"created_by_id"`
 }
 
 func (q *Queries) UpsertYixiezuoConnection(ctx context.Context, arg UpsertYixiezuoConnectionParams) (YixiezuoConnection, error) {
 	row := q.db.QueryRow(ctx, upsertYixiezuoConnection,
 		arg.WorkspaceID,
 		arg.CliBin,
+		arg.GcpHost,
 		arg.ListQueryID,
+		arg.ExternalProjectID,
+		arg.TrackerID,
 		arg.StatusMap,
 		arg.ProjectID,
 		arg.CreatedByID,
@@ -454,7 +473,10 @@ func (q *Queries) UpsertYixiezuoConnection(ctx context.Context, arg UpsertYixiez
 		&i.WorkspaceID,
 		&i.ProjectID,
 		&i.CliBin,
+		&i.GcpHost,
 		&i.ListQueryID,
+		&i.ExternalProjectID,
+		&i.TrackerID,
 		&i.StatusMap,
 		&i.LastPulledAt,
 		&i.LastPushedAt,

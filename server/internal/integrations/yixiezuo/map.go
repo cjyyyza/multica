@@ -34,6 +34,7 @@ type IssueFields struct {
 var DefaultStatusMap = map[string]string{
 	"新建":   "todo",
 	"待处理":  "todo",
+	"待开始":  "todo",
 	"打开":   "todo",
 	"重新打开": "todo",
 	"开发中":  "in_progress",
@@ -42,7 +43,10 @@ var DefaultStatusMap = map[string]string{
 	"阻塞":   "blocked",
 	"已解决":  "done",
 	"已关闭":  "done",
+	"完成":   "done",
+	"关闭":   "done",
 	"已拒绝":  "cancelled",
+	"已取消":  "cancelled",
 }
 
 var defaultPriorityMap = map[string]string{
@@ -131,6 +135,31 @@ func MapOutgoingStatus(statusKey string, configured map[string]string) string {
 		}
 	}
 	return key
+}
+
+// ResolveOutgoingStatusName picks a 易协作 status name that exists in catalog.
+func ResolveOutgoingStatusName(statusKey string, configured map[string]string, catalogNames []string) string {
+	name := MapOutgoingStatus(statusKey, configured)
+	if len(catalogNames) == 0 || catalogHasName(catalogNames, name) {
+		return name
+	}
+	merged := MergeStatusMap(configured)
+	for alias, mapped := range merged {
+		if mapped == strings.TrimSpace(statusKey) && catalogHasName(catalogNames, alias) {
+			return alias
+		}
+	}
+	return name
+}
+
+func catalogHasName(names []string, want string) bool {
+	norm := normalize(want)
+	for _, name := range names {
+		if normalize(name) == norm {
+			return true
+		}
+	}
+	return false
 }
 
 // MapIncomingPriority maps an 易协作 priority name onto Multica's closed set.

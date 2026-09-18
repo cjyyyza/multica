@@ -8,16 +8,20 @@ WHERE workspace_id = $1;
 
 -- name: UpsertYixiezuoConnection :one
 INSERT INTO yixiezuo_connection (
-    workspace_id, project_id, cli_bin, list_query_id, status_map, created_by_id
+    workspace_id, project_id, cli_bin, gcp_host, list_query_id,
+    external_project_id, tracker_id, status_map, created_by_id
 ) VALUES (
-    $1, sqlc.narg('project_id'), $2, $3, $4, sqlc.narg('created_by_id')
+    $1, sqlc.narg('project_id'), $2, $3, $4, $5, $6, $7, sqlc.narg('created_by_id')
 )
 ON CONFLICT (workspace_id) DO UPDATE SET
-    project_id    = EXCLUDED.project_id,
-    cli_bin       = EXCLUDED.cli_bin,
-    list_query_id = EXCLUDED.list_query_id,
-    status_map    = EXCLUDED.status_map,
-    updated_at    = now()
+    project_id           = EXCLUDED.project_id,
+    cli_bin              = EXCLUDED.cli_bin,
+    gcp_host             = EXCLUDED.gcp_host,
+    list_query_id        = EXCLUDED.list_query_id,
+    external_project_id  = EXCLUDED.external_project_id,
+    tracker_id           = EXCLUDED.tracker_id,
+    status_map           = EXCLUDED.status_map,
+    updated_at           = now()
 RETURNING *;
 
 -- name: DeleteYixiezuoConnection :exec
