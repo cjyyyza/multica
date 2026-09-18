@@ -31,6 +31,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/integrations/ghsnapshot"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	"github.com/multica-ai/multica/server/internal/integrations/slack"
+	"github.com/multica-ai/multica/server/internal/integrations/popo"
 	"github.com/multica-ai/multica/server/internal/integrations/telegram"
 	"github.com/multica-ai/multica/server/internal/integrations/wecom"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
@@ -354,6 +355,16 @@ type Handler struct {
 	// The process owner starts and joins it; the synchronous event bus only
 	// enqueues EventChatDone work.
 	TelegramOutbound *telegram.Outbound
+
+	// PopoInstall owns the POPO Open / dj01bot install lifecycle. Nil
+	// unless MULTICA_POPO_SECRET_KEY is set. The API never calls dj01bot.
+	PopoInstall *popo.InstallService
+	// PopoBindingTokens mints/redeems the user-binding tokens behind the
+	// "link your POPO account" prompt. Nil unless POPO is configured.
+	PopoBindingTokens *popo.BindingTokenService
+	// PopoQueue stores agent replies for the Windows-local
+	// `multica popo gateway`. The API process never delivers them.
+	PopoQueue *popo.Queue
 
 	// channelFileDelivery names the channel types that can, IN THIS
 	// DEPLOYMENT, carry a file the agent produced the last hop into the

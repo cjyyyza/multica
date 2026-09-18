@@ -196,6 +196,10 @@ import type {
   ListTelegramInstallationsResponse,
   RegisterTelegramRequest,
   RedeemTelegramBindingTokenResponse,
+  PopoInstallation,
+  ListPopoInstallationsResponse,
+  RegisterPopoRequest,
+  RedeemPopoBindingTokenResponse,
   Squad,
   SquadMember,
   SquadMemberStatusListResponse,
@@ -368,6 +372,12 @@ import {
   EMPTY_TELEGRAM_INSTALLATION,
   EMPTY_LIST_TELEGRAM_INSTALLATIONS_RESPONSE,
   EMPTY_REDEEM_TELEGRAM_BINDING_TOKEN_RESPONSE,
+  PopoInstallationSchema,
+  ListPopoInstallationsResponseSchema,
+  RedeemPopoBindingTokenResponseSchema,
+  EMPTY_POPO_INSTALLATION,
+  EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE,
+  EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE,
   EMPTY_BILLING_BALANCE,
   EMPTY_BILLING_TRANSACTIONS_PAGE,
   EMPTY_BILLING_BATCHES_PAGE,
@@ -4946,6 +4956,55 @@ export class ApiClient {
       RedeemTelegramBindingTokenResponseSchema,
       EMPTY_REDEEM_TELEGRAM_BINDING_TOKEN_RESPONSE,
       { endpoint: "POST /api/telegram/binding/redeem" },
+    );
+  }
+
+  async listPopoInstallations(
+    workspaceId: string,
+  ): Promise<ListPopoInstallationsResponse> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/popo/installations`);
+    return parseWithFallback(
+      raw,
+      ListPopoInstallationsResponseSchema,
+      EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE,
+      { endpoint: "GET /api/workspaces/:id/popo/installations" },
+    );
+  }
+
+  async registerPopoBot(
+    workspaceId: string,
+    agentId: string,
+    body: RegisterPopoRequest,
+  ): Promise<PopoInstallation> {
+    const search = new URLSearchParams({ agent_id: agentId });
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/popo/install?${search.toString()}`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    );
+    return parseWithFallback(raw, PopoInstallationSchema, EMPTY_POPO_INSTALLATION, {
+      endpoint: "POST /api/workspaces/:id/popo/install",
+    });
+  }
+
+  async deletePopoInstallation(workspaceId: string, installationId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/popo/installations/${installationId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async redeemPopoBindingToken(token: string): Promise<RedeemPopoBindingTokenResponse> {
+    const raw = await this.fetch<unknown>(`/api/popo/binding/redeem`, {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+    return parseWithFallback(
+      raw,
+      RedeemPopoBindingTokenResponseSchema,
+      EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE,
+      { endpoint: "POST /api/popo/binding/redeem" },
     );
   }
 }

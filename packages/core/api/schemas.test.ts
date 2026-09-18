@@ -13,6 +13,12 @@ import {
   EMPTY_TELEGRAM_INSTALLATION,
   EMPTY_LIST_TELEGRAM_INSTALLATIONS_RESPONSE,
   EMPTY_REDEEM_TELEGRAM_BINDING_TOKEN_RESPONSE,
+  PopoInstallationSchema,
+  ListPopoInstallationsResponseSchema,
+  RedeemPopoBindingTokenResponseSchema,
+  EMPTY_POPO_INSTALLATION,
+  EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE,
+  EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE,
   AgentTaskListSchema,
   TaskMessageListSchema,
   AutopilotQuotaUsageSchema,
@@ -2017,6 +2023,55 @@ describe("Telegram installation schemas", () => {
         { endpoint: "POST /api/telegram/binding/redeem" },
       ),
     ).toEqual(EMPTY_REDEEM_TELEGRAM_BINDING_TOKEN_RESPONSE);
+  });
+});
+
+describe("POPO installation schemas", () => {
+  it("parses a well-formed installation", () => {
+    const parsed = PopoInstallationSchema.parse({
+      id: "i1",
+      workspace_id: "w1",
+      agent_id: "a1",
+      robot_id: "default",
+      robot_name: "dj01",
+      webhook_url: "http://127.0.0.1:28792",
+      installer_user_id: "u1",
+      status: "active",
+    });
+    expect(parsed.robot_id).toBe("default");
+    expect(parsed.status).toBe("active");
+  });
+
+  it("defaults incomplete data to the disconnected state", () => {
+    const parsed = PopoInstallationSchema.parse({ id: "i1" });
+    expect(parsed.status).toBe("revoked");
+    expect(parsed.robot_id).toBe("");
+    const list = ListPopoInstallationsResponseSchema.parse({});
+    expect(list).toEqual({ installations: [], configured: false });
+  });
+
+  it("falls back safely for malformed list, install, and redeem responses", () => {
+    expect(
+      parseWithFallback(
+        "not json",
+        ListPopoInstallationsResponseSchema,
+        EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE,
+        { endpoint: "GET /api/workspaces/:id/popo/installations" },
+      ),
+    ).toEqual(EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE);
+    expect(
+      parseWithFallback(42, PopoInstallationSchema, EMPTY_POPO_INSTALLATION, {
+        endpoint: "POST /api/workspaces/:id/popo/install",
+      }),
+    ).toEqual(EMPTY_POPO_INSTALLATION);
+    expect(
+      parseWithFallback(
+        null,
+        RedeemPopoBindingTokenResponseSchema,
+        EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE,
+        { endpoint: "POST /api/popo/binding/redeem" },
+      ),
+    ).toEqual(EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE);
   });
 });
 

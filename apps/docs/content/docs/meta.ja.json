@@ -40,6 +40,7 @@
     "slack-bot-integration",
     "dingtalk-bot-integration",
     "telegram-bot-integration",
+    "popo-bot-integration",
     "github-integration",
     "vcs-integration",
     "---アプリ---",

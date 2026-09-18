@@ -582,6 +582,32 @@ describe("ApiClient schema fallback", () => {
     });
   });
 
+  describe("POPO integration", () => {
+    it("falls back to a safe empty installation list when the response is malformed", async () => {
+      stubFetchJson({ installations: "not-an-array", configured: true });
+      const client = new ApiClient("https://api.example.test");
+      await expect(client.listPopoInstallations("ws-1")).resolves.toEqual({
+        installations: [],
+        configured: false,
+      });
+    });
+
+    it("falls back safely when register and redeem responses are malformed", async () => {
+      stubFetchJson({ id: 123 });
+      const client = new ApiClient("https://api.example.test");
+      await expect(
+        client.registerPopoBot("ws-1", "agent-1", { robot_id: "default" }),
+      ).resolves.toMatchObject({ id: "", status: "revoked" });
+
+      stubFetchJson({ workspace_id: 123 });
+      await expect(client.redeemPopoBindingToken("bind-token")).resolves.toEqual({
+        workspace_id: "",
+        installation_id: "",
+        popo_user_id: "",
+      });
+    });
+  });
+
   describe("listDingTalkGroups", () => {
     it("preserves bot activity metadata for each group relationship", async () => {
       stubFetchJson({
