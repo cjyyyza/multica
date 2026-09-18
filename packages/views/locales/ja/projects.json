@@ -135,7 +135,15 @@
     "mode_badge_worktree_tooltip": "実行はそれぞれの git ワークツリーで並行して進み、ブランチとして成果を返します。作業コピーは変更されません。",
     "toast_local_mode_updated": "実行モードを更新しました",
     "toast_local_mode_update_failed": "実行モードを更新できませんでした",
-    "mode_badge_in_place": "直接"
+    "mode_badge_in_place": "直接",
+    "p4_popover_title": "Perforce depot を添付",
+    "p4_search_placeholder": "depot を検索...",
+    "p4_search_empty": "検索条件に一致する depot はありません。",
+    "p4_port_placeholder": "perforce.example.com:1666",
+    "p4_depot_placeholder": "//depot/project",
+    "p4_stream_placeholder": "Stream（任意）",
+    "p4_submit": "追加",
+    "toast_p4_attached": "Perforce depot を添付しました"
   },
   "delete_dialog": {
     "title": "プロジェクトを削除",

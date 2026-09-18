@@ -151,6 +151,96 @@ func TestProjectResourceLifecycle(t *testing.T) {
 	}
 }
 
+func TestProjectResourcePerforceDepotLifecycle(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/projects?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "Perforce depot lifecycle project",
+	})
+	testHandler.CreateProject(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateProject: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var project ProjectResponse
+	if err := json.NewDecoder(w.Body).Decode(&project); err != nil {
+		t.Fatalf("decode CreateProject: %v", err)
+	}
+	defer func() {
+		req := newRequest("DELETE", "/api/projects/"+project.ID, nil)
+		req = withURLParam(req, "id", project.ID)
+		testHandler.DeleteProject(httptest.NewRecorder(), req)
+	}()
+
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
+		"resource_type": "perforce_depot",
+		"resource_ref": map[string]any{
+			"port":   "  ssl:perforce.example.com:1666  ",
+			"depot":  "  //depot/game  ",
+			"stream": "  //depot/game/main  ",
+		},
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreateProjectResource(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateProjectResource: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var created ProjectResourceResponse
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatalf("decode CreateProjectResource: %v", err)
+	}
+	if created.ResourceType != "perforce_depot" {
+		t.Errorf("created.ResourceType = %q, want perforce_depot", created.ResourceType)
+	}
+	var ref struct {
+		Port   string `json:"port"`
+		Depot  string `json:"depot"`
+		Stream string `json:"stream"`
+	}
+	if err := json.Unmarshal(created.ResourceRef, &ref); err != nil {
+		t.Fatalf("decode resource_ref: %v", err)
+	}
+	if ref.Port != "ssl:perforce.example.com:1666" || ref.Depot != "//depot/game" || ref.Stream != "//depot/game/main" {
+		t.Fatalf("created.ResourceRef = %+v", ref)
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
+		"resource_type": "perforce_depot",
+		"resource_ref": map[string]any{
+			"port":   "ssl:perforce.example.com:1666",
+			"depot":  "//depot/game",
+			"stream": "//depot/game/main",
+		},
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreateProjectResource(w, req)
+	if w.Code != http.StatusConflict {
+		t.Errorf("duplicate CreateProjectResource: expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
+		"resource_type": "perforce_depot",
+		"resource_ref":  map[string]any{"port": "https://github.com/org/repo.git", "depot": "//depot/game"},
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreateProjectResource(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("invalid port: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequest("DELETE", "/api/projects/"+project.ID+"/resources/"+created.ID, nil)
+	req = withURLParams(req, "id", project.ID, "resourceId", created.ID)
+	testHandler.DeleteProjectResource(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("DeleteProjectResource: expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // TestProjectResourceAcceptsSSHRepoURLs covers GitHub issue #2484: SSH and
 // scp-like git URLs must be accepted alongside https URLs, because workspace
 // repos configured with an SSH remote previously got rejected when attached

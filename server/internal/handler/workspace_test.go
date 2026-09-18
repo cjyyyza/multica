@@ -815,6 +815,89 @@ VALUES ($1, $2, 'owner')
 	})
 }
 
+func TestUpdateWorkspace_P4DepotsValidation(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	const slug = "handler-tests-p4-depots-validation"
+	_, _ = testPool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, slug)
+
+	wsID := dbfx.Insert(t, "workspace", testutil.Cols{
+		"name":        "Handler Test P4 Depots Validation",
+		"slug":        slug,
+		"description": "UpdateWorkspace p4_depots validation test",
+	})
+
+	dbfx.Exec(t, `
+INSERT INTO member (workspace_id, user_id, role)
+VALUES ($1, $2, 'owner')
+`, wsID, testUserID)
+
+	t.Run("rejects invalid ports without persisting", func(t *testing.T) {
+		req := newRequest("PATCH", "/api/workspaces/"+wsID, map[string]any{
+			"p4_depots": []map[string]any{
+				{"port": "https://github.com/org/repo.git", "depot": "//depot/game"},
+			},
+		})
+		req = withURLParam(req, "id", wsID)
+		testutil.Call(t, testHandler.UpdateWorkspace, req).Want(http.StatusBadRequest)
+
+		var raw []byte
+		dbfx.QueryRow(t, `SELECT p4_depots FROM workspace WHERE id = $1`, wsID).Scan(&raw)
+		if string(raw) != "[]" {
+			t.Fatalf("invalid p4_depots update should not persist, got %s", raw)
+		}
+	})
+
+	t.Run("normalizes and dedupes valid depots", func(t *testing.T) {
+		req := newRequest("PATCH", "/api/workspaces/"+wsID, map[string]any{
+			"p4_depots": []map[string]any{
+				{
+					"port":        "  SSL:perforce.example.com:1666  ",
+					"depot":       "  //depot/game  ",
+					"stream":      "  //depot/game/main  ",
+					"description": "  client  ",
+				},
+				{
+					"port":   "ssl:perforce.example.com:1666",
+					"depot":  "//depot/game",
+					"stream": "//depot/game/main",
+				},
+				{
+					"port":  "perforce.example.com:1666",
+					"depot": "//depot/tools",
+				},
+			},
+		})
+		req = withURLParam(req, "id", wsID)
+		w := testutil.Call(t, testHandler.UpdateWorkspace, req).Want(http.StatusOK)
+
+		var resp struct {
+			P4Depots []struct {
+				Port        string `json:"port"`
+				Depot       string `json:"depot"`
+				Stream      string `json:"stream"`
+				Description string `json:"description"`
+			} `json:"p4_depots"`
+		}
+		w.JSON(&resp)
+		if len(resp.P4Depots) != 2 {
+			t.Fatalf("expected duplicate identity to be deduped, got %d depots: %+v", len(resp.P4Depots), resp.P4Depots)
+		}
+		if resp.P4Depots[0].Port != "SSL:perforce.example.com:1666" ||
+			resp.P4Depots[0].Depot != "//depot/game" ||
+			resp.P4Depots[0].Stream != "//depot/game/main" ||
+			resp.P4Depots[0].Description != "client" {
+			t.Fatalf("first depot not normalized: %+v", resp.P4Depots[0])
+		}
+		if resp.P4Depots[1].Port != "perforce.example.com:1666" || resp.P4Depots[1].Depot != "//depot/tools" {
+			t.Fatalf("second depot not preserved: %+v", resp.P4Depots[1])
+		}
+	})
+}
+
 // revocationFixture is a minimal (workspace, member-to-revoke, runtime,
 // agent, queued-task, daemon-token) bundle used to drive the revocation
 // tests. The "requester" is always testUserID (owner of the workspace) so

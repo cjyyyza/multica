@@ -276,7 +276,8 @@ func writeAvailableCommands(b *strings.Builder, ctx TaskContextForEnv) {
 	writeIssueStatusCommand(b, ctx)
 	b.WriteString("- `multica issue children <id> [--output json]` — list a parent's sub-issues grouped by stage.\n")
 	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-file <path> | --content-stdin] [--parent <comment-id>] [--attachment <path>]` — post a comment. Agent-authored bodies MUST use `--content-file`; see `## Comment Formatting` for why. `multica issue comment add --help` for full flags.\n")
-	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>] [--fresh]` — repository checkout on a dedicated branch. Re-running it keeps an existing checkout that has uncommitted or unpushed work, or is already on this task's branch, and only fetches. `--fresh` discards uncommitted and untracked files and starts a new branch; commits stay on the old branch, but push any you still need first.\n\n")
+	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>] [--fresh]` — repository checkout on a dedicated branch. Re-running it keeps an existing checkout that has uncommitted or unpushed work, or is already on this task's branch, and only fetches. `--fresh` discards uncommitted and untracked files and starts a new branch; commits stay on the old branch, but push any you still need first.\n")
+	b.WriteString("- `multica p4 sync --port <P4PORT> --depot <//depot/path> [--stream <stream>] [--changelist <n>] [--fresh]` — sync a configured Perforce depot into this task's working directory using the host's `p4` login. `--fresh` deletes the previous sync directory and runs a clean sync.\n\n")
 	b.WriteString("Git commits use the user's configured identity. Preserve it unless the user requests another identity. In a managed checkout, use `git config --worktree user.name` / `user.email` for an intentional task-local override; plain `git config` or `--local` can write into a shared cache and affect other tasks. Never change global Git identity for a task.\n\n")
 	// Squad maintenance is squad-leader surface: an agent that leads no squad
 	// has no squad to change roles in, so this shipped to every run as dead
@@ -433,6 +434,28 @@ func writeRepositories(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("\n")
 }
 
+func writeP4Depots(b *strings.Builder, ctx TaskContextForEnv) {
+	if len(ctx.P4Depots) == 0 {
+		return
+	}
+	b.WriteString("## Perforce depots\n\n")
+	b.WriteString("Available in this workspace — `multica p4 sync --port <P4PORT> --depot <//depot/path>` to fetch. Uses the host Helix login (`p4 login`); Multica does not store a Perforce password.\n\n")
+	for _, depot := range ctx.P4Depots {
+		line := fmt.Sprintf("- `%s` `%s`", depot.Port, depot.Depot)
+		if depot.Stream != "" {
+			line += fmt.Sprintf(" stream `%s`", depot.Stream)
+		}
+		if depot.Changelist != "" {
+			line += fmt.Sprintf(" @%s", depot.Changelist)
+		}
+		if depot.Description != "" {
+			line += " — " + depot.Description
+		}
+		b.WriteString(line + "\n")
+	}
+	b.WriteString("\n")
+}
+
 // writeProjectContext emits the Project Context section when the task carries
 // an active project. Project context is independent of the task surface: an
 // issue inherits it from its project, while a chat receives it from the
@@ -456,7 +479,8 @@ func writeProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 			fmt.Fprintf(b, "- %s\n", formatProjectResource(r))
 		}
 		b.WriteString("\nResources are pointers — open them only when relevant to the task. ")
-		b.WriteString("For `github_repo` resources, use `multica repo checkout <url>` to fetch the code. Add `--ref <branch-or-sha>` when a task or handoff names an exact revision.\n\n")
+		b.WriteString("For `github_repo` resources, use `multica repo checkout <url>` to fetch the code. Add `--ref <branch-or-sha>` when a task or handoff names an exact revision. ")
+		b.WriteString("For `perforce_depot` resources, use `multica p4 sync --port <P4PORT> --depot <//depot/path>`.\n\n")
 	} else {
 		b.WriteString("This project has no resources attached yet.\n\n")
 	}
@@ -1013,6 +1037,7 @@ func buildMetaSkillContentSlim(provider string, ctx TaskContextForEnv) string {
 
 	if kind != kindQuickCreate {
 		writeRepositories(&b, ctx)
+		writeP4Depots(&b, ctx)
 	}
 
 	writeProjectContext(&b, ctx)

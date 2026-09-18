@@ -23,6 +23,16 @@ type RepoContextForEnv struct {
 	Ref         string // optional default checkout ref for this task
 }
 
+// P4DepotForEnv describes a Perforce depot available for `multica p4 sync`.
+type P4DepotForEnv struct {
+	Port        string
+	Depot       string
+	Stream      string
+	User        string
+	Changelist  string
+	Description string
+}
+
 // ProjectResourceForEnv describes a single resource attached to the issue's
 // project. The resource_ref payload is type-specific JSON; the agent reads
 // resources.json on disk for the full structure. This struct only carries
@@ -157,6 +167,7 @@ type TaskContextForEnv struct {
 	AgentSkills                   []SkillContextForEnv
 	DisabledRuntimeSkills         []RuntimeSkillRefForEnv
 	Repos                         []RepoContextForEnv     // workspace repos available for checkout
+	P4Depots                      []P4DepotForEnv         // Perforce depots available for `multica p4 sync`
 	ProjectID                     string                  // active project for this task, when present
 	ProjectTitle                  string                  // human-readable project title
 	ProjectDescription            string                  // durable project-level context, rendered into the brief's Project Context section

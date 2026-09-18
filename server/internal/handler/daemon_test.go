@@ -81,6 +81,18 @@ func setHandlerTestWorkspaceRepos(t *testing.T, repos []map[string]string) {
 	})
 }
 
+func setHandlerTestWorkspaceP4Depots(t *testing.T, depots []map[string]string) {
+	t.Helper()
+	data, err := json.Marshal(depots)
+	if err != nil {
+		t.Fatalf("marshal p4_depots: %v", err)
+	}
+	dbfx.Exec(t, `UPDATE workspace SET p4_depots = $1 WHERE id = $2`, data, testWorkspaceID)
+	t.Cleanup(func() {
+		dbfx.Exec(t, `UPDATE workspace SET p4_depots = $1 WHERE id = $2`, []byte("[]"), testWorkspaceID)
+	})
+}
+
 // newDaemonTokenRequest creates an HTTP request with daemon token context set
 // (simulating DaemonAuth middleware for mdt_ tokens).
 func newDaemonTokenRequest(method, path string, body any, workspaceID, daemonID string) *http.Request {
@@ -2245,6 +2257,110 @@ func TestClaimTask_ProjectWithoutRepos_FallsBackToWorkspaceRepos(t *testing.T) {
 	if len(resp.Task.Repos) != 1 || !strings.HasSuffix(resp.Task.Repos[0].URL, "workspace-fallback") {
 		t.Fatalf("expected workspace fallback repo, got %+v", resp.Task.Repos)
 	}
+}
+
+// A Git-only project must still inherit workspace Perforce depots, and a
+// Perforce-only project must still inherit workspace Git repos. The two
+// fallbacks are independent so attaching one VCS does not hide the other.
+func TestClaimTask_IndependentGitAndP4Fallbacks(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	setHandlerTestWorkspaceRepos(t, []map[string]string{
+		{"url": "https://github.com/example/workspace-git", "description": "ws git"},
+	})
+	setHandlerTestWorkspaceP4Depots(t, []map[string]string{
+		{"port": "perforce.example.com:1666", "depot": "//depot/workspace"},
+	})
+
+	var agentID, runtimeID string
+	dbfx.QueryRow(t,
+		`SELECT id, runtime_id FROM agent WHERE workspace_id = $1 LIMIT 1`,
+		testWorkspaceID,
+	).Scan(&agentID, &runtimeID)
+
+	t.Run("git-only project inherits workspace p4_depots", func(t *testing.T) {
+		projectID := dbfx.Project(t, "Git-only claim project")
+		dbfx.Insert(t, "project_resource", testutil.Cols{
+			"project_id":    projectID,
+			"workspace_id":  testWorkspaceID,
+			"resource_type": "github_repo",
+			"resource_ref":  `{"url":"https://github.com/example/project-git"}`,
+			"position":      0,
+		})
+		issueID := dbfx.Issue(t, "git-only project inherits p4", testutil.Cols{
+			"project_id": projectID,
+			"priority":   "medium",
+			"number":     88011,
+		})
+		dbfx.Task(t, agentID, testutil.Cols{
+			"runtime_id": runtimeID,
+			"issue_id":   issueID,
+		})
+
+		req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, "test-claim-p4-fallback")
+		req = withURLParam(req, "runtimeId", runtimeID)
+		w := testutil.Call(t, testHandler.ClaimTaskByRuntime, req).Want(http.StatusOK)
+
+		var resp struct {
+			Task *struct {
+				Repos    []RepoData    `json:"repos"`
+				P4Depots []P4DepotData `json:"p4_depots"`
+			} `json:"task"`
+		}
+		w.JSON(&resp)
+		if resp.Task == nil {
+			t.Fatal("expected task in response")
+		}
+		if len(resp.Task.Repos) != 1 || !strings.HasSuffix(resp.Task.Repos[0].URL, "project-git") {
+			t.Fatalf("expected project git repo, got %+v", resp.Task.Repos)
+		}
+		if len(resp.Task.P4Depots) != 1 || resp.Task.P4Depots[0].Depot != "//depot/workspace" {
+			t.Fatalf("expected workspace p4 fallback, got %+v", resp.Task.P4Depots)
+		}
+	})
+
+	t.Run("p4-only project inherits workspace repos", func(t *testing.T) {
+		projectID := dbfx.Project(t, "P4-only claim project")
+		dbfx.Insert(t, "project_resource", testutil.Cols{
+			"project_id":    projectID,
+			"workspace_id":  testWorkspaceID,
+			"resource_type": "perforce_depot",
+			"resource_ref":  `{"port":"perforce.example.com:1666","depot":"//depot/project"}`,
+			"position":      0,
+		})
+		issueID := dbfx.Issue(t, "p4-only project inherits git", testutil.Cols{
+			"project_id": projectID,
+			"priority":   "medium",
+			"number":     88012,
+		})
+		dbfx.Task(t, agentID, testutil.Cols{
+			"runtime_id": runtimeID,
+			"issue_id":   issueID,
+		})
+
+		req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, "test-claim-git-fallback-p4")
+		req = withURLParam(req, "runtimeId", runtimeID)
+		w := testutil.Call(t, testHandler.ClaimTaskByRuntime, req).Want(http.StatusOK)
+
+		var resp struct {
+			Task *struct {
+				Repos    []RepoData    `json:"repos"`
+				P4Depots []P4DepotData `json:"p4_depots"`
+			} `json:"task"`
+		}
+		w.JSON(&resp)
+		if resp.Task == nil {
+			t.Fatal("expected task in response")
+		}
+		if len(resp.Task.Repos) != 1 || !strings.HasSuffix(resp.Task.Repos[0].URL, "workspace-git") {
+			t.Fatalf("expected workspace git fallback, got %+v", resp.Task.Repos)
+		}
+		if len(resp.Task.P4Depots) != 1 || resp.Task.P4Depots[0].Depot != "//depot/project" {
+			t.Fatalf("expected project p4 depot, got %+v", resp.Task.P4Depots)
+		}
+	})
 }
 
 // Regression test for #1276: ClaimTaskByRuntime must populate both

@@ -27,6 +27,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/p4depot"
 	"github.com/multica-ai/multica/server/internal/runtimeapps"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -222,10 +223,12 @@ type DaemonRegisterRequest struct {
 }
 
 type daemonWorkspaceReposResponse struct {
-	WorkspaceID  string          `json:"workspace_id"`
-	Repos        []RepoData      `json:"repos"`
-	ReposVersion string          `json:"repos_version"`
-	Settings     json.RawMessage `json:"settings,omitempty"`
+	WorkspaceID     string          `json:"workspace_id"`
+	Repos           []RepoData      `json:"repos"`
+	ReposVersion    string          `json:"repos_version"`
+	P4Depots        []P4DepotData   `json:"p4_depots"`
+	P4DepotsVersion string          `json:"p4_depots_version"`
+	Settings        json.RawMessage `json:"settings,omitempty"`
 }
 
 func normalizeWorkspaceRepos(repos []RepoData) []RepoData {
@@ -262,6 +265,48 @@ func workspaceReposVersion(repos []RepoData) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func normalizeWorkspaceP4Depots(depots []P4DepotData) []P4DepotData {
+	if len(depots) == 0 {
+		return []P4DepotData{}
+	}
+	normalized := make([]P4DepotData, 0, len(depots))
+	seen := make(map[string]struct{}, len(depots))
+	for _, depot := range depots {
+		parsed, err := p4depot.Normalize(p4depot.Ref(depot))
+		if err != nil {
+			continue
+		}
+		id := p4depot.Identity(parsed)
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		normalized = append(normalized, P4DepotData(parsed))
+	}
+	return normalized
+}
+
+func workspaceP4DepotsVersion(depots []P4DepotData) string {
+	ids := make([]string, 0, len(depots))
+	for _, depot := range depots {
+		ids = append(ids, p4depot.Identity(p4depot.Ref(depot)))
+	}
+	sort.Strings(ids)
+	sum := sha256.Sum256([]byte(strings.Join(ids, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+func parseWorkspaceP4Depots(raw []byte) []P4DepotData {
+	if len(raw) == 0 {
+		return []P4DepotData{}
+	}
+	var depots []P4DepotData
+	if err := json.Unmarshal(raw, &depots); err != nil {
+		return []P4DepotData{}
+	}
+	return normalizeWorkspaceP4Depots(depots)
+}
+
 func parseWorkspaceRepos(raw []byte) []RepoData {
 	if len(raw) == 0 {
 		return []RepoData{}
@@ -275,11 +320,18 @@ func parseWorkspaceRepos(raw []byte) []RepoData {
 }
 
 func workspaceReposResponse(workspaceID string, raw []byte, settingsRaw []byte) daemonWorkspaceReposResponse {
-	repos := parseWorkspaceRepos(raw)
+	return workspaceReposAndP4Response(workspaceID, raw, nil, settingsRaw)
+}
+
+func workspaceReposAndP4Response(workspaceID string, reposRaw []byte, p4Raw []byte, settingsRaw []byte) daemonWorkspaceReposResponse {
+	repos := parseWorkspaceRepos(reposRaw)
+	depots := parseWorkspaceP4Depots(p4Raw)
 	resp := daemonWorkspaceReposResponse{
-		WorkspaceID:  workspaceID,
-		Repos:        repos,
-		ReposVersion: workspaceReposVersion(repos),
+		WorkspaceID:     workspaceID,
+		Repos:           repos,
+		ReposVersion:    workspaceReposVersion(repos),
+		P4Depots:        depots,
+		P4DepotsVersion: workspaceP4DepotsVersion(depots),
 	}
 	if len(settingsRaw) > 0 {
 		resp.Settings = json.RawMessage(settingsRaw)
@@ -733,13 +785,15 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		"runtimes": resp,
 	})
 
-	repoResp := workspaceReposResponse(req.WorkspaceID, ws.Repos, ws.Settings)
+	repoResp := workspaceReposAndP4Response(req.WorkspaceID, ws.Repos, ws.P4Depots, ws.Settings)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"runtimes":      resp,
-		"repos":         repoResp.Repos,
-		"repos_version": repoResp.ReposVersion,
-		"settings":      repoResp.Settings,
+		"runtimes":          resp,
+		"repos":             repoResp.Repos,
+		"repos_version":     repoResp.ReposVersion,
+		"p4_depots":         repoResp.P4Depots,
+		"p4_depots_version": repoResp.P4DepotsVersion,
+		"settings":          repoResp.Settings,
 	})
 }
 
@@ -917,7 +971,7 @@ func (h *Handler) GetDaemonWorkspaceRepos(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	writeJSON(w, http.StatusOK, workspaceReposResponse(workspaceID, ws.Repos, ws.Settings))
+	writeJSON(w, http.StatusOK, workspaceReposAndP4Response(workspaceID, ws.Repos, ws.P4Depots, ws.Settings))
 }
 
 // setRuntimeOffline flips a runtime offline, recording the daemon's reason when

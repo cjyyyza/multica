@@ -21,6 +21,7 @@ The chain is:
    session/workdir hints, and a task token;
 6. the daemon prepares a workdir and launches the provider CLI;
 7. `multica repo checkout` talks to the local daemon, not directly to GitHub.
+   `multica p4 sync` talks to the local daemon, not directly to Helix.
 
 ## CLI
 
@@ -33,6 +34,8 @@ multica runtime delete <runtime-id>
 multica repo checkout <url>
 multica repo checkout <url> --ref <branch-or-sha>
 multica repo checkout <url> --fresh
+multica p4 sync --port <p4port> --depot <depot-path>
+multica p4 sync --port <p4port> --depot <depot-path> --fresh
 ```
 
 Runtime and repo commands affect active agent execution. Do not restart daemons,
@@ -103,6 +106,13 @@ absent, you are not in the normal agent checkout path. When a project
 ref by default for the current task; an explicit
 `repo checkout <url> --ref <branch-or-sha>` overrides it.
 
+`p4 sync` uses the same daemon port and task token. It creates a task-scoped
+Helix client and syncs into `workdir/p4/…`. Credentials stay on the host
+(`P4USER`, `P4TICKETS`, `P4CONFIG`); Multica does not store a Perforce
+password. The depot must be on the task allowlist (project `perforce_depot`
+resources, or workspace `p4_depots` when the project has none). `--fresh`
+deletes the previous sync directory first.
+
 ## Task CLI boundary
 
 The daemon injects a task-scoped `mat_` credential for Multica API commands and
@@ -153,8 +163,8 @@ Check in this order:
 4. Is the runtime online? `multica runtime list --output json`.
 5. Did the daemon heartbeat recently? Runtime `last_seen_at` is the visible clue.
 6. Did the task get claimed or is it stuck pending/running/waiting for local directory?
-7. If repo checkout failed, classify it after checking whether repo context was
-   present in the task/project context.
+7. If repo checkout or `p4 sync` failed, classify it after checking whether
+   repo / Perforce context was present in the task/project context.
 
 ## Repos
 
@@ -168,6 +178,8 @@ Workspace repos and project resources are not the same thing:
 - `github_repo` project resources are durable project context and can affect
   future tasks; optional `resource_ref.ref` pins the default checkout ref for
   tasks in that project;
+- `perforce_depot` project resources are durable Helix context; `multica p4
+  sync` uses `resource_ref.port` and `depot`;
 - `local_directory` resources point at a path owned by a daemon and carry
   local-machine assumptions.
 

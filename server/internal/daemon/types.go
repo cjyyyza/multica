@@ -42,6 +42,17 @@ type RepoData struct {
 	Ref         string `json:"ref,omitempty"`
 }
 
+// P4DepotData is one Perforce depot from the claim / workspace-repos wire.
+type P4DepotData struct {
+	Port        string `json:"port"`
+	Depot       string `json:"depot"`
+	Stream      string `json:"stream,omitempty"`
+	User        string `json:"user,omitempty"`
+	Charset     string `json:"charset,omitempty"`
+	Changelist  string `json:"changelist,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
 // ProjectResourceData mirrors handler.ProjectResourceData — a single project
 // resource as delivered to the daemon. resource_ref is type-specific JSON.
 type ProjectResourceData struct {
@@ -99,6 +110,7 @@ type Task struct {
 	Agent                         *AgentData             `json:"agent,omitempty"`
 	ConnectedApps                 []ConnectedAppData     `json:"connected_apps,omitempty"` // per-run app capabilities mounted through runtime MCP overlays
 	Repos                         []RepoData             `json:"repos,omitempty"`
+	P4Depots                      []P4DepotData          `json:"p4_depots,omitempty"`
 	ProjectID                     string                 `json:"project_id,omitempty"`                       // active project for this task, when present
 	ProjectTitle                  string                 `json:"project_title,omitempty"`                    // human-readable project title for context injection
 	ProjectDescription            string                 `json:"project_description,omitempty"`              // durable project-level context injected into the brief
