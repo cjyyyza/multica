@@ -250,6 +250,12 @@ export type {
   RedeemTelegramBindingTokenResponse,
 } from "./telegram";
 export type {
+  PopoInstallation,
+  ListPopoInstallationsResponse,
+  RegisterPopoRequest,
+  RedeemPopoBindingTokenResponse,
+} from "./popo";
+export type {
   Autopilot,
   AutopilotStatus,
   AutopilotExecutionMode,

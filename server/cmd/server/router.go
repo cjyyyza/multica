@@ -31,6 +31,7 @@ import (
 	composiointeg "github.com/multica-ai/multica/server/internal/integrations/composio"
 	"github.com/multica-ai/multica/server/internal/integrations/dingtalk"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
+	"github.com/multica-ai/multica/server/internal/integrations/popo"
 	"github.com/multica-ai/multica/server/internal/integrations/slack"
 	"github.com/multica-ai/multica/server/internal/integrations/telegram"
 	"github.com/multica-ai/multica/server/internal/integrations/wecom"
@@ -1132,6 +1133,44 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		slog.Info("telegram integration disabled (MULTICA_TELEGRAM_SECRET_KEY not set)")
 	}
 
+	// POPO Open / dj01bot. Install is Telegram-style BYO (robot id +
+	// loopback webhook URL). Transport is Windows-local: the API never
+	// opens POPO, popo-cli, or dj01bot. Gated by MULTICA_POPO_SECRET_KEY.
+	if popoKey, err := secretbox.LoadKey("MULTICA_POPO_SECRET_KEY"); err == nil {
+		box, err := secretbox.New(popoKey)
+		if err != nil {
+			slog.Error("popo: secretbox.New failed; popo integration disabled", "error", err)
+		} else {
+			popoQueue := popo.NewQueue(queries)
+			h.PopoQueue = popoQueue
+			popoBindingSvc := popo.NewBindingTokenService(queries, pool)
+			h.PopoBindingTokens = popoBindingSvc
+			popoReplier := popo.NewOutboundReplier(popo.OutboundReplierConfig{
+				Binding: popoBindingSvc,
+				Queue:   popoQueue,
+				AppURL:  appURLFromEnv(),
+				Logger:  slog.Default(),
+			})
+			channelRouter.Register(popo.TypePopo, popo.NewPopoResolverSet(queries, pool, popoReplier))
+			popoOutbound := popo.NewOutbound(queries, popoQueue, slog.Default())
+			popoOutbound.Register(bus)
+			popo.RegisterPopo(channelRegistry, popo.ChannelDeps{
+				Queue:  popoQueue,
+				Lookup: queries,
+				Logger: slog.Default(),
+			})
+			installSvc, ierr := popo.NewInstallService(queries, pool, box)
+			if ierr != nil {
+				slog.Error("popo: InstallService init failed; install disabled", "error", ierr)
+			} else {
+				h.PopoInstall = installSvc
+			}
+			slog.Info("popo integration enabled (Windows-local dj01bot gateway)")
+		}
+	} else {
+		slog.Info("popo integration disabled (MULTICA_POPO_SECRET_KEY not set)")
+	}
+
 	// Composio integration (MUL-3720). Gated by COMPOSIO_API_KEY plus the
 	// composio_mcp_apps feature flag. The env var is the project-scoped key the
 	// standalone SDK authenticates Composio with (sent as x-api-key; the project
@@ -1760,6 +1799,23 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Delete("/telegram/installations/{installationId}", h.RevokeTelegramInstallation)
 					r.Post("/telegram/install", h.RegisterTelegramBot)
 				})
+
+				// POPO / dj01bot. Listing is member-visible; install +
+				// revoke are admin-only. Inbound + outbound poll/ack are
+				// member-visible so the Windows CLI can run as a
+				// workspace member without cloud-side POPO access.
+				r.Group(func(r chi.Router) {
+					r.Use(middleware.RequireWorkspaceMemberFromURL(queries, "id"))
+					r.Get("/popo/installations", h.ListPopoInstallations)
+					r.Post("/popo/inbound", h.IngestPopoEvent)
+					r.Get("/popo/outbound", h.ListPopoOutbound)
+					r.Post("/popo/outbound-ack", h.AckPopoOutbound)
+				})
+				r.Group(func(r chi.Router) {
+					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
+					r.Delete("/popo/installations/{installationId}", h.RevokePopoInstallation)
+					r.Post("/popo/install", h.RegisterPopoBot)
+				})
 			})
 		})
 
@@ -1787,6 +1843,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// workspace-scoped, identity from the session, token proves only
 		// "this Telegram user id requested binding".
 		r.Post("/api/telegram/binding/redeem", h.RedeemTelegramBindingToken)
+		// POPO binding-token redemption. Same rationale: not workspace-scoped,
+		// identity from the session, token proves only "this POPO user id
+		// requested binding".
+		r.Post("/api/popo/binding/redeem", h.RedeemPopoBindingToken)
 
 		// Composio integration (MUL-3720). User-scoped (no workspace context):
 		// a connection belongs to a user. These four require a logged-in

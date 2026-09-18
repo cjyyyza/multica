@@ -1,0 +1,17 @@
+---
+title: POPO Bot
+description: Windows 로컬 dj01bot 게이트웨이로 Multica 에이전트를 POPO에 연결합니다.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+POPO의 제품 면은 Feishu/Lark와 같습니다(IM 채널 + 공유 엔진). 전송은 Windows 로컬에서만 이뤄집니다. API 서버와 클라우드/Mac 에이전트는 POPO, popo-cli, dj01bot을 열지 않습니다.
+
+자세한 절차는 [영문](/popo-bot-integration)과 [중문](/zh/popo-bot-integration)을 보세요.
+
+1. 이 Windows에서 dj01bot을 켜고 `gateway.webhook.enabled`를 켭니다(기본 포트 `28792`).
+2. Multica **에이전트 → 통합 → POPO 연결**에서 robot id를 등록합니다. 비우면 `default`입니다. Webhook URL은 루프백만 허용됩니다.
+3. 같은 컴퓨터에서 `multica popo gateway`를 계속 실행합니다.
+4. POPO Open `callbackUrl`을 `http://127.0.0.1:18681/api/popo_open`으로 지정해 dj01bot AgentLoop와 이중 응답을 피합니다.
+
+서버 키는 `MULTICA_POPO_SECRET_KEY`입니다. `openssl rand -base64 32`로 생성하세요.

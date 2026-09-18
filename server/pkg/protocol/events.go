@@ -215,4 +215,9 @@ const (
 	// front-ends invalidate the Telegram installations query on either.
 	EventTelegramInstallationCreated = "telegram_installation:created"
 	EventTelegramInstallationRevoked = "telegram_installation:revoked"
+
+	// POPO installation lifecycle. Same contract as the Telegram pair:
+	// front-ends invalidate the POPO installations query on either.
+	EventPopoInstallationCreated = "popo_installation:created"
+	EventPopoInstallationRevoked = "popo_installation:revoked"
 )

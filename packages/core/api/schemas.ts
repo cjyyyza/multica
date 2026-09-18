@@ -44,6 +44,9 @@ import type {
   TelegramInstallation,
   ListTelegramInstallationsResponse,
   RedeemTelegramBindingTokenResponse,
+  PopoInstallation,
+  ListPopoInstallationsResponse,
+  RedeemPopoBindingTokenResponse,
   GroupedIssuesResponse,
   GitHubConnectResponse,
   GitHubPullRequest,
@@ -3275,6 +3278,57 @@ export const EMPTY_REDEEM_TELEGRAM_BINDING_TOKEN_RESPONSE: RedeemTelegramBinding
   workspace_id: "",
   installation_id: "",
   telegram_user_id: "",
+};
+
+export const PopoInstallationSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string().default(""),
+  agent_id: z.string().default(""),
+  robot_id: z.string().default(""),
+  robot_name: z.string().default(""),
+  webhook_url: z.string().default(""),
+  installer_user_id: z.string().default(""),
+  status: z.string().default("revoked"),
+  installed_at: z.string().default(""),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const EMPTY_POPO_INSTALLATION: PopoInstallation = {
+  id: "",
+  workspace_id: "",
+  agent_id: "",
+  robot_id: "",
+  robot_name: "",
+  webhook_url: "",
+  installer_user_id: "",
+  status: "revoked",
+  installed_at: "",
+  created_at: "",
+  updated_at: "",
+};
+
+export const ListPopoInstallationsResponseSchema = z.object({
+  installations: z.array(PopoInstallationSchema).default([]),
+  configured: z.boolean().default(false),
+  install_supported: z.boolean().optional(),
+}).loose();
+
+export const EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE: ListPopoInstallationsResponse = {
+  installations: [],
+  configured: false,
+};
+
+export const RedeemPopoBindingTokenResponseSchema = z.object({
+  workspace_id: z.string().default(""),
+  installation_id: z.string().default(""),
+  popo_user_id: z.string().default(""),
+}).loose();
+
+export const EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE: RedeemPopoBindingTokenResponse = {
+  workspace_id: "",
+  installation_id: "",
+  popo_user_id: "",
 };
 
 // Skills. Introduced for `POST /api/skills/:id/refresh` (update a skill from

@@ -94,6 +94,13 @@ vi.mock("@multica/core/telegram", () => ({
   }),
 }));
 
+vi.mock("@multica/core/popo", () => ({
+  popoInstallationsOptions: () => ({
+    queryKey: ["popo", "installations"],
+    queryFn: vi.fn(),
+  }),
+}));
+
 vi.mock("@multica/core/dingtalk", () => ({
   dingtalkInstallationsOptions: () => ({
     queryKey: ["dingtalk", "installations"],
@@ -166,6 +173,12 @@ vi.mock("../../../settings/components/wecom-tab", () => ({
 vi.mock("../../../settings/components/telegram-tab", () => ({
   TelegramAgentBindButton: ({ agentId }: { agentId: string }) => (
     <div data-testid="telegram-bind-button" data-agent-id={agentId} />
+  ),
+}));
+
+vi.mock("../../../settings/components/popo-tab", () => ({
+  PopoAgentBindButton: ({ agentId }: { agentId: string }) => (
+    <div data-testid="popo-bind-button" data-agent-id={agentId} />
   ),
 }));
 
@@ -275,11 +288,13 @@ describe("IntegrationsTab", () => {
     expect(screen.getByText("Lark")).toBeTruthy();
     expect(screen.getByText("Slack")).toBeTruthy();
     expect(screen.getByText("Telegram")).toBeTruthy();
+    expect(screen.getByText("POPO")).toBeTruthy();
     expect(screen.getByTestId("lark-bind-button").getAttribute("data-agent-id")).toBe("agent-1");
     expect(screen.getByTestId("slack-bind-button").getAttribute("data-agent-id")).toBe("agent-1");
     expect(screen.getByTestId("telegram-bind-button").getAttribute("data-agent-id")).toBe(
       "agent-1",
     );
+    expect(screen.getByTestId("popo-bind-button").getAttribute("data-agent-id")).toBe("agent-1");
   });
 
   it("shows only this Agent's 1:1 bot and its groups", () => {
@@ -553,6 +568,7 @@ describe("IntegrationsTab", () => {
     expect(screen.queryByTestId("slack-bind-button")).toBeNull();
     expect(screen.queryByTestId("wecom-bind-button")).toBeNull();
     expect(screen.queryByTestId("telegram-bind-button")).toBeNull();
+    expect(screen.queryByTestId("popo-bind-button")).toBeNull();
   });
 
   it("lets a non-admin agent owner bind Lark and DingTalk", () => {
@@ -568,10 +584,11 @@ describe("IntegrationsTab", () => {
     expect(screen.queryByTestId("slack-bind-button")).toBeNull();
     expect(screen.queryByTestId("wecom-bind-button")).toBeNull();
     expect(screen.queryByTestId("telegram-bind-button")).toBeNull();
-    // The Slack, WeCom and Telegram sections fall back to the shared members note.
+    expect(screen.queryByTestId("popo-bind-button")).toBeNull();
+    // Slack, WeCom, Telegram and POPO fall back to the shared members note.
     expect(
       screen.getAllByText(/Only workspace owners and admins can manage this connection/i),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
   });
 
   it("renders the bind entry (not coming-soon) when installs are unavailable but the agent is already bound", () => {
