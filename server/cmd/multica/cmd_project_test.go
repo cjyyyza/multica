@@ -33,6 +33,12 @@ func newProjectResourceUpdateTestCmd() *cobra.Command {
 	c := &cobra.Command{Use: "update"}
 	c.Flags().String("url", "", "")
 	c.Flags().String("default-branch-hint", "", "")
+	c.Flags().String("port", "", "")
+	c.Flags().String("depot", "", "")
+	c.Flags().String("stream", "", "")
+	c.Flags().String("user", "", "")
+	c.Flags().String("charset", "", "")
+	c.Flags().String("changelist", "", "")
 	c.Flags().String("local-path", "", "")
 	c.Flags().String("daemon-id", "", "")
 	c.Flags().String("ref-label", "", "")
@@ -382,6 +388,39 @@ func TestBuildResourceRefFromFlagsLocalDirectoryExecutionMode(t *testing.T) {
 		}
 		if _, ok := ref["execution_mode"]; ok {
 			t.Errorf("expected execution_mode cleared, got %v", ref["execution_mode"])
+		}
+	})
+}
+
+func TestBuildResourceRefFromFlagsPerforceDepot(t *testing.T) {
+	t.Run("add requires port and depot", func(t *testing.T) {
+		cmd := newProjectResourceUpdateTestCmd()
+		_ = cmd.Flags().Set("port", "ssl:p4.example.com:1666")
+		_, _, err := buildResourceRefFromFlags(cmd, "perforce_depot", nil)
+		if err == nil {
+			t.Fatal("expected --depot required")
+		}
+	})
+
+	t.Run("stream-only edit preserves port and depot", func(t *testing.T) {
+		cmd := newProjectResourceUpdateTestCmd()
+		_ = cmd.Flags().Set("stream", "//depot/main")
+		existing := map[string]any{
+			"port":  "ssl:p4.example.com:1666",
+			"depot": "//depot/game",
+		}
+		ref, has, err := buildResourceRefFromFlags(cmd, "perforce_depot", existing)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !has {
+			t.Fatal("expected has=true")
+		}
+		if ref["port"] != "ssl:p4.example.com:1666" || ref["depot"] != "//depot/game" {
+			t.Fatalf("lost required fields: %+v", ref)
+		}
+		if ref["stream"] != "//depot/main" {
+			t.Fatalf("stream = %v", ref["stream"])
 		}
 	})
 }

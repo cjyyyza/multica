@@ -36,6 +36,9 @@ Common resource types:
 
 - `github_repo` — durable GitHub repo context, with `resource_ref.url`, optional
   checkout `ref`, and optional prompt-only `default_branch_hint`;
+- `perforce_depot` — Helix depot the daemon syncs with host credentials, with
+  `resource_ref.port`, `depot`, and optional `stream` / `user` / `charset` /
+  `changelist`;
 - `local_directory` — daemon-local path context, with `resource_ref.local_path`,
   `daemon_id`, optional label, and optional `execution_mode` (`in_place`, the
   default, or `worktree`).
@@ -54,6 +57,7 @@ multica project status <project-id> in_progress --output json
 multica project resource list <project-id> --output json
 multica project resource add <project-id> --type github_repo --url <github-url> --output json
 multica project resource add <project-id> --type github_repo --url <github-url> --ref <branch-or-sha> --output json
+multica project resource add <project-id> --type perforce_depot --port <p4port> --depot <depot-path> --output json
 multica project resource add <project-id> --type local_directory --local-path <abs-path> --daemon-id <daemon-id> --output json
 multica project resource add <project-id> --type local_directory --local-path <abs-path> --daemon-id <daemon-id> --execution-mode worktree --output json
 multica project resource update <project-id> <resource-id> --execution-mode in_place --output json
@@ -63,7 +67,9 @@ multica project resource remove <project-id> <resource-id> --output json
 ```
 
 For `github_repo`, non-JSON `--ref` sets `resource_ref.ref`, the default
-checkout branch/tag/SHA for future tasks in that project. JSON `--ref '<json>'`
+checkout branch/tag/SHA for future tasks in that project. For `perforce_depot`,
+`--port` and `--depot` are required shortcuts; `--stream`, `--user`,
+`--charset`, and `--changelist` are optional. JSON `--ref '<json>'`
 remains the escape hatch for full payloads or resource types not covered by
 shortcuts. `project resource update` merges shortcut edits with the existing
 `resource_ref`, so a partial edit does not clobber required fields.
@@ -142,7 +148,8 @@ is task-local checkout state.
 1. `multica project get <project-id> --output json`.
 2. `multica project resource list <project-id> --output json`.
 3. Check `github_repo.resource_ref.url`, optional `ref`, `default_branch_hint`,
-   and `local_directory.resource_ref.daemon_id`.
+   `perforce_depot.resource_ref.port` / `depot`, and
+   `local_directory.resource_ref.daemon_id`.
 4. Updating resources is a durable mutation. After an update, listing the
    resource is the verification path.
 5. If resources match the expected task context, inspect runtime/repo checkout

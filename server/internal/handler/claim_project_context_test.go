@@ -89,6 +89,7 @@ func assertNoForeignContext(t *testing.T, body string, extra ...string) {
 type claimProjectFields struct {
 	WorkspaceID        string                `json:"workspace_id"`
 	Repos              []RepoData            `json:"repos"`
+	P4Depots           []P4DepotData         `json:"p4_depots"`
 	ProjectID          string                `json:"project_id"`
 	ProjectTitle       string                `json:"project_title"`
 	ProjectDescription string                `json:"project_description"`

@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/p4depot"
 	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -80,9 +81,23 @@ func validateAndNormalizeResourceRef(resourceType string, ref json.RawMessage) (
 		return validateGithubRepoRef(ref)
 	case "local_directory":
 		return validateLocalDirectoryRef(ref)
+	case "perforce_depot":
+		return validatePerforceDepotRef(ref)
 	default:
 		return nil, fmt.Errorf("unknown resource_type %q", resourceType)
 	}
+}
+
+func validatePerforceDepotRef(ref json.RawMessage) (json.RawMessage, error) {
+	normalized, err := p4depot.ParseJSON(ref)
+	if err != nil {
+		return nil, fmt.Errorf("perforce_depot: %w", err)
+	}
+	out, err := p4depot.MarshalJSON(normalized)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 type githubRepoRef struct {
@@ -876,6 +891,7 @@ type claimProjectContext struct {
 	Description string
 	Resources   []ProjectResourceData
 	Repos       []RepoData
+	P4Depots    []P4DepotData
 }
 
 // applyTo copies the resolved context onto a claim response. Callers assign the
@@ -889,6 +905,7 @@ func (c claimProjectContext) applyTo(resp *AgentTaskResponse) {
 		resp.ProjectResources = c.Resources
 	}
 	resp.Repos = c.Repos
+	resp.P4Depots = c.P4Depots
 }
 
 // resolveClaimProjectContext loads the project context for one daemon claim.
@@ -935,7 +952,7 @@ func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, wor
 			if resErr != nil {
 				return claimProjectContext{}, fmt.Errorf("list project resources: %w", resErr)
 			}
-			out.Resources, out.Repos = projectResourcesForClaim(rows)
+			out.Resources, out.Repos, out.P4Depots = projectResourcesForClaim(rows)
 		case errors.Is(err, pgx.ErrNoRows):
 			// Stale/deleted/foreign reference: degrade to workspace context.
 		default:
@@ -943,7 +960,9 @@ func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, wor
 		}
 	}
 
-	if len(out.Repos) > 0 {
+	needGitFallback := len(out.Repos) == 0
+	needP4Fallback := len(out.P4Depots) == 0
+	if !needGitFallback && !needP4Fallback {
 		return out, nil
 	}
 
@@ -951,7 +970,7 @@ func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, wor
 	if err != nil {
 		return claimProjectContext{}, fmt.Errorf("get workspace: %w", err)
 	}
-	if ws.Repos != nil {
+	if needGitFallback && ws.Repos != nil {
 		var repos []RepoData
 		if jsonErr := json.Unmarshal(ws.Repos, &repos); jsonErr != nil {
 			// Corrupt stored JSON is not transient: failing the claim would
@@ -963,18 +982,31 @@ func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, wor
 			out.Repos = repos
 		}
 	}
+	if needP4Fallback && len(ws.P4Depots) > 0 {
+		var depots []P4DepotData
+		if jsonErr := json.Unmarshal(ws.P4Depots, &depots); jsonErr != nil {
+			slog.Error("claim project context: workspace p4_depots are not valid JSON; claiming without Perforce depots",
+				"workspace_id", uuidToString(workspaceID), "error", jsonErr)
+		} else if len(depots) > 0 {
+			out.P4Depots = depots
+		}
+	}
 	return out, nil
 }
 
 // projectResourcesForClaim maps resource rows onto the claim wire shape and
-// lifts github_repo resources into the repo list so `multica repo checkout` and
-// the meta-skill render them as the task's repos.
-func projectResourcesForClaim(rows []db.ProjectResource) ([]ProjectResourceData, []RepoData) {
+// lifts github_repo / perforce_depot resources into the checkout lists so
+// `multica repo checkout`, `multica p4 sync`, and the meta-skill render them
+// as the task's code sources. Git and Perforce are independent axes: a
+// project that only attaches one does not hide the workspace fallback for
+// the other.
+func projectResourcesForClaim(rows []db.ProjectResource) ([]ProjectResourceData, []RepoData, []P4DepotData) {
 	if len(rows) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	resources := make([]ProjectResourceData, 0, len(rows))
 	var repos []RepoData
+	var depots []P4DepotData
 	for _, row := range rows {
 		label := ""
 		if row.Label.Valid {
@@ -999,6 +1031,11 @@ func projectResourcesForClaim(rows []db.ProjectResource) ([]ProjectResourceData,
 				repos = append(repos, RepoData{URL: payload.URL, Ref: strings.TrimSpace(payload.Ref)})
 			}
 		}
+		if row.ResourceType == "perforce_depot" {
+			if parsed, err := p4depot.ParseJSON(row.ResourceRef); err == nil {
+				depots = append(depots, P4DepotData(parsed))
+			}
+		}
 	}
-	return resources, repos
+	return resources, repos, depots
 }

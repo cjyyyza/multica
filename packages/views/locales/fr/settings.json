@@ -1177,6 +1177,25 @@
     "toast_saved": "Dépôts enregistrés",
     "toast_save_failed": "Échec de l'enregistrement des dépôts"
   },
+  "perforce": {
+    "section_title": "Perforce",
+    "description": "Les agents synchronisent ces depots Helix avec la connexion de l'hôte (P4USER, P4TICKETS, P4CONFIG). Multica ne stocke pas de mot de passe Perforce.",
+    "port_placeholder": "perforce.exemple.com:1666",
+    "depot_placeholder": "//depot/projet",
+    "stream_placeholder": "Stream (facultatif)",
+    "description_placeholder": "Description (facultatif)",
+    "add": "Ajouter un depot",
+    "empty": "Aucun depot Perforce pour l'instant.",
+    "incomplete": "Le port et le depot sont requis.",
+    "delete_aria": "Supprimer le depot Perforce",
+    "delete_confirm_title": "Supprimer le depot Perforce ?",
+    "delete_confirm_description": "Ce depot sera immédiatement retiré de l'espace de travail.",
+    "delete_confirm_cancel": "Annuler",
+    "delete_confirm_action": "Supprimer le depot",
+    "manage_hint": "Seuls les administrateurs et les propriétaires peuvent gérer les depots Perforce.",
+    "toast_saved": "Depots Perforce enregistrés",
+    "toast_save_failed": "Échec de l'enregistrement des depots Perforce"
+  },
   "desktop": {
     "tabs": {
       "updates": "Mises à jour"

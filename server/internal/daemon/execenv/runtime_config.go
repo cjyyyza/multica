@@ -142,6 +142,29 @@ func formatProjectResource(r ProjectResourceForEnv) string {
 			out += " — " + label
 		}
 		return out
+	case "perforce_depot":
+		var payload struct {
+			Port       string `json:"port"`
+			Depot      string `json:"depot"`
+			Stream     string `json:"stream,omitempty"`
+			Changelist string `json:"changelist,omitempty"`
+		}
+		_ = json.Unmarshal(r.ResourceRef, &payload)
+		out := fmt.Sprintf("**Perforce depot**: `%s` `%s`", payload.Port, payload.Depot)
+		details := make([]string, 0, 2)
+		if payload.Stream != "" {
+			details = append(details, fmt.Sprintf("stream: `%s`", payload.Stream))
+		}
+		if payload.Changelist != "" {
+			details = append(details, fmt.Sprintf("changelist: `%s`", payload.Changelist))
+		}
+		if len(details) > 0 {
+			out += " (" + strings.Join(details, ", ") + ")"
+		}
+		if label != "" {
+			out += " — " + label
+		}
+		return out
 	default:
 		ref := string(r.ResourceRef)
 		if ref == "" {

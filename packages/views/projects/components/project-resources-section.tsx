@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Box,
   ChevronRight,
   FolderGit,
   FolderOpen,
@@ -25,6 +26,7 @@ import type {
   GithubRepoResourceRef,
   LocalDirectoryExecutionMode,
   LocalDirectoryResourceRef,
+  PerforceDepotResourceRef,
   ProjectResource,
 } from "@multica/core/types";
 import {
@@ -58,6 +60,7 @@ import {
 import { localDirectoryLabel } from "./local-directory-label";
 import { useT } from "../../i18n";
 import { githubShortLabel } from "../../common/github-url";
+import { p4DepotIdentity, p4DepotLabel, p4RefIdentity } from "../../common/p4-depot";
 
 // Project Resources sidebar section.
 //
@@ -75,6 +78,12 @@ function isLocalDirectoryRef(r: ProjectResource): r is ProjectResource & {
   resource_ref: LocalDirectoryResourceRef;
 } {
   return r.resource_type === "local_directory";
+}
+
+function isPerforceRef(r: ProjectResource): r is ProjectResource & {
+  resource_ref: PerforceDepotResourceRef;
+} {
+  return r.resource_type === "perforce_depot";
 }
 
 /**
@@ -110,6 +119,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const [open, setOpen] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
   const [repoSearch, setRepoSearch] = useState("");
+  const [p4Search, setP4Search] = useState("");
   const [picking, setPicking] = useState(false);
   const [modeDialog, setModeDialog] = useState<ModeDialogState | null>(null);
   const [modeSaving, setModeSaving] = useState(false);
@@ -169,9 +179,19 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const hasLocalDirectoryForCurrentDaemon =
     localDaemonId !== null && attachedLocalPaths.size > 0;
 
+  const attachedP4Identities = new Set(
+    resources.filter(isPerforceRef).map((r) => p4RefIdentity(r.resource_ref)),
+  );
+
   const repoQuery = repoSearch.trim().toLowerCase();
   const filteredRepos =
     workspace?.repos?.filter((repo) => repo.url.toLowerCase().includes(repoQuery)) ?? [];
+  const p4Query = p4Search.trim().toLowerCase();
+  const workspaceP4Depots = workspace?.p4_depots ?? [];
+  const filteredP4Depots =
+    workspaceP4Depots.filter((depot) =>
+      p4DepotLabel(depot).toLowerCase().includes(p4Query),
+    );
 
   const handleAttach = async (url: string) => {
     try {
@@ -180,6 +200,26 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
         resource_ref: { url },
       });
       toast.success(t(($) => $.resources.toast_attached));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : t(($) => $.resources.toast_attach_failed);
+      toast.error(msg);
+    }
+  };
+
+  const handleAttachP4 = async (ref: PerforceDepotResourceRef) => {
+    try {
+      await createResource.mutateAsync({
+        resource_type: "perforce_depot",
+        resource_ref: {
+          port: ref.port,
+          depot: ref.depot,
+          ...(ref.stream ? { stream: ref.stream } : {}),
+          ...(ref.user ? { user: ref.user } : {}),
+          ...(ref.charset ? { charset: ref.charset } : {}),
+          ...(ref.changelist ? { changelist: ref.changelist } : {}),
+        },
+      });
+      toast.success(t(($) => $.resources.toast_p4_attached));
     } catch (err) {
       const msg = err instanceof Error ? err.message : t(($) => $.resources.toast_attach_failed);
       toast.error(msg);
@@ -406,7 +446,10 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
             open={addOpen}
             onOpenChange={(v) => {
               setAddOpen(v);
-              if (!v) setRepoSearch("");
+              if (!v) {
+                setRepoSearch("");
+                setP4Search("");
+              }
             }}
           >
             <PopoverTrigger
@@ -485,6 +528,70 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
               <CustomRepoForm
                 onSubmit={async (url) => {
                   await handleAttach(url);
+                  setAddOpen(false);
+                }}
+              />
+              {workspaceP4Depots.length > 0 && (
+                <>
+                  <div className="pt-1 text-caption font-medium text-muted-foreground">
+                    {t(($) => $.resources.p4_popover_title)}
+                  </div>
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                    <input
+                      type="text"
+                      value={p4Search}
+                      onChange={(e) => setP4Search(e.target.value)}
+                      aria-label={t(($) => $.resources.p4_search_placeholder)}
+                      placeholder={t(($) => $.resources.p4_search_placeholder)}
+                      className="h-8 w-full rounded-md border bg-transparent pl-7 pr-2 text-caption outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
+                    />
+                  </div>
+                  <div className="max-h-48 space-y-1 overflow-y-auto">
+                    {filteredP4Depots.length === 0 && p4Query && (
+                      <p className="py-2 text-center text-caption text-muted-foreground">
+                        {t(($) => $.resources.p4_search_empty)}
+                      </p>
+                    )}
+                    {filteredP4Depots.map((depot) => {
+                      const identity = p4DepotIdentity(depot);
+                      const isAttached = attachedP4Identities.has(identity);
+                      const isDisabled = isAttached || createResource.isPending;
+                      return (
+                        <button
+                          key={identity}
+                          type="button"
+                          aria-disabled={isDisabled}
+                          onClick={async () => {
+                            if (isDisabled) return;
+                            await handleAttachP4(depot);
+                            setAddOpen(false);
+                          }}
+                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-caption text-left hover:bg-accent transition-colors aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent"
+                        >
+                          <Box className="size-3.5" />
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <span className="truncate flex-1">{p4DepotLabel(depot)}</span>
+                              }
+                            />
+                            <TooltipContent side="top">{p4DepotLabel(depot)}</TooltipContent>
+                          </Tooltip>
+                          {isAttached && (
+                            <span className="text-micro text-muted-foreground">
+                              {t(($) => $.resources.attached_badge)}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+              <CustomP4Form
+                onSubmit={async (ref) => {
+                  await handleAttachP4(ref);
                   setAddOpen(false);
                 }}
               />
@@ -642,6 +749,40 @@ function ResourceRow({
         onRename={onRenameLocalDirectory}
         onEditMode={onEditLocalDirectoryMode}
       />
+    );
+  }
+
+  if (isPerforceRef(resource)) {
+    const ref = resource.resource_ref;
+    const display = resource.label || p4DepotLabel(ref);
+    const tooltip = [
+      ref.port,
+      ref.depot,
+      ref.stream ? `stream: ${ref.stream}` : null,
+      ref.changelist ? `changelist: ${ref.changelist}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    return (
+      <div className="flex items-center gap-2 text-caption group">
+        <Box className="size-3.5 text-muted-foreground shrink-0" />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span className="truncate flex-1">{display}</span>
+            }
+          />
+          <TooltipContent side="top" className="whitespace-pre-line">{tooltip}</TooltipContent>
+        </Tooltip>
+        <button
+          type="button"
+          onClick={onRemove}
+          className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
+          title={t(($) => $.resources.remove_tooltip)}
+        >
+          <Trash2 className="size-3 text-muted-foreground" />
+        </button>
+      </div>
     );
   }
 
@@ -851,6 +992,79 @@ function CustomRepoForm({
       >
         {t(($) => $.resources.url_submit)}
       </Button>
+    </form>
+  );
+}
+
+function CustomP4Form({
+  onSubmit,
+}: {
+  onSubmit: (ref: PerforceDepotResourceRef) => Promise<void> | void;
+}) {
+  const { t } = useT("projects");
+  const [port, setPort] = useState("");
+  const [depot, setDepot] = useState("");
+  const [stream, setStream] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const handle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const nextPort = port.trim();
+    const nextDepot = depot.trim();
+    if (!nextPort || !nextDepot) return;
+    setSubmitting(true);
+    try {
+      await onSubmit({
+        port: nextPort,
+        depot: nextDepot,
+        ...(stream.trim() ? { stream: stream.trim() } : {}),
+      });
+      setPort("");
+      setDepot("");
+      setStream("");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+  return (
+    <form onSubmit={handle} className="space-y-1.5 pt-1 border-t">
+      <div className="text-caption font-medium text-muted-foreground">
+        {t(($) => $.resources.p4_popover_title)}
+      </div>
+      <input
+        type="text"
+        value={port}
+        onChange={(e) => setPort(e.target.value)}
+        placeholder={t(($) => $.resources.p4_port_placeholder)}
+        aria-label={t(($) => $.resources.p4_port_placeholder)}
+        className="w-full bg-transparent text-caption px-2 py-1 outline-none placeholder:text-muted-foreground"
+      />
+      <input
+        type="text"
+        value={depot}
+        onChange={(e) => setDepot(e.target.value)}
+        placeholder={t(($) => $.resources.p4_depot_placeholder)}
+        aria-label={t(($) => $.resources.p4_depot_placeholder)}
+        className="w-full bg-transparent text-caption px-2 py-1 outline-none placeholder:text-muted-foreground"
+      />
+      <div className="flex items-center gap-1.5">
+        <input
+          type="text"
+          value={stream}
+          onChange={(e) => setStream(e.target.value)}
+          placeholder={t(($) => $.resources.p4_stream_placeholder)}
+          aria-label={t(($) => $.resources.p4_stream_placeholder)}
+          className="flex-1 bg-transparent text-caption px-2 py-1 outline-none placeholder:text-muted-foreground"
+        />
+        <Button
+          type="submit"
+          size="sm"
+          variant="ghost"
+          className="h-6 px-2 text-caption"
+          disabled={!port.trim() || !depot.trim() || submitting}
+        >
+          {t(($) => $.resources.p4_submit)}
+        </Button>
+      </div>
     </form>
   );
 }

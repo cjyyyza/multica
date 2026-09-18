@@ -211,6 +211,7 @@ func daemonCommonCapabilities() []string {
 		protocol.DaemonCapabilityRPCV1,
 		protocol.DaemonCapabilityPlatformSkillV1,
 		protocol.DaemonCapabilityCheckoutKeepsWorkV1,
+		protocol.DaemonCapabilityPerforceSyncV1,
 	}
 }
 
@@ -987,10 +988,12 @@ func (c *Client) Deregister(ctx context.Context, runtimeIDs []string, reasons ma
 
 // RegisterResponse holds the server's response to a daemon registration.
 type RegisterResponse struct {
-	Runtimes     []Runtime       `json:"runtimes"`
-	Repos        []RepoData      `json:"repos"`
-	ReposVersion string          `json:"repos_version"`
-	Settings     json.RawMessage `json:"settings,omitempty"`
+	Runtimes        []Runtime       `json:"runtimes"`
+	Repos           []RepoData      `json:"repos"`
+	ReposVersion    string          `json:"repos_version"`
+	P4Depots        []P4DepotData   `json:"p4_depots,omitempty"`
+	P4DepotsVersion string          `json:"p4_depots_version,omitempty"`
+	Settings        json.RawMessage `json:"settings,omitempty"`
 }
 
 func (c *Client) Register(ctx context.Context, req map[string]any) (*RegisterResponse, error) {
@@ -1002,10 +1005,12 @@ func (c *Client) Register(ctx context.Context, req map[string]any) (*RegisterRes
 }
 
 type WorkspaceReposResponse struct {
-	WorkspaceID  string          `json:"workspace_id"`
-	Repos        []RepoData      `json:"repos"`
-	ReposVersion string          `json:"repos_version"`
-	Settings     json.RawMessage `json:"settings,omitempty"`
+	WorkspaceID     string          `json:"workspace_id"`
+	Repos           []RepoData      `json:"repos"`
+	ReposVersion    string          `json:"repos_version"`
+	P4Depots        []P4DepotData   `json:"p4_depots,omitempty"`
+	P4DepotsVersion string          `json:"p4_depots_version,omitempty"`
+	Settings        json.RawMessage `json:"settings,omitempty"`
 }
 
 func (c *Client) GetWorkspaceRepos(ctx context.Context, workspaceID string) (*WorkspaceReposResponse, error) {

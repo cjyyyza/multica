@@ -1,0 +1,1 @@
+ALTER TABLE workspace ADD COLUMN p4_depots JSONB NOT NULL DEFAULT '[]';

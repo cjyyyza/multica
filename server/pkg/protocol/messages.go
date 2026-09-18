@@ -62,6 +62,10 @@ const (
 	// stays untouched on disk.
 	DaemonCapabilityCheckoutKeepsWorkV1 = "checkout-keeps-work-v1"
 
+	// DaemonCapabilityPerforceSyncV1 advertises that the daemon implements
+	// `multica p4 sync` / POST /p4/sync for perforce_depot resources.
+	DaemonCapabilityPerforceSyncV1 = "perforce-sync-v1"
+
 	// AppCapabilityChatDraftRestoreV1 is advertised (X-Client-Capabilities) by
 	// app clients that understand the durable draft-restore recovery path:
 	// chat:cancel_finalized as an invalidation hint plus the draft-restores

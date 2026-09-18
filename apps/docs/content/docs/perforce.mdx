@@ -1,0 +1,60 @@
+---
+title: Perforce
+description: Sync Helix depots into agent working directories the same way Git checkouts work.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Multica can sync [Perforce](https://www.perforce.com/) Helix depots into a run's working directory. Git remotes stay in `workspace.repos` and `github_repo` resources. Perforce uses a separate `p4_depots` list and `perforce_depot` resources so an older daemon never tries to `git clone` a Helix port.
+
+<Callout type="info">
+Multica does not store a Perforce password. The daemon uses the host Helix login (`P4USER`, `P4TICKETS`, `P4CONFIG`). Sign in with `p4 login` on that machine first.
+</Callout>
+
+## Add a workspace depot
+
+Open **Settings → Repositories**. The Perforce section lists Helix depots the workspace may sync.
+
+Each entry needs:
+
+| Field | Required | Example |
+|---|---|---|
+| Port | Yes | `perforce.example.com:1666` or `ssl:perforce.example.com:1666` |
+| Depot | Yes | `//depot/project` |
+| Stream | No | `//depot/project/main` |
+| Description | No | Game client |
+
+HTTP Git URLs are rejected as a port. You can also manage the list with `multica p4 list`, `multica p4 add`, and `multica p4 remove`.
+
+## Attach a project resource
+
+Open the project **Resources** panel and attach a Perforce depot already listed on the workspace, or paste port + depot. One project can mix Git repositories, a local directory, and Perforce depots.
+
+```bash
+multica project resource add <project-id> --type perforce_depot \
+  --port perforce.example.com:1666 --depot //depot/project --output json
+```
+
+When a run is claimed, project `perforce_depot` resources become the P4 list. If the project has none, the workspace `p4_depots` list is used. Git fallback is independent: a Git-only project still inherits workspace Perforce depots, and a Perforce-only project still inherits workspace Git repos.
+
+## Sync during a run
+
+Agents sync with the task CLI, not by talking to Helix directly:
+
+```bash
+multica p4 sync --port perforce.example.com:1666 --depot //depot/project
+multica p4 sync --port perforce.example.com:1666 --depot //depot/project --stream //depot/project/main
+multica p4 sync --port perforce.example.com:1666 --depot //depot/project --fresh
+```
+
+The daemon creates a short task-scoped client (`mc` + 16 hex characters), runs `p4 sync` into `workdir/p4/<sanitized-depot>`, and returns that path. `--fresh` deletes the previous sync directory first. `p4` must be on the daemon host `PATH`.
+
+Depots are not prefetched. A Helix tree can be huge; sync happens when the agent asks for it.
+
+## Not in this release
+
+- Swarm / Helix review mirroring, webhooks, and CI status
+- Changelist auto-link on issues
+- Create-project dialog P4 attach (attach after create)
+- Mobile Perforce UI
+- Landing-page marketing copy

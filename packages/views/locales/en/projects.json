@@ -136,7 +136,15 @@
     "mode_badge_worktree_tooltip": "Runs execute at the same time in their own git worktree and hand back a branch. Your working copy is untouched.",
     "toast_local_mode_updated": "Execution mode updated",
     "toast_local_mode_update_failed": "Could not update the execution mode",
-    "mode_badge_in_place": "Direct"
+    "mode_badge_in_place": "Direct",
+    "p4_popover_title": "Attach a Perforce depot",
+    "p4_search_placeholder": "Search depots...",
+    "p4_search_empty": "No depots match your search.",
+    "p4_port_placeholder": "perforce.example.com:1666",
+    "p4_depot_placeholder": "//depot/project",
+    "p4_stream_placeholder": "Stream (optional)",
+    "p4_submit": "Add",
+    "toast_p4_attached": "Perforce depot attached"
   },
   "delete_dialog": {
     "title": "Delete project",

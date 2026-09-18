@@ -135,7 +135,15 @@
     "mode_badge_worktree_tooltip": "运行在各自的 git worktree 中并行执行，并以分支形式交付结果。你的工作区不会被改动。",
     "toast_local_mode_updated": "已更新执行方式",
     "toast_local_mode_update_failed": "无法更新执行方式",
-    "mode_badge_in_place": "原地"
+    "mode_badge_in_place": "原地",
+    "p4_popover_title": "关联 Perforce depot",
+    "p4_search_placeholder": "搜索 depot...",
+    "p4_search_empty": "没有匹配的 depot。",
+    "p4_port_placeholder": "perforce.example.com:1666",
+    "p4_depot_placeholder": "//depot/project",
+    "p4_stream_placeholder": "Stream（可选）",
+    "p4_submit": "添加",
+    "toast_p4_attached": "已关联 Perforce depot"
   },
   "delete_dialog": {
     "title": "删除项目",

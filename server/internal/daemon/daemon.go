@@ -27,7 +27,9 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/internal/daemon/p4cache"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
+	"github.com/multica-ai/multica/server/internal/p4depot"
 	"github.com/multica-ai/multica/server/internal/selfexec"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/redact"
@@ -306,9 +308,15 @@ type workspaceState struct {
 	allowedRepoURLs map[string]struct{}
 	taskRepoURLs    map[string]struct{}
 	taskRepoRefs    map[string]map[string]string // taskID -> repo URL -> checkout ref
-	settings        json.RawMessage              // workspace settings (JSONB)
-	lastRepoSyncErr string
-	repoRefreshMu   contextLock
+	// allowedP4Identities is the workspace-level Perforce allowlist
+	// (port+depot+stream). taskP4Identities is the claim-time overlay so a
+	// project-only depot can be synced without also living on the workspace.
+	allowedP4Identities map[string]struct{}
+	taskP4Identities    map[string]struct{}
+	taskP4Refs          map[string]map[string]P4DepotData // taskID -> identity -> depot
+	settings            json.RawMessage                   // workspace settings (JSONB)
+	lastRepoSyncErr     string
+	repoRefreshMu       contextLock
 	// coAuthorPublishMu serializes publication of the Co-authored-by verdict
 	// for this workspace. Unlike the fields above it is NOT guarded by
 	// Daemon.mu: it exists precisely so the verdict can be read and written as
@@ -383,6 +391,7 @@ type Daemon struct {
 	cfg        Config
 	client     *Client
 	repoCache  repoCacheBackend
+	p4Cache    *p4cache.Cache
 	skillCache *SkillBundleCache
 	logger     *slog.Logger
 
@@ -704,6 +713,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		cfg:                       cfg,
 		client:                    client,
 		repoCache:                 repocache.New(cacheRoot, logger),
+		p4Cache:                   &p4cache.Cache{Logger: logger},
 		skillCache:                NewSkillBundleCache(skillCacheRoot),
 		logger:                    logger,
 		terminalReports:           newTerminalReportStore(cfg),
@@ -1559,6 +1569,9 @@ func (d *Daemon) applyRegisterResponseInPlace(workspaceID string, resp *Register
 		ws.reposVersion = resp.ReposVersion
 		ws.allowedRepoURLs = repoAllowlist(resp.Repos)
 	}
+	if resp.P4DepotsVersion != "" || len(resp.P4Depots) > 0 {
+		ws.setP4Depots(resp.P4Depots)
+	}
 	if len(resp.Settings) > 0 {
 		ws.settings = resp.Settings
 	}
@@ -1659,6 +1672,9 @@ func (d *Daemon) mergeBuiltinRegisterResponse(workspaceID string, resp *Register
 	if resp.ReposVersion != "" {
 		ws.reposVersion = resp.ReposVersion
 		ws.allowedRepoURLs = repoAllowlist(resp.Repos)
+	}
+	if resp.P4DepotsVersion != "" || len(resp.P4Depots) > 0 {
+		ws.setP4Depots(resp.P4Depots)
 	}
 	if len(resp.Settings) > 0 {
 		ws.settings = resp.Settings
@@ -3212,12 +3228,32 @@ func profileSetSignature(profiles []RuntimeProfile) string {
 
 func newWorkspaceState(workspaceID string, runtimeIDs []string, reposVersion string, repos []RepoData, settings json.RawMessage) *workspaceState {
 	return &workspaceState{
-		workspaceID:     workspaceID,
-		runtimeIDs:      runtimeIDs,
-		reposVersion:    reposVersion,
-		allowedRepoURLs: repoAllowlist(repos),
-		settings:        settings,
+		workspaceID:         workspaceID,
+		runtimeIDs:          runtimeIDs,
+		reposVersion:        reposVersion,
+		allowedRepoURLs:     repoAllowlist(repos),
+		allowedP4Identities: map[string]struct{}{},
+		settings:            settings,
 	}
+}
+
+func p4Allowlist(depots []P4DepotData) map[string]struct{} {
+	allowed := make(map[string]struct{}, len(depots))
+	for _, depot := range depots {
+		parsed, err := p4depot.Normalize(p4depot.Ref(depot))
+		if err != nil {
+			continue
+		}
+		allowed[p4depot.Identity(parsed)] = struct{}{}
+	}
+	return allowed
+}
+
+func (ws *workspaceState) setP4Depots(depots []P4DepotData) {
+	if ws == nil {
+		return
+	}
+	ws.allowedP4Identities = p4Allowlist(depots)
 }
 
 func repoAllowlist(repos []RepoData) map[string]struct{} {
@@ -3439,6 +3475,92 @@ func (d *Daemon) clearTaskRepoRefs(workspaceID, taskID string) {
 	}
 }
 
+func (d *Daemon) registerTaskP4Depots(workspaceID, taskID string, depots []P4DepotData) {
+	if len(depots) == 0 {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	ws, ok := d.workspaces[workspaceID]
+	if !ok {
+		return
+	}
+	if ws.taskP4Identities == nil {
+		ws.taskP4Identities = make(map[string]struct{}, len(depots))
+	}
+	if taskID != "" && ws.taskP4Refs == nil {
+		ws.taskP4Refs = make(map[string]map[string]P4DepotData)
+	}
+	for _, depot := range depots {
+		parsed, err := p4depot.Normalize(p4depot.Ref(depot))
+		if err != nil {
+			continue
+		}
+		id := p4depot.Identity(parsed)
+		ws.taskP4Identities[id] = struct{}{}
+		if taskID == "" {
+			continue
+		}
+		if ws.taskP4Refs[taskID] == nil {
+			ws.taskP4Refs[taskID] = make(map[string]P4DepotData, len(depots))
+		}
+		if _, exists := ws.taskP4Refs[taskID][id]; !exists {
+			ws.taskP4Refs[taskID][id] = P4DepotData(parsed)
+		}
+	}
+}
+
+func (d *Daemon) clearTaskP4Refs(workspaceID, taskID string) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if ws, ok := d.workspaces[workspaceID]; ok && ws.taskP4Refs != nil {
+		delete(ws.taskP4Refs, taskID)
+	}
+}
+
+func (d *Daemon) workspaceP4Allowed(workspaceID string, ref p4depot.Ref) bool {
+	parsed, err := p4depot.Normalize(ref)
+	if err != nil {
+		return false
+	}
+	id := p4depot.Identity(parsed)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	ws, ok := d.workspaces[workspaceID]
+	if !ok {
+		return false
+	}
+	if _, allowed := ws.allowedP4Identities[id]; allowed {
+		return true
+	}
+	if _, allowed := ws.taskP4Identities[id]; allowed {
+		return true
+	}
+	return false
+}
+
+func (d *Daemon) taskP4Default(workspaceID, taskID string, ref p4depot.Ref) P4DepotData {
+	parsed, err := p4depot.Normalize(ref)
+	if err != nil {
+		return P4DepotData{}
+	}
+	id := p4depot.Identity(parsed)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	ws, ok := d.workspaces[workspaceID]
+	if !ok || ws.taskP4Refs == nil {
+		return P4DepotData(parsed)
+	}
+	if stored, exists := ws.taskP4Refs[taskID][id]; exists {
+		return stored
+	}
+	return P4DepotData(parsed)
+}
+
 // waitBackgroundSyncs blocks until every background sync started by
 // registerTaskRepos has finished. Intended for test teardown: tests that
 // hand the daemon a t.TempDir-backed repo cache must call this before
@@ -3485,6 +3607,7 @@ func (d *Daemon) refreshWorkspaceRepos(ctx context.Context, workspaceID string) 
 	if ws, ok := d.workspaces[workspaceID]; ok {
 		ws.reposVersion = resp.ReposVersion
 		ws.allowedRepoURLs = repoAllowlist(resp.Repos)
+		ws.setP4Depots(resp.P4Depots)
 		// Keep the cached settings in sync with the server. The daemon's
 		// feature gates (e.g. workspaceCoAuthoredByEnabled) read directly from
 		// this field, so toggling a Setting in the web UI must update it here
@@ -4320,6 +4443,7 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context, reconcileProfiles bo
 				d.logger.Info("registered runtime", "workspace_id", id, "runtime_id", rt.ID, "provider", rt.Provider)
 			}
 			ws := newWorkspaceState(id, runtimeIDs, resp.ReposVersion, resp.Repos, resp.Settings)
+			ws.setP4Depots(resp.P4Depots)
 			// Seed the profile signature so later on-demand change notifications can
 			// detect drift without re-registering on duplicates (empty sig is the
 			// explicit "unknown — keep the previous value" sentinel from
@@ -7677,6 +7801,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// bound at the workspace level.
 	d.registerTaskRepos(task.WorkspaceID, task.ID, task.Repos)
 	defer d.clearTaskRepoRefs(task.WorkspaceID, task.ID)
+	d.registerTaskP4Depots(task.WorkspaceID, task.ID, task.P4Depots)
+	defer d.clearTaskP4Refs(task.WorkspaceID, task.ID)
 
 	entry, ok := d.agents()[provider]
 	// A custom runtime profile (MUL-3284) overrides the executable path: the
@@ -7762,6 +7888,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AgentSkills:                      convertSkillsForEnv(skills),
 		DisabledRuntimeSkills:            convertDisabledRuntimeSkillsForEnv(task.Agent, task.RuntimeID, provider),
 		Repos:                            convertReposForEnv(task.Repos),
+		P4Depots:                         convertP4DepotsForEnv(task.P4Depots),
 		ProjectID:                        task.ProjectID,
 		ProjectTitle:                     task.ProjectTitle,
 		ProjectDescription:               task.ProjectDescription,
@@ -9957,6 +10084,24 @@ func convertReposForEnv(repos []RepoData) []execenv.RepoContextForEnv {
 	result := make([]execenv.RepoContextForEnv, len(repos))
 	for i, r := range repos {
 		result[i] = execenv.RepoContextForEnv{URL: r.URL, Description: r.Description, Ref: r.Ref}
+	}
+	return result
+}
+
+func convertP4DepotsForEnv(depots []P4DepotData) []execenv.P4DepotForEnv {
+	if len(depots) == 0 {
+		return nil
+	}
+	result := make([]execenv.P4DepotForEnv, len(depots))
+	for i, d := range depots {
+		result[i] = execenv.P4DepotForEnv{
+			Port:        d.Port,
+			Depot:       d.Depot,
+			Stream:      d.Stream,
+			User:        d.User,
+			Changelist:  d.Changelist,
+			Description: d.Description,
+		}
 	}
 	return result
 }
