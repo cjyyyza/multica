@@ -99,6 +99,28 @@ func TestPopoMutationHandlersRejectUnconfiguredDeployment(t *testing.T) {
 			status: http.StatusServiceUnavailable,
 			run:    (*Handler).ListPopoBridgeCommands,
 		},
+		{
+			name:   "media session",
+			method: http.MethodPost,
+			path:   "/api/popo/bridge/media/sessions",
+			body:   `{"event_id":"e","index":0,"filename":"a.png","mime_type":"image/png","size_bytes":1,"kind":"image"}`,
+			status: http.StatusServiceUnavailable,
+			run:    (*Handler).CreatePopoBridgeMediaSession,
+		},
+		{
+			name:   "media put",
+			method: http.MethodPut,
+			path:   "/api/popo/bridge/media/sessions/y",
+			status: http.StatusServiceUnavailable,
+			run:    (*Handler).PutPopoBridgeMediaSession,
+		},
+		{
+			name:   "outbound media",
+			method: http.MethodGet,
+			path:   "/api/popo/bridge/media/outbound/y",
+			status: http.StatusServiceUnavailable,
+			run:    (*Handler).GetPopoBridgeOutboundMedia,
+		},
 	}
 
 	for _, tt := range tests {

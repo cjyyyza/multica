@@ -1275,6 +1275,38 @@ type PopoInboundEvent struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
+type PopoMediaStaging struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	BridgeID       pgtype.UUID        `json:"bridge_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	RobotID        string             `json:"robot_id"`
+	EventID        string             `json:"event_id"`
+	MediaIndex     int32              `json:"media_index"`
+	Filename       string             `json:"filename"`
+	MimeType       string             `json:"mime_type"`
+	SizeBytes      int64              `json:"size_bytes"`
+	Kind           string             `json:"kind"`
+	Status         string             `json:"status"`
+	StorageKey     pgtype.Text        `json:"storage_key"`
+	StorageUrl     pgtype.Text        `json:"storage_url"`
+	Error          pgtype.Text        `json:"error"`
+	UploadedAt     pgtype.Timestamptz `json:"uploaded_at"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type PopoOutboundMediaGrant struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	BridgeID       pgtype.UUID        `json:"bridge_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	CommandID      pgtype.UUID        `json:"command_id"`
+	AttachmentID   pgtype.UUID        `json:"attachment_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+}
+
 type PopoOutboundQueue struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

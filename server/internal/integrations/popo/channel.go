@@ -33,7 +33,7 @@ type workspaceLookup interface {
 func (c *popoChannel) Type() channel.Type { return TypePopo }
 
 func (c *popoChannel) Capabilities() channel.Capability {
-	return channel.CapText | channel.CapQuoteReply
+	return channel.CapText | channel.CapQuoteReply | channel.CapAttachment | channel.CapVoice
 }
 
 func (c *popoChannel) Disconnect(ctx context.Context) error { return nil }

@@ -22,8 +22,11 @@ func (s *BridgeService) Enqueue(ctx context.Context, item OutboundItem) error {
 	}
 	content := strings.TrimSpace(item.Content)
 	chatID := strings.TrimSpace(item.ChatID)
-	if content == "" || chatID == "" {
-		return errors.New("popo: outbound chat_id and content are required")
+	if chatID == "" {
+		return errors.New("popo: outbound chat_id is required")
+	}
+	if content == "" && len(item.Attachments) == 0 {
+		return errors.New("popo: outbound content or attachments are required")
 	}
 	wsID := item.WorkspaceID
 	bridgeID := item.BridgeID
@@ -74,11 +77,35 @@ func (s *BridgeService) Enqueue(ctx context.Context, item OutboundItem) error {
 		BindingID:        uuidString(item.BindingID),
 		RouteRevision:    item.RouteRevision,
 		OutboundKind:     strings.TrimSpace(item.OutboundKind),
+		Attachments:      item.Attachments,
 	})
 	if err != nil {
 		return fmt.Errorf("encode send payload: %w", err)
 	}
-	_, err = s.q.EnqueuePopoBridgeCommand(ctx, db.EnqueuePopoBridgeCommandParams{
+	if len(item.Attachments) == 0 {
+		_, err = s.q.EnqueuePopoBridgeCommand(ctx, db.EnqueuePopoBridgeCommandParams{
+			WorkspaceID:    wsID,
+			BridgeID:       bridgeID,
+			InstallationID: item.InstallationID,
+			Type:           CommandTypeSend,
+			DeliveryID:     dbid.NewV7(),
+			Payload:        payload,
+		})
+		if err != nil {
+			return fmt.Errorf("enqueue popo command: %w", err)
+		}
+		return nil
+	}
+	if s.tx == nil {
+		return errors.New("popo: outbound media grants require a transaction")
+	}
+	tx, err := s.tx.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin outbound media tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	qtx := s.q.WithTx(tx)
+	row, err := qtx.EnqueuePopoBridgeCommand(ctx, db.EnqueuePopoBridgeCommandParams{
 		WorkspaceID:    wsID,
 		BridgeID:       bridgeID,
 		InstallationID: item.InstallationID,
@@ -88,6 +115,27 @@ func (s *BridgeService) Enqueue(ctx context.Context, item OutboundItem) error {
 	})
 	if err != nil {
 		return fmt.Errorf("enqueue popo command: %w", err)
+	}
+	expiresAt := pgtype.Timestamptz{Time: s.now().Add(OutboundMediaGrantTTL), Valid: true}
+	for _, att := range item.Attachments {
+		attachmentID, err := util.ParseUUID(att.AttachmentID)
+		if err != nil || !attachmentID.Valid {
+			return fmt.Errorf("popo: invalid outbound attachment_id")
+		}
+		if _, err := qtx.InsertPopoOutboundMediaGrant(ctx, db.InsertPopoOutboundMediaGrantParams{
+			ID:             dbid.NewV7(),
+			WorkspaceID:    wsID,
+			BridgeID:       bridgeID,
+			InstallationID: item.InstallationID,
+			CommandID:      row.ID,
+			AttachmentID:   attachmentID,
+			ExpiresAt:      expiresAt,
+		}); err != nil {
+			return fmt.Errorf("grant outbound media: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit outbound media: %w", err)
 	}
 	return nil
 }

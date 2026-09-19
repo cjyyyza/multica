@@ -83,7 +83,7 @@ func TestNormalizeRobotIDDefaultsEmpty(t *testing.T) {
 }
 
 func TestInboundFromBridgeP2PTextOnly(t *testing.T) {
-	msg, ok := inboundFromBridge("default", BridgeInbound{
+	msg, ok := inboundFromBridge("default", "", BridgeInbound{
 		EventID:        "evt-1",
 		RobotID:        "default",
 		Sender:         BridgeSender{ID: "alice@corp.netease.com", Name: "Alice"},
@@ -96,7 +96,7 @@ func TestInboundFromBridgeP2PTextOnly(t *testing.T) {
 		t.Fatalf("p2p = ok=%v msg=%+v", ok, msg)
 	}
 
-	if _, ok := inboundFromBridge("default", BridgeInbound{
+	if _, ok := inboundFromBridge("default", "", BridgeInbound{
 		EventID:        "evt-3",
 		Sender:         BridgeSender{ID: "alice@corp.netease.com"},
 		Chat:           BridgeChat{ID: "alice@corp.netease.com", Type: "p2p"},
@@ -108,7 +108,7 @@ func TestInboundFromBridgeP2PTextOnly(t *testing.T) {
 }
 
 func TestInboundFromBridgeGroupMentionOnly(t *testing.T) {
-	msg, ok := inboundFromBridge("default", BridgeInbound{
+	msg, ok := inboundFromBridge("default", "", BridgeInbound{
 		EventID:        "evt-group-at",
 		Sender:         BridgeSender{ID: "alice@corp.netease.com"},
 		Chat:           BridgeChat{ID: "group-1", Type: "group"},
@@ -120,7 +120,7 @@ func TestInboundFromBridgeGroupMentionOnly(t *testing.T) {
 		t.Fatalf("addressed group = ok=%v msg=%+v", ok, msg)
 	}
 
-	if _, ok := inboundFromBridge("default", BridgeInbound{
+	if _, ok := inboundFromBridge("default", "", BridgeInbound{
 		EventID:        "evt-group-plain",
 		Sender:         BridgeSender{ID: "alice@corp.netease.com"},
 		Chat:           BridgeChat{ID: "group-1", Type: "group"},
@@ -131,27 +131,49 @@ func TestInboundFromBridgeGroupMentionOnly(t *testing.T) {
 	}
 }
 
-func TestInboundFromBridgeIgnoresMediaWhenTextPresent(t *testing.T) {
-	msg, ok := inboundFromBridge("default", BridgeInbound{
+func TestInboundFromBridgeAcceptsMediaDescriptors(t *testing.T) {
+	msg, ok := inboundFromBridge("default", "bridge-1", BridgeInbound{
 		EventID:        "evt-text-media",
 		Sender:         BridgeSender{ID: "alice@corp.netease.com"},
 		Chat:           BridgeChat{ID: "alice@corp.netease.com", Type: "p2p"},
 		AddressedToBot: true,
 		Text:           "see this",
 		CommandText:    "see this",
-		Media:          []json.RawMessage{json.RawMessage(`{"url":"http://x/y.png"}`)},
+		Media:          []BridgeMedia{{Index: 0, Kind: "image", Filename: "a.png", MimeType: "image/png", SizeBytes: 12}},
 	})
-	if !ok || msg.Text != "see this" || len(msg.MediaRefs) != 0 {
+	if !ok || !strings.Contains(msg.Text, "see this") || !strings.Contains(msg.Text, "[Image]") || len(msg.MediaRefs) != 0 {
 		t.Fatalf("text+media = ok=%v msg=%+v", ok, msg)
 	}
-	if _, ok := inboundFromBridge("default", BridgeInbound{
+	if msg.CommandText != "see this" {
+		t.Fatalf("command text should stay user-only, got %q", msg.CommandText)
+	}
+	raw, err := decodePopoRaw(msg)
+	if err != nil || len(raw.Media) != 1 || raw.BridgeID != "bridge-1" {
+		t.Fatalf("raw media = %+v err=%v", raw, err)
+	}
+
+	only, ok := inboundFromBridge("default", "bridge-1", BridgeInbound{
 		EventID:        "evt-media-only",
 		Sender:         BridgeSender{ID: "alice@corp.netease.com"},
 		Chat:           BridgeChat{ID: "alice@corp.netease.com", Type: "p2p"},
 		AddressedToBot: true,
-		Media:          []json.RawMessage{json.RawMessage(`{"url":"http://x/y.png"}`)},
-	}); ok {
-		t.Fatal("media-only inbound must be dropped")
+		Media:          []BridgeMedia{{Kind: "file", Filename: "notes.pdf", MimeType: "application/pdf"}},
+	})
+	if !ok || only.Text != "[File]" {
+		t.Fatalf("media-only = ok=%v text=%q", ok, only.Text)
+	}
+}
+
+func TestInboundFromBridgeGroupAtWithImage(t *testing.T) {
+	msg, ok := inboundFromBridge("default", "bridge-1", BridgeInbound{
+		EventID:        "evt-group-image",
+		Sender:         BridgeSender{ID: "alice@corp.netease.com"},
+		Chat:           BridgeChat{ID: "group-1", Type: "group"},
+		AddressedToBot: true,
+		Media:          []BridgeMedia{{Kind: "image", Filename: "shot.png", MimeType: "image/png"}},
+	})
+	if !ok || msg.Source.ChatType != channel.ChatTypeGroup || !strings.Contains(msg.Text, "[Image]") {
+		t.Fatalf("group @ image = ok=%v msg=%+v", ok, msg)
 	}
 }
 
@@ -177,7 +199,7 @@ func TestInboundFromBridgeAcceptsPOPOQuoteShapes(t *testing.T) {
 	if named.MessageID != "mid-2" || named.Text != "quoted body" || named.SenderID != "bob" || named.SenderName != "Bob" {
 		t.Fatalf("named quote = %+v", named)
 	}
-	msg, ok := inboundFromBridge("default", BridgeInbound{
+	msg, ok := inboundFromBridge("default", "", BridgeInbound{
 		EventID:        "evt-q",
 		Sender:         BridgeSender{ID: "alice@corp.netease.com"},
 		Chat:           BridgeChat{ID: "alice@corp.netease.com", Type: "p2p"},
@@ -196,7 +218,7 @@ func TestInboundFromBridgeAcceptsPOPOQuoteShapes(t *testing.T) {
 
 func TestInboundFromBridgeQuoteKeepsUserCommandText(t *testing.T) {
 	quotedIssue := "/issue Quoted issue"
-	msg, ok := inboundFromBridge("default", BridgeInbound{
+	msg, ok := inboundFromBridge("default", "", BridgeInbound{
 		EventID:        "evt-quoted-issue",
 		Sender:         BridgeSender{ID: "alice@corp.netease.com"},
 		Chat:           BridgeChat{ID: "alice@corp.netease.com", Type: "p2p"},
@@ -222,7 +244,7 @@ func TestInboundFromBridgeQuoteKeepsUserCommandText(t *testing.T) {
 }
 
 func TestInboundFromBridgeControlCommandsStayOnCommandText(t *testing.T) {
-	newMsg, ok := inboundFromBridge("default", BridgeInbound{
+	newMsg, ok := inboundFromBridge("default", "", BridgeInbound{
 		EventID:        "evt-new",
 		Sender:         BridgeSender{ID: "alice@corp.netease.com"},
 		Chat:           BridgeChat{ID: "alice@corp.netease.com", Type: "p2p"},
@@ -234,7 +256,7 @@ func TestInboundFromBridgeControlCommandsStayOnCommandText(t *testing.T) {
 		t.Fatalf("/new mapping = %+v", newMsg)
 	}
 
-	clearMsg, ok := inboundFromBridge("default", BridgeInbound{
+	clearMsg, ok := inboundFromBridge("default", "", BridgeInbound{
 		EventID:        "evt-clear",
 		Sender:         BridgeSender{ID: "alice@corp.netease.com"},
 		Chat:           BridgeChat{ID: "alice@corp.netease.com", Type: "p2p"},
@@ -246,7 +268,7 @@ func TestInboundFromBridgeControlCommandsStayOnCommandText(t *testing.T) {
 		t.Fatalf("/clear mapping = %+v", clearMsg)
 	}
 
-	quotedClear, ok := inboundFromBridge("default", BridgeInbound{
+	quotedClear, ok := inboundFromBridge("default", "", BridgeInbound{
 		EventID:        "evt-clear-quote",
 		Sender:         BridgeSender{ID: "alice@corp.netease.com"},
 		Chat:           BridgeChat{ID: "alice@corp.netease.com", Type: "p2p"},

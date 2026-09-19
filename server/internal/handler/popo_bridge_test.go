@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	"github.com/multica-ai/multica/server/internal/integrations/popo"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -22,6 +23,9 @@ func wirePopo(t *testing.T) {
 		t.Fatalf("NewInstallService: %v", err)
 	}
 	bridge := popo.NewBridgeService(testHandler.Queries, testPool)
+	if testHandler.Storage != nil {
+		bridge.WithMedia(testHandler.Storage, engine.NewDBMediaIntentLedger(testHandler.Queries))
+	}
 	binding := popo.NewBindingTokenService(testHandler.Queries, testPool)
 	prevInstall, prevBridge, prevBind := testHandler.PopoInstall, testHandler.PopoBridge, testHandler.PopoBindingTokens
 	testHandler.PopoInstall = install
@@ -38,6 +42,8 @@ func popoCleanupBridge(t *testing.T, bridgeID string) {
 	t.Helper()
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM popo_inbound_event WHERE bridge_id = $1`, bridgeID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM popo_media_staging WHERE bridge_id = $1`, bridgeID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM popo_outbound_media_grant WHERE bridge_id = $1`, bridgeID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM popo_bridge_command WHERE bridge_id = $1`, bridgeID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM popo_bridge_pairing WHERE bridge_id = $1`, bridgeID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM popo_bridge WHERE id = $1`, bridgeID)

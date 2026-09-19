@@ -123,3 +123,100 @@ RETURNING *;
 -- name: GetPopoInboundEvent :one
 SELECT * FROM popo_inbound_event
 WHERE installation_id = $1 AND event_id = $2;
+
+-- name: InsertPopoMediaStaging :one
+INSERT INTO popo_media_staging (
+    id, workspace_id, bridge_id, installation_id, robot_id,
+    event_id, media_index, filename, mime_type, size_bytes, kind, status, expires_at
+) VALUES (
+    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()),
+    sqlc.arg('workspace_id'),
+    sqlc.arg('bridge_id'),
+    sqlc.narg('installation_id'),
+    sqlc.arg('robot_id'),
+    sqlc.arg('event_id'),
+    sqlc.arg('media_index'),
+    sqlc.arg('filename'),
+    sqlc.arg('mime_type'),
+    sqlc.arg('size_bytes'),
+    sqlc.arg('kind'),
+    'pending',
+    sqlc.arg('expires_at')
+)
+RETURNING *;
+
+-- name: GetPopoMediaStagingForBridge :one
+SELECT * FROM popo_media_staging
+WHERE id = $1 AND bridge_id = $2;
+
+-- name: GetPopoMediaStagingByEventIndex :one
+SELECT * FROM popo_media_staging
+WHERE bridge_id = $1 AND event_id = $2 AND media_index = $3;
+
+-- name: ListPopoMediaStagingByBridgeEvent :many
+SELECT * FROM popo_media_staging
+WHERE bridge_id = $1 AND event_id = $2
+ORDER BY media_index ASC;
+
+-- name: ResetPopoMediaStaging :one
+UPDATE popo_media_staging
+SET installation_id = sqlc.narg('installation_id'),
+    robot_id = sqlc.arg('robot_id'),
+    filename = sqlc.arg('filename'),
+    mime_type = sqlc.arg('mime_type'),
+    size_bytes = sqlc.arg('size_bytes'),
+    kind = sqlc.arg('kind'),
+    status = 'pending',
+    storage_key = NULL,
+    storage_url = NULL,
+    error = NULL,
+    uploaded_at = NULL,
+    expires_at = sqlc.arg('expires_at')
+WHERE id = sqlc.arg('id')
+  AND bridge_id = sqlc.arg('bridge_id')
+RETURNING *;
+
+-- name: MarkPopoMediaStagingUploaded :one
+UPDATE popo_media_staging
+SET status = 'uploaded',
+    storage_key = $3,
+    storage_url = $4,
+    size_bytes = $5,
+    error = NULL,
+    uploaded_at = now()
+WHERE id = $1
+  AND bridge_id = $2
+  AND status = 'pending'
+  AND expires_at > now()
+RETURNING *;
+
+-- name: MarkPopoMediaStagingFailed :one
+UPDATE popo_media_staging
+SET status = 'failed',
+    error = $3
+WHERE id = $1
+  AND bridge_id = $2
+  AND status = 'pending'
+RETURNING *;
+
+-- name: InsertPopoOutboundMediaGrant :one
+INSERT INTO popo_outbound_media_grant (
+    id, workspace_id, bridge_id, installation_id, command_id, attachment_id, expires_at
+) VALUES (
+    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()),
+    sqlc.arg('workspace_id'),
+    sqlc.arg('bridge_id'),
+    sqlc.arg('installation_id'),
+    sqlc.arg('command_id'),
+    sqlc.arg('attachment_id'),
+    sqlc.arg('expires_at')
+)
+RETURNING *;
+
+-- name: GetPopoOutboundMediaGrant :one
+SELECT * FROM popo_outbound_media_grant
+WHERE bridge_id = $1
+  AND attachment_id = $2
+  AND expires_at > now()
+ORDER BY created_at DESC
+LIMIT 1;

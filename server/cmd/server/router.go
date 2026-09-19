@@ -1138,6 +1138,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// MULTICA_POPO_ENABLED=true.
 	if strings.TrimSpace(os.Getenv("MULTICA_POPO_ENABLED")) == "true" {
 		popoBridge := popo.NewBridgeService(queries, pool)
+		var popoMedia engine.MediaResolver
+		if store != nil {
+			ledger := engine.NewDBMediaIntentLedger(queries)
+			popoBridge.WithMedia(store, ledger)
+			popoMedia = popo.NewMediaResolver(queries, ledger, slog.Default())
+			h.DeclareChannelFileDelivery(string(popo.TypePopo))
+		}
 		h.PopoBridge = popoBridge
 		popoBindingSvc := popo.NewBindingTokenService(queries, pool)
 		h.PopoBindingTokens = popoBindingSvc
@@ -1147,8 +1154,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			AppURL:  appURLFromEnv(),
 			Logger:  slog.Default(),
 		})
-		channelRouter.Register(popo.TypePopo, popo.NewPopoResolverSet(queries, pool, popoReplier))
-		popoOutbound := popo.NewOutbound(queries, popoBridge, slog.Default())
+		channelRouter.Register(popo.TypePopo, popo.NewPopoResolverSet(queries, pool, popoReplier, popoMedia))
+		popoOutbound := popo.NewOutbound(queries, popoBridge, slog.Default()).WithDelivery(store, appURLFromEnv())
 		popoOutbound.Register(bus)
 		popo.RegisterPopo(channelRegistry, popo.ChannelDeps{
 			Queue:  popoBridge,
@@ -1456,6 +1463,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/register", h.RegisterPopoBridge)
 		r.Post("/heartbeat", h.PopoBridgeHeartbeat)
 		r.Post("/inbound", h.IngestPopoBridgeInbound)
+		r.Post("/media/sessions", h.CreatePopoBridgeMediaSession)
+		r.Put("/media/sessions/{id}", h.PutPopoBridgeMediaSession)
+		r.Get("/media/outbound/{attachmentId}", h.GetPopoBridgeOutboundMedia)
 		r.Get("/commands", h.ListPopoBridgeCommands)
 		r.Post("/commands/{id}/receipt", h.AckPopoBridgeCommand)
 	})

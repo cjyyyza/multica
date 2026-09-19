@@ -333,6 +333,11 @@ var concurrentIndexCleanups = map[string]string{
 	"524_channel_inbound_write_unique":                          "idx_channel_inbound_write_message",
 	"525_channel_inbound_write_workspace_index":                 "idx_channel_inbound_write_workspace",
 	"526_channel_inbound_write_comment_index":                   "idx_channel_inbound_write_comment",
+	"528_popo_media_staging_unique_index":                       "idx_popo_media_staging_bridge_event_index",
+	"529_popo_media_staging_workspace_index":                    "idx_popo_media_staging_workspace",
+	"531_popo_outbound_media_grant_command_index":               "idx_popo_outbound_media_grant_command_attachment",
+	"532_popo_outbound_media_grant_bridge_index":                "idx_popo_outbound_media_grant_bridge_attachment",
+	"533_popo_outbound_media_grant_workspace_index":             "idx_popo_outbound_media_grant_workspace",
 }
 
 // concurrentDownIndexCleanups covers every migration whose down direction

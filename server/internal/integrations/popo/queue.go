@@ -22,6 +22,7 @@ type OutboundItem struct {
 	BindingID      pgtype.UUID
 	RouteRevision  int64
 	OutboundKind   string
+	Attachments    []SendAttachment
 }
 
 // Enqueuer stores a send command. The API never delivers it to POPO.

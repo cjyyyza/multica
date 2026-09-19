@@ -31,6 +31,22 @@ const (
 	MaxCommandWait           = 30 * time.Second
 	MaxLeaseCommands   int32 = 20
 
+	MediaSessionTTL       = 10 * time.Minute
+	MaxInboundMediaBytes  = 20 << 20
+	MaxInboundMedia       = 10
+	MaxOutboundTextRunes  = 4000
+	OutboundMediaGrantTTL = 24 * time.Hour
+	OutboundMediaPath     = "/api/popo/bridge/media/outbound/"
+
+	MediaStagingPending  = "pending"
+	MediaStagingUploaded = "uploaded"
+	MediaStagingFailed   = "failed"
+
+	MediaKindImage = "image"
+	MediaKindFile  = "file"
+	MediaKindAudio = "audio"
+	MediaKindVideo = "video"
+
 	BridgeStatusActive  = "active"
 	BridgeStatusRevoked = "revoked"
 

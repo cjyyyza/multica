@@ -41,11 +41,17 @@ func wirePopoEngine(t *testing.T) {
 	router := engine.NewRouter(testHandler.IssueService, testHandler.TaskService, testHandler.Queries, engine.RouterConfig{
 		Follow: testHandler, Logger: slog.Default(),
 	})
-	router.Register(popo.TypePopo, popo.NewPopoResolverSet(testHandler.Queries, testPool, replier))
+	var media engine.MediaResolver
+	if testHandler.Storage != nil {
+		media = popo.NewMediaResolver(testHandler.Queries, engine.NewDBMediaIntentLedger(testHandler.Queries), slog.Default())
+	}
+	router.Register(popo.TypePopo, popo.NewPopoResolverSet(testHandler.Queries, testPool, replier, media))
 	prev := testHandler.ChannelRouter
 	testHandler.ChannelRouter = router
 	popoOutboundOnce.Do(func() {
-		popo.NewOutbound(testHandler.Queries, testHandler.PopoBridge, slog.Default()).Register(testHandler.Bus)
+		popo.NewOutbound(testHandler.Queries, testHandler.PopoBridge, slog.Default()).
+			WithDelivery(testHandler.Storage, "http://localhost:3000").
+			Register(testHandler.Bus)
 	})
 	t.Cleanup(func() {
 		testHandler.ChannelRouter = prev

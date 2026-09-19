@@ -430,6 +430,12 @@ deleted_popo_outbound_queue AS (
 deleted_popo_inbound_event AS (
     DELETE FROM popo_inbound_event WHERE workspace_id = $1
 ),
+deleted_popo_media_staging AS (
+    DELETE FROM popo_media_staging WHERE workspace_id = $1
+),
+deleted_popo_outbound_media_grant AS (
+    DELETE FROM popo_outbound_media_grant WHERE workspace_id = $1
+),
 deleted_popo_bridge_command AS (
     DELETE FROM popo_bridge_command WHERE workspace_id = $1
 ),

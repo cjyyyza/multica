@@ -37,9 +37,12 @@ type openEventData struct {
 }
 
 type popoRawEvent struct {
-	RobotID    string `json:"robot_id"`
-	EventType  string `json:"event_type"`
-	SenderName string `json:"sender_name,omitempty"`
+	RobotID    string        `json:"robot_id"`
+	EventType  string        `json:"event_type"`
+	SenderName string        `json:"sender_name,omitempty"`
+	BridgeID   string        `json:"bridge_id,omitempty"`
+	Body       string        `json:"body,omitempty"`
+	Media      []BridgeMedia `json:"media,omitempty"`
 }
 
 // InboundFromOpenEvent normalizes a POPO Open webhook/websocket envelope

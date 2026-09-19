@@ -16,20 +16,27 @@ import (
 )
 
 var (
-	ErrUnknownProtocol   = errors.New("popo: unknown protocol version")
-	ErrPairingInvalid    = errors.New("popo: pairing code invalid, expired, or already used")
-	ErrBridgeNotFound    = errors.New("popo: bridge not found")
-	ErrBridgeRevoked     = errors.New("popo: bridge token revoked")
-	ErrInvalidBridgeID   = errors.New("popo: bridge_id is required")
-	ErrRobotNotIdle      = errors.New("popo: robot is not idle on a recent heartbeat")
-	ErrRobotOccupied     = errors.New("popo: robot is occupied")
-	ErrCommandNotFound   = errors.New("popo: command not found")
-	ErrReceiptConflict   = errors.New("popo: command receipt conflicts with a previous result")
-	ErrInvalidReceipt    = errors.New("popo: invalid command receipt")
-	ErrMissingEventID    = errors.New("popo: event_id is required")
-	ErrMissingSender     = errors.New("popo: sender.id is required")
-	ErrMissingChat       = errors.New("popo: chat.id is required")
-	ErrInstallationWrong = errors.New("popo: robot is not installed in this workspace")
+	ErrUnknownProtocol          = errors.New("popo: unknown protocol version")
+	ErrPairingInvalid           = errors.New("popo: pairing code invalid, expired, or already used")
+	ErrBridgeNotFound           = errors.New("popo: bridge not found")
+	ErrBridgeRevoked            = errors.New("popo: bridge token revoked")
+	ErrInvalidBridgeID          = errors.New("popo: bridge_id is required")
+	ErrRobotNotIdle             = errors.New("popo: robot is not idle on a recent heartbeat")
+	ErrRobotOccupied            = errors.New("popo: robot is occupied")
+	ErrCommandNotFound          = errors.New("popo: command not found")
+	ErrReceiptConflict          = errors.New("popo: command receipt conflicts with a previous result")
+	ErrInvalidReceipt           = errors.New("popo: invalid command receipt")
+	ErrMissingEventID           = errors.New("popo: event_id is required")
+	ErrMissingSender            = errors.New("popo: sender.id is required")
+	ErrMissingChat              = errors.New("popo: chat.id is required")
+	ErrInstallationWrong        = errors.New("popo: robot is not installed in this workspace")
+	ErrMediaSessionNotFound     = errors.New("popo: media session not found")
+	ErrMediaSessionExpired      = errors.New("popo: media session expired")
+	ErrMediaTooLarge            = errors.New("popo: media exceeds 20 MiB")
+	ErrMediaStorageUnavailable  = errors.New("popo: media storage is not configured")
+	ErrMediaInvalid             = errors.New("popo: invalid media session request")
+	ErrOutboundMediaDenied      = errors.New("popo: outbound media is not granted to this bridge")
+	ErrMediaContentTypeMismatch = errors.New("popo: media content type does not match the session")
 )
 
 type RobotReport struct {
@@ -40,27 +47,54 @@ type RobotReport struct {
 }
 
 type SendPayload struct {
-	RobotID          string  `json:"robot_id"`
-	ChatID           string  `json:"chat_id"`
-	ChatType         string  `json:"chat_type"`
-	Text             string  `json:"text"`
-	ReplyToMessageID *string `json:"reply_to_message_id"`
-	IssueID          string  `json:"issue_id,omitempty"`
-	CommentID        string  `json:"comment_id,omitempty"`
-	TaskID           string  `json:"task_id,omitempty"`
-	BindingID        string  `json:"binding_id,omitempty"`
-	RouteRevision    int64   `json:"route_revision,omitempty"`
-	OutboundKind     string  `json:"outbound_kind,omitempty"`
+	RobotID          string           `json:"robot_id"`
+	ChatID           string           `json:"chat_id"`
+	ChatType         string           `json:"chat_type"`
+	Text             string           `json:"text"`
+	ReplyToMessageID *string          `json:"reply_to_message_id"`
+	IssueID          string           `json:"issue_id,omitempty"`
+	CommentID        string           `json:"comment_id,omitempty"`
+	TaskID           string           `json:"task_id,omitempty"`
+	BindingID        string           `json:"binding_id,omitempty"`
+	RouteRevision    int64            `json:"route_revision,omitempty"`
+	OutboundKind     string           `json:"outbound_kind,omitempty"`
+	Attachments      []SendAttachment `json:"attachments,omitempty"`
+}
+
+// SendAttachment is one file the Windows bridge should fetch and deliver.
+// download_path is a bridge-token URL, never a Windows local path.
+type SendAttachment struct {
+	AttachmentID string `json:"attachment_id"`
+	Filename     string `json:"filename"`
+	MimeType     string `json:"mime_type"`
+	DownloadPath string `json:"download_path"`
+}
+
+type mediaStorage interface {
+	Upload(ctx context.Context, key string, data []byte, contentType string, filename string) (string, error)
+	ObjectURL(key string) string
 }
 
 type BridgeService struct {
-	q   *db.Queries
-	tx  engine.TxStarter
-	now func() time.Time
+	q       *db.Queries
+	tx      engine.TxStarter
+	now     func() time.Time
+	storage mediaStorage
+	ledger  engine.MediaIntentLedger
 }
 
 func NewBridgeService(q *db.Queries, tx engine.TxStarter) *BridgeService {
 	return &BridgeService{q: q, tx: tx, now: time.Now}
+}
+
+// WithMedia enables staging PUT (intent ledger then object storage).
+func (s *BridgeService) WithMedia(store mediaStorage, ledger engine.MediaIntentLedger) *BridgeService {
+	if s == nil {
+		return s
+	}
+	s.storage = store
+	s.ledger = ledger
+	return s
 }
 
 type PairingResult struct {

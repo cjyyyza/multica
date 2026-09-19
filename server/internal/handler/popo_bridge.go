@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -371,4 +372,152 @@ func (h *Handler) AckPopoBridgeCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+type createPopoMediaSessionRequest struct {
+	EventID   string `json:"event_id"`
+	Index     int    `json:"index"`
+	Filename  string `json:"filename"`
+	MimeType  string `json:"mime_type"`
+	SizeBytes int64  `json:"size_bytes"`
+	Kind      string `json:"kind"`
+	RobotID   string `json:"robot_id"`
+}
+
+func (h *Handler) CreatePopoBridgeMediaSession(w http.ResponseWriter, r *http.Request) {
+	bridge, ok := h.popoBridgeFromRequest(w, r)
+	if !ok {
+		return
+	}
+	var body createPopoMediaSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	row, err := h.PopoBridge.CreateMediaSession(r.Context(), bridge, popo.CreateMediaSessionParams{
+		EventID:   body.EventID,
+		Index:     body.Index,
+		Filename:  body.Filename,
+		MimeType:  body.MimeType,
+		SizeBytes: body.SizeBytes,
+		Kind:      body.Kind,
+		RobotID:   body.RobotID,
+	})
+	if err != nil {
+		writePopoMediaError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id": uuidToString(row.ID),
+		"max_bytes":  popo.MaxInboundMediaBytes,
+	})
+}
+
+func (h *Handler) PutPopoBridgeMediaSession(w http.ResponseWriter, r *http.Request) {
+	bridge, ok := h.popoBridgeFromRequest(w, r)
+	if !ok {
+		return
+	}
+	sessionUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "session id")
+	if !ok {
+		return
+	}
+	data, contentType, err := readPopoMediaBody(w, r, popo.MaxInboundMediaBytes)
+	if err != nil {
+		if errors.Is(err, errPopoMediaTooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "media exceeds 20 MiB")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "invalid media body")
+		return
+	}
+	if _, err := h.PopoBridge.PutMediaSession(r.Context(), bridge, sessionUUID, data, contentType); err != nil {
+		writePopoMediaError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": popo.MediaStagingUploaded})
+}
+
+func (h *Handler) GetPopoBridgeOutboundMedia(w http.ResponseWriter, r *http.Request) {
+	bridge, ok := h.popoBridgeFromRequest(w, r)
+	if !ok {
+		return
+	}
+	attachmentUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "attachmentId"), "attachment id")
+	if !ok {
+		return
+	}
+	att, err := h.PopoBridge.GetOutboundMedia(r.Context(), bridge, attachmentUUID)
+	if err != nil {
+		writePopoMediaError(w, err)
+		return
+	}
+	if h.Storage == nil {
+		writeFeatureDisabled(w, "storage_not_configured", "storage not configured")
+		return
+	}
+	key := h.Storage.KeyFromURL(att.Url)
+	h.proxyAttachmentDownload(w, r, att, key, true)
+}
+
+var errPopoMediaTooLarge = errors.New("popo media too large")
+
+func readPopoMediaBody(w http.ResponseWriter, r *http.Request, maxBytes int64) ([]byte, string, error) {
+	ct := r.Header.Get("Content-Type")
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(ct)), "multipart/") {
+		if err := r.ParseMultipartForm(maxBytes + 1024); err != nil {
+			return nil, "", err
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			return nil, "", err
+		}
+		defer file.Close()
+		data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+		if err != nil {
+			return nil, "", err
+		}
+		if int64(len(data)) > maxBytes {
+			return nil, "", errPopoMediaTooLarge
+		}
+		fileType := header.Header.Get("Content-Type")
+		if fileType == "" {
+			fileType = ct
+		}
+		return data, fileType, nil
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes+1)
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return nil, "", errPopoMediaTooLarge
+		}
+		return nil, "", err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, "", errPopoMediaTooLarge
+	}
+	return data, ct, nil
+}
+
+func writePopoMediaError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, popo.ErrUnknownProtocol):
+		writeError(w, http.StatusBadRequest, "unknown protocol version")
+	case errors.Is(err, popo.ErrMissingEventID), errors.Is(err, popo.ErrMediaInvalid), errors.Is(err, popo.ErrMediaContentTypeMismatch):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, popo.ErrMediaTooLarge):
+		writeError(w, http.StatusRequestEntityTooLarge, "media exceeds 20 MiB")
+	case errors.Is(err, popo.ErrMediaSessionNotFound), errors.Is(err, popo.ErrOutboundMediaDenied):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, popo.ErrMediaSessionExpired):
+		writeError(w, http.StatusGone, "media session expired")
+	case errors.Is(err, popo.ErrInstallationWrong):
+		writeError(w, http.StatusNotFound, "popo installation not found")
+	case errors.Is(err, popo.ErrMediaStorageUnavailable):
+		writeFeatureDisabled(w, "storage_not_configured", "storage not configured")
+	default:
+		writeError(w, http.StatusInternalServerError, "failed to process popo media")
+	}
 }

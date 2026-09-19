@@ -12,21 +12,32 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 type BridgeInbound struct {
-	ProtocolVersion int               `json:"protocol_version"`
-	EventID         string            `json:"event_id"`
-	RobotID         string            `json:"robot_id"`
-	Sender          BridgeSender      `json:"sender"`
-	Chat            BridgeChat        `json:"chat"`
-	AddressedToBot  bool              `json:"addressed_to_bot"`
-	Text            string            `json:"text"`
-	CommandText     string            `json:"command_text"`
-	Quote           *BridgeQuote      `json:"quote"`
-	Media           []json.RawMessage `json:"media"`
-	Raw             json.RawMessage   `json:"raw"`
+	ProtocolVersion int             `json:"protocol_version"`
+	EventID         string          `json:"event_id"`
+	RobotID         string          `json:"robot_id"`
+	Sender          BridgeSender    `json:"sender"`
+	Chat            BridgeChat      `json:"chat"`
+	AddressedToBot  bool            `json:"addressed_to_bot"`
+	Text            string          `json:"text"`
+	CommandText     string          `json:"command_text"`
+	Quote           *BridgeQuote    `json:"quote"`
+	Media           []BridgeMedia   `json:"media"`
+	Raw             json.RawMessage `json:"raw"`
+}
+
+// BridgeMedia is a descriptor only. Bytes arrive later via staging PUT.
+type BridgeMedia struct {
+	Index      int    `json:"index"`
+	Kind       string `json:"kind"`
+	Filename   string `json:"filename"`
+	MimeType   string `json:"mime_type"`
+	SizeBytes  int64  `json:"size_bytes"`
+	PopoFileID string `json:"popo_file_id,omitempty"`
 }
 
 type BridgeSender struct {
@@ -134,7 +145,7 @@ func (s *BridgeService) AcceptInbound(ctx context.Context, bridge db.PopoBridge,
 		return InboundDecision{}, ErrInstallationWrong
 	}
 
-	msg, p1OK := inboundFromBridge(robotID, req)
+	msg, p1OK := inboundFromBridge(robotID, util.UUIDToString(bridge.ID), req)
 	if !p1OK {
 		return InboundDecision{Accepted: false}, nil
 	}
@@ -159,7 +170,7 @@ func (s *BridgeService) AcceptInbound(ctx context.Context, bridge db.PopoBridge,
 	return InboundDecision{Accepted: true, Message: msg}, nil
 }
 
-func inboundFromBridge(robotID string, req BridgeInbound) (channel.InboundMessage, bool) {
+func inboundFromBridge(robotID, bridgeID string, req BridgeInbound) (channel.InboundMessage, bool) {
 	chatType, ok := popoBridgeChatType(req.Chat.Type)
 	if !ok {
 		return channel.InboundMessage{}, false
@@ -169,14 +180,13 @@ func inboundFromBridge(robotID string, req BridgeInbound) (channel.InboundMessag
 	if !req.AddressedToBot {
 		return channel.InboundMessage{}, false
 	}
+	media := normalizeBridgeMedia(req.Media)
 	text := strings.TrimSpace(req.Text)
 	commandText := strings.TrimSpace(req.CommandText)
 	if commandText == "" {
 		commandText = text
 	}
-	// Media is ignored this PR (no /api/popo/bridge/media). Media-only drops;
-	// text plus unused media still ingests the text.
-	if commandText == "" {
+	if commandText == "" && len(media) == 0 {
 		return channel.InboundMessage{}, false
 	}
 	cleaned := commandText
@@ -192,15 +202,10 @@ func inboundFromBridge(robotID string, req BridgeInbound) (channel.InboundMessag
 	if chatType == channel.ChatTypeGroup {
 		defaultEvent = eventGroupAt
 	}
-	rawMeta, _ := json.Marshal(popoRawEvent{
-		RobotID:    robotID,
-		EventType:  firstNonEmpty(openEventType(req.Raw), defaultEvent),
-		SenderName: firstNonEmpty(req.Sender.Name, sender),
-	})
 	msg := channel.InboundMessage{
 		EventID:        eventID,
 		MessageID:      chatID + ":" + eventID,
-		Type:           channel.MsgTypeText,
+		Type:           inboundMsgType(cleaned, media),
 		Text:           cleaned,
 		CommandText:    commandText,
 		AddressedToBot: true,
@@ -212,10 +217,129 @@ func inboundFromBridge(robotID string, req BridgeInbound) (channel.InboundMessag
 			SenderID:       sender,
 			SenderStableID: sender,
 		},
-		Raw: rawMeta,
 	}
 	applyBridgeQuote(&msg, req.Quote, cleaned)
+	body := msg.Text
+	if len(media) > 0 {
+		placeholders := make([]string, 0, len(media))
+		for _, item := range media {
+			placeholders = append(placeholders, mediaPlaceholder(parseMediaKind(item.Kind)))
+		}
+		joined := strings.Join(placeholders, "\n")
+		if strings.TrimSpace(msg.Text) == "" {
+			msg.Text = joined
+		} else {
+			msg.Text = msg.Text + "\n\n" + joined
+		}
+		if strings.TrimSpace(msg.CommandText) == "" {
+			msg.CommandText = joined
+		}
+	}
+	rawMeta, _ := json.Marshal(popoRawEvent{
+		RobotID:    robotID,
+		EventType:  firstNonEmpty(openEventType(req.Raw), defaultEvent),
+		SenderName: firstNonEmpty(req.Sender.Name, sender),
+		BridgeID:   strings.TrimSpace(bridgeID),
+		Body:       body,
+		Media:      media,
+	})
+	msg.Raw = rawMeta
 	return msg, true
+}
+
+func inboundMsgType(text string, media []BridgeMedia) channel.MsgType {
+	if strings.TrimSpace(text) != "" || len(media) == 0 {
+		return channel.MsgTypeText
+	}
+	return parseMediaKind(media[0].Kind)
+}
+
+func normalizeBridgeMedia(in []BridgeMedia) []BridgeMedia {
+	if len(in) == 0 {
+		return nil
+	}
+	if len(in) > MaxInboundMedia {
+		in = in[:MaxInboundMedia]
+	}
+	allZero := true
+	for _, item := range in {
+		if item.Index != 0 {
+			allZero = false
+			break
+		}
+	}
+	out := make([]BridgeMedia, 0, len(in))
+	for i, item := range in {
+		item.Kind = strings.ToLower(strings.TrimSpace(item.Kind))
+		if item.Kind == "" {
+			item.Kind = MediaKindFile
+		}
+		item.Filename = cleanMediaFilename(item.Filename)
+		item.MimeType = strings.TrimSpace(item.MimeType)
+		item.PopoFileID = strings.TrimSpace(item.PopoFileID)
+		if allZero {
+			item.Index = i
+		}
+		if item.Index < 0 {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func parseMediaKind(kind string) channel.MsgType {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case MediaKindImage:
+		return channel.MsgTypeImage
+	case MediaKindAudio:
+		return channel.MsgTypeAudio
+	case MediaKindVideo:
+		return channel.MsgTypeVideo
+	default:
+		return channel.MsgTypeFile
+	}
+}
+
+func mediaPlaceholder(kind channel.MsgType) string {
+	switch kind {
+	case channel.MsgTypeImage:
+		return "[Image]"
+	case channel.MsgTypeAudio:
+		return "[Audio]"
+	case channel.MsgTypeVideo:
+		return "[Video]"
+	default:
+		return "[File]"
+	}
+}
+
+func mediaFailurePlaceholder(item BridgeMedia) string {
+	kind := parseMediaKind(item.Kind)
+	name := strings.TrimSpace(item.Filename)
+	label := "file"
+	if kind == channel.MsgTypeImage {
+		label = "image"
+	}
+	if name == "" {
+		return "[" + label + " — failed]"
+	}
+	return "[" + label + ": " + name + " — failed]"
+}
+
+func cleanMediaFilename(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	name = strings.ReplaceAll(name, "\\", "/")
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	if strings.Trim(name, ".") == "" {
+		return ""
+	}
+	return name
 }
 
 func popoBridgeChatType(raw string) (channel.ChatType, bool) {

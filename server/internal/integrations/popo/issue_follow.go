@@ -145,6 +145,15 @@ func (o *Outbound) enqueueSource(ctx context.Context, source db.ChannelIssueSour
 	if chatType == "" {
 		chatType = string(channel.ChatTypeP2P)
 	}
+	var existing []db.Attachment
+	if commentID.Valid {
+		existing, _ = o.q.ListAttachmentsByComment(ctx, db.ListAttachmentsByCommentParams{
+			CommentID:   commentID,
+			WorkspaceID: inst.WorkspaceID,
+		})
+	}
+	link := o.issueWebLink(ctx, issueID)
+	text, atts := o.prepareOutbound(ctx, inst, text, link, existing, pgtype.UUID{}, pgtype.UUID{}, taskID, inst.AgentID, "agent")
 	if err := o.queue.Enqueue(ctx, OutboundItem{
 		WorkspaceID:    inst.WorkspaceID,
 		InstallationID: inst.ID,
@@ -159,6 +168,7 @@ func (o *Outbound) enqueueSource(ctx context.Context, source db.ChannelIssueSour
 		BindingID:      source.BindingID,
 		RouteRevision:  source.RouteRevision,
 		OutboundKind:   kind,
+		Attachments:    atts,
 	}); err != nil {
 		o.logger.WarnContext(ctx, "popo issue follow: enqueue failed",
 			"installation_id", util.UUIDToString(inst.ID), "error", err)

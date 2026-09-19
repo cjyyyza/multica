@@ -264,6 +264,109 @@ func (q *Queries) GetPopoInboundEvent(ctx context.Context, arg GetPopoInboundEve
 	return i, err
 }
 
+const getPopoMediaStagingByEventIndex = `-- name: GetPopoMediaStagingByEventIndex :one
+SELECT id, workspace_id, bridge_id, installation_id, robot_id, event_id, media_index, filename, mime_type, size_bytes, kind, status, storage_key, storage_url, error, uploaded_at, expires_at, created_at FROM popo_media_staging
+WHERE bridge_id = $1 AND event_id = $2 AND media_index = $3
+`
+
+type GetPopoMediaStagingByEventIndexParams struct {
+	BridgeID   pgtype.UUID `json:"bridge_id"`
+	EventID    string      `json:"event_id"`
+	MediaIndex int32       `json:"media_index"`
+}
+
+func (q *Queries) GetPopoMediaStagingByEventIndex(ctx context.Context, arg GetPopoMediaStagingByEventIndexParams) (PopoMediaStaging, error) {
+	row := q.db.QueryRow(ctx, getPopoMediaStagingByEventIndex, arg.BridgeID, arg.EventID, arg.MediaIndex)
+	var i PopoMediaStaging
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BridgeID,
+		&i.InstallationID,
+		&i.RobotID,
+		&i.EventID,
+		&i.MediaIndex,
+		&i.Filename,
+		&i.MimeType,
+		&i.SizeBytes,
+		&i.Kind,
+		&i.Status,
+		&i.StorageKey,
+		&i.StorageUrl,
+		&i.Error,
+		&i.UploadedAt,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getPopoMediaStagingForBridge = `-- name: GetPopoMediaStagingForBridge :one
+SELECT id, workspace_id, bridge_id, installation_id, robot_id, event_id, media_index, filename, mime_type, size_bytes, kind, status, storage_key, storage_url, error, uploaded_at, expires_at, created_at FROM popo_media_staging
+WHERE id = $1 AND bridge_id = $2
+`
+
+type GetPopoMediaStagingForBridgeParams struct {
+	ID       pgtype.UUID `json:"id"`
+	BridgeID pgtype.UUID `json:"bridge_id"`
+}
+
+func (q *Queries) GetPopoMediaStagingForBridge(ctx context.Context, arg GetPopoMediaStagingForBridgeParams) (PopoMediaStaging, error) {
+	row := q.db.QueryRow(ctx, getPopoMediaStagingForBridge, arg.ID, arg.BridgeID)
+	var i PopoMediaStaging
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BridgeID,
+		&i.InstallationID,
+		&i.RobotID,
+		&i.EventID,
+		&i.MediaIndex,
+		&i.Filename,
+		&i.MimeType,
+		&i.SizeBytes,
+		&i.Kind,
+		&i.Status,
+		&i.StorageKey,
+		&i.StorageUrl,
+		&i.Error,
+		&i.UploadedAt,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getPopoOutboundMediaGrant = `-- name: GetPopoOutboundMediaGrant :one
+SELECT id, workspace_id, bridge_id, installation_id, command_id, attachment_id, created_at, expires_at FROM popo_outbound_media_grant
+WHERE bridge_id = $1
+  AND attachment_id = $2
+  AND expires_at > now()
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+type GetPopoOutboundMediaGrantParams struct {
+	BridgeID     pgtype.UUID `json:"bridge_id"`
+	AttachmentID pgtype.UUID `json:"attachment_id"`
+}
+
+func (q *Queries) GetPopoOutboundMediaGrant(ctx context.Context, arg GetPopoOutboundMediaGrantParams) (PopoOutboundMediaGrant, error) {
+	row := q.db.QueryRow(ctx, getPopoOutboundMediaGrant, arg.BridgeID, arg.AttachmentID)
+	var i PopoOutboundMediaGrant
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BridgeID,
+		&i.InstallationID,
+		&i.CommandID,
+		&i.AttachmentID,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+	)
+	return i, err
+}
+
 const heartbeatPopoBridge = `-- name: HeartbeatPopoBridge :one
 UPDATE popo_bridge
 SET last_heartbeat_at = now(),
@@ -373,6 +476,131 @@ func (q *Queries) InsertPopoInboundEvent(ctx context.Context, arg InsertPopoInbo
 	return i, err
 }
 
+const insertPopoMediaStaging = `-- name: InsertPopoMediaStaging :one
+INSERT INTO popo_media_staging (
+    id, workspace_id, bridge_id, installation_id, robot_id,
+    event_id, media_index, filename, mime_type, size_bytes, kind, status, expires_at
+) VALUES (
+    COALESCE($1::uuid, gen_random_uuid()),
+    $2,
+    $3,
+    $4,
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    $10,
+    $11,
+    'pending',
+    $12
+)
+RETURNING id, workspace_id, bridge_id, installation_id, robot_id, event_id, media_index, filename, mime_type, size_bytes, kind, status, storage_key, storage_url, error, uploaded_at, expires_at, created_at
+`
+
+type InsertPopoMediaStagingParams struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	BridgeID       pgtype.UUID        `json:"bridge_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	RobotID        string             `json:"robot_id"`
+	EventID        string             `json:"event_id"`
+	MediaIndex     int32              `json:"media_index"`
+	Filename       string             `json:"filename"`
+	MimeType       string             `json:"mime_type"`
+	SizeBytes      int64              `json:"size_bytes"`
+	Kind           string             `json:"kind"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) InsertPopoMediaStaging(ctx context.Context, arg InsertPopoMediaStagingParams) (PopoMediaStaging, error) {
+	row := q.db.QueryRow(ctx, insertPopoMediaStaging,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.BridgeID,
+		arg.InstallationID,
+		arg.RobotID,
+		arg.EventID,
+		arg.MediaIndex,
+		arg.Filename,
+		arg.MimeType,
+		arg.SizeBytes,
+		arg.Kind,
+		arg.ExpiresAt,
+	)
+	var i PopoMediaStaging
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BridgeID,
+		&i.InstallationID,
+		&i.RobotID,
+		&i.EventID,
+		&i.MediaIndex,
+		&i.Filename,
+		&i.MimeType,
+		&i.SizeBytes,
+		&i.Kind,
+		&i.Status,
+		&i.StorageKey,
+		&i.StorageUrl,
+		&i.Error,
+		&i.UploadedAt,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertPopoOutboundMediaGrant = `-- name: InsertPopoOutboundMediaGrant :one
+INSERT INTO popo_outbound_media_grant (
+    id, workspace_id, bridge_id, installation_id, command_id, attachment_id, expires_at
+) VALUES (
+    COALESCE($1::uuid, gen_random_uuid()),
+    $2,
+    $3,
+    $4,
+    $5,
+    $6,
+    $7
+)
+RETURNING id, workspace_id, bridge_id, installation_id, command_id, attachment_id, created_at, expires_at
+`
+
+type InsertPopoOutboundMediaGrantParams struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	BridgeID       pgtype.UUID        `json:"bridge_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	CommandID      pgtype.UUID        `json:"command_id"`
+	AttachmentID   pgtype.UUID        `json:"attachment_id"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) InsertPopoOutboundMediaGrant(ctx context.Context, arg InsertPopoOutboundMediaGrantParams) (PopoOutboundMediaGrant, error) {
+	row := q.db.QueryRow(ctx, insertPopoOutboundMediaGrant,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.BridgeID,
+		arg.InstallationID,
+		arg.CommandID,
+		arg.AttachmentID,
+		arg.ExpiresAt,
+	)
+	var i PopoOutboundMediaGrant
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BridgeID,
+		&i.InstallationID,
+		&i.CommandID,
+		&i.AttachmentID,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+	)
+	return i, err
+}
+
 const leasePopoBridgeCommands = `-- name: LeasePopoBridgeCommands :many
 WITH picked AS (
     SELECT cmd.id
@@ -469,6 +697,153 @@ func (q *Queries) ListPopoBridgesByWorkspace(ctx context.Context, workspaceID pg
 	return items, nil
 }
 
+const listPopoMediaStagingByBridgeEvent = `-- name: ListPopoMediaStagingByBridgeEvent :many
+SELECT id, workspace_id, bridge_id, installation_id, robot_id, event_id, media_index, filename, mime_type, size_bytes, kind, status, storage_key, storage_url, error, uploaded_at, expires_at, created_at FROM popo_media_staging
+WHERE bridge_id = $1 AND event_id = $2
+ORDER BY media_index ASC
+`
+
+type ListPopoMediaStagingByBridgeEventParams struct {
+	BridgeID pgtype.UUID `json:"bridge_id"`
+	EventID  string      `json:"event_id"`
+}
+
+func (q *Queries) ListPopoMediaStagingByBridgeEvent(ctx context.Context, arg ListPopoMediaStagingByBridgeEventParams) ([]PopoMediaStaging, error) {
+	rows, err := q.db.Query(ctx, listPopoMediaStagingByBridgeEvent, arg.BridgeID, arg.EventID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PopoMediaStaging{}
+	for rows.Next() {
+		var i PopoMediaStaging
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.BridgeID,
+			&i.InstallationID,
+			&i.RobotID,
+			&i.EventID,
+			&i.MediaIndex,
+			&i.Filename,
+			&i.MimeType,
+			&i.SizeBytes,
+			&i.Kind,
+			&i.Status,
+			&i.StorageKey,
+			&i.StorageUrl,
+			&i.Error,
+			&i.UploadedAt,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markPopoMediaStagingFailed = `-- name: MarkPopoMediaStagingFailed :one
+UPDATE popo_media_staging
+SET status = 'failed',
+    error = $3
+WHERE id = $1
+  AND bridge_id = $2
+  AND status = 'pending'
+RETURNING id, workspace_id, bridge_id, installation_id, robot_id, event_id, media_index, filename, mime_type, size_bytes, kind, status, storage_key, storage_url, error, uploaded_at, expires_at, created_at
+`
+
+type MarkPopoMediaStagingFailedParams struct {
+	ID       pgtype.UUID `json:"id"`
+	BridgeID pgtype.UUID `json:"bridge_id"`
+	Error    pgtype.Text `json:"error"`
+}
+
+func (q *Queries) MarkPopoMediaStagingFailed(ctx context.Context, arg MarkPopoMediaStagingFailedParams) (PopoMediaStaging, error) {
+	row := q.db.QueryRow(ctx, markPopoMediaStagingFailed, arg.ID, arg.BridgeID, arg.Error)
+	var i PopoMediaStaging
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BridgeID,
+		&i.InstallationID,
+		&i.RobotID,
+		&i.EventID,
+		&i.MediaIndex,
+		&i.Filename,
+		&i.MimeType,
+		&i.SizeBytes,
+		&i.Kind,
+		&i.Status,
+		&i.StorageKey,
+		&i.StorageUrl,
+		&i.Error,
+		&i.UploadedAt,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const markPopoMediaStagingUploaded = `-- name: MarkPopoMediaStagingUploaded :one
+UPDATE popo_media_staging
+SET status = 'uploaded',
+    storage_key = $3,
+    storage_url = $4,
+    size_bytes = $5,
+    error = NULL,
+    uploaded_at = now()
+WHERE id = $1
+  AND bridge_id = $2
+  AND status = 'pending'
+  AND expires_at > now()
+RETURNING id, workspace_id, bridge_id, installation_id, robot_id, event_id, media_index, filename, mime_type, size_bytes, kind, status, storage_key, storage_url, error, uploaded_at, expires_at, created_at
+`
+
+type MarkPopoMediaStagingUploadedParams struct {
+	ID         pgtype.UUID `json:"id"`
+	BridgeID   pgtype.UUID `json:"bridge_id"`
+	StorageKey pgtype.Text `json:"storage_key"`
+	StorageUrl pgtype.Text `json:"storage_url"`
+	SizeBytes  int64       `json:"size_bytes"`
+}
+
+func (q *Queries) MarkPopoMediaStagingUploaded(ctx context.Context, arg MarkPopoMediaStagingUploadedParams) (PopoMediaStaging, error) {
+	row := q.db.QueryRow(ctx, markPopoMediaStagingUploaded,
+		arg.ID,
+		arg.BridgeID,
+		arg.StorageKey,
+		arg.StorageUrl,
+		arg.SizeBytes,
+	)
+	var i PopoMediaStaging
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BridgeID,
+		&i.InstallationID,
+		&i.RobotID,
+		&i.EventID,
+		&i.MediaIndex,
+		&i.Filename,
+		&i.MimeType,
+		&i.SizeBytes,
+		&i.Kind,
+		&i.Status,
+		&i.StorageKey,
+		&i.StorageUrl,
+		&i.Error,
+		&i.UploadedAt,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const reclaimExpiredPopoBridgeCommandLeases = `-- name: ReclaimExpiredPopoBridgeCommandLeases :exec
 UPDATE popo_bridge_command
 SET status = 'pending',
@@ -483,6 +858,73 @@ WHERE bridge_id = $1
 func (q *Queries) ReclaimExpiredPopoBridgeCommandLeases(ctx context.Context, bridgeID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, reclaimExpiredPopoBridgeCommandLeases, bridgeID)
 	return err
+}
+
+const resetPopoMediaStaging = `-- name: ResetPopoMediaStaging :one
+UPDATE popo_media_staging
+SET installation_id = $1,
+    robot_id = $2,
+    filename = $3,
+    mime_type = $4,
+    size_bytes = $5,
+    kind = $6,
+    status = 'pending',
+    storage_key = NULL,
+    storage_url = NULL,
+    error = NULL,
+    uploaded_at = NULL,
+    expires_at = $7
+WHERE id = $8
+  AND bridge_id = $9
+RETURNING id, workspace_id, bridge_id, installation_id, robot_id, event_id, media_index, filename, mime_type, size_bytes, kind, status, storage_key, storage_url, error, uploaded_at, expires_at, created_at
+`
+
+type ResetPopoMediaStagingParams struct {
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	RobotID        string             `json:"robot_id"`
+	Filename       string             `json:"filename"`
+	MimeType       string             `json:"mime_type"`
+	SizeBytes      int64              `json:"size_bytes"`
+	Kind           string             `json:"kind"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	ID             pgtype.UUID        `json:"id"`
+	BridgeID       pgtype.UUID        `json:"bridge_id"`
+}
+
+func (q *Queries) ResetPopoMediaStaging(ctx context.Context, arg ResetPopoMediaStagingParams) (PopoMediaStaging, error) {
+	row := q.db.QueryRow(ctx, resetPopoMediaStaging,
+		arg.InstallationID,
+		arg.RobotID,
+		arg.Filename,
+		arg.MimeType,
+		arg.SizeBytes,
+		arg.Kind,
+		arg.ExpiresAt,
+		arg.ID,
+		arg.BridgeID,
+	)
+	var i PopoMediaStaging
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BridgeID,
+		&i.InstallationID,
+		&i.RobotID,
+		&i.EventID,
+		&i.MediaIndex,
+		&i.Filename,
+		&i.MimeType,
+		&i.SizeBytes,
+		&i.Kind,
+		&i.Status,
+		&i.StorageKey,
+		&i.StorageUrl,
+		&i.Error,
+		&i.UploadedAt,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const revokePopoBridge = `-- name: RevokePopoBridge :one
