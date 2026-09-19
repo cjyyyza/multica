@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -88,12 +89,16 @@ func (o *Outbound) handleChatDone(e events.Event) {
 		bridgeID = parsed
 	}
 	task, _ := o.q.GetAgentTask(ctx, taskID)
+	chatType := strings.TrimSpace(delivery.ChatType)
+	if chatType == "" {
+		chatType = string(channel.ChatTypeP2P)
+	}
 	if err := o.queue.Enqueue(ctx, OutboundItem{
 		WorkspaceID:    inst.WorkspaceID,
 		InstallationID: inst.ID,
 		BridgeID:       bridgeID,
 		ChatID:         chatID,
-		ChatType:       string(channel.ChatTypeP2P),
+		ChatType:       chatType,
 		RobotID:        info.RobotID,
 		Content:        content,
 		IssueID:        task.IssueID,
