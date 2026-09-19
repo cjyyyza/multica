@@ -86,6 +86,23 @@ export interface CreatePopoBridgePairingRequest {
   hostname?: string;
 }
 
+/** Optional body for `POST /popo/registrations`. Empty picks the newest online host. */
+export interface CreatePopoRegistrationRequest {
+  bridge_id?: string;
+}
+
+/** QR registration session. Windows holds secrets; this payload never includes them.
+ * `status` stays a string so a newer backend value still parses on older desktop builds. */
+export interface PopoRegistration {
+  id: string;
+  status: "pending" | "awaiting_scan" | "success" | "error" | "expired" | string;
+  qr_url: string;
+  robot_id: string;
+  installation_id: string;
+  error_reason: string;
+  poll_interval_seconds: number;
+}
+
 /** Bindable = connected and not held by the ordinary gateway or Sparse.
  * `occupied_by=multica` means this Windows bridge holds the websocket, which
  * is the first-bind state — not an agent occupancy. */

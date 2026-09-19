@@ -436,6 +436,9 @@ deleted_popo_media_staging AS (
 deleted_popo_outbound_media_grant AS (
     DELETE FROM popo_outbound_media_grant WHERE workspace_id = $1
 ),
+deleted_popo_registration AS (
+    DELETE FROM popo_registration WHERE workspace_id = $1
+),
 deleted_popo_bridge_command AS (
     DELETE FROM popo_bridge_command WHERE workspace_id = $1
 ),

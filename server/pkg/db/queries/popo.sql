@@ -220,3 +220,46 @@ WHERE bridge_id = $1
   AND expires_at > now()
 ORDER BY created_at DESC
 LIMIT 1;
+
+-- name: InsertPopoRegistration :one
+INSERT INTO popo_registration (
+    workspace_id, agent_id, initiator_id, bridge_id, status, expires_at
+) VALUES (
+    $1, $2, $3, $4, 'pending', $5
+)
+RETURNING *;
+
+-- name: GetPopoRegistration :one
+SELECT * FROM popo_registration
+WHERE id = $1;
+
+-- name: GetPopoRegistrationForUpdate :one
+SELECT * FROM popo_registration
+WHERE id = $1
+FOR UPDATE;
+
+-- name: GetPopoRegistrationInWorkspace :one
+SELECT * FROM popo_registration
+WHERE id = $1 AND workspace_id = $2;
+
+-- name: ExpirePopoRegistrationIfStale :one
+UPDATE popo_registration
+SET status = 'expired',
+    updated_at = now()
+WHERE id = $1
+  AND status IN ('pending', 'awaiting_scan')
+  AND expires_at <= $2
+RETURNING *;
+
+-- name: UpdatePopoRegistration :one
+UPDATE popo_registration
+SET status = sqlc.arg('status'),
+    qr_url = sqlc.arg('qr_url'),
+    robot_id = sqlc.arg('robot_id'),
+    robot_name = sqlc.arg('robot_name'),
+    installation_id = sqlc.narg('installation_id'),
+    error_reason = sqlc.arg('error_reason'),
+    updated_at = now()
+WHERE id = sqlc.arg('id')
+  AND status IN ('pending', 'awaiting_scan')
+RETURNING *;

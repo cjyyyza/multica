@@ -203,6 +203,8 @@ import type {
   ListPopoBridgesResponse,
   PopoBridgePairing,
   CreatePopoBridgePairingRequest,
+  CreatePopoRegistrationRequest,
+  PopoRegistration,
   Squad,
   SquadMember,
   SquadMemberStatusListResponse,
@@ -380,11 +382,13 @@ import {
   RedeemPopoBindingTokenResponseSchema,
   ListPopoBridgesResponseSchema,
   PopoBridgePairingSchema,
+  PopoRegistrationSchema,
   EMPTY_POPO_INSTALLATION,
   EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE,
   EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE,
   EMPTY_LIST_POPO_BRIDGES_RESPONSE,
   EMPTY_POPO_BRIDGE_PAIRING,
+  EMPTY_POPO_REGISTRATION,
   EMPTY_BILLING_BALANCE,
   EMPTY_BILLING_TRANSACTIONS_PAGE,
   EMPTY_BILLING_BATCHES_PAGE,
@@ -5034,6 +5038,42 @@ export class ApiClient {
 
   async deletePopoInstallation(workspaceId: string, installationId: string): Promise<void> {
     await this.fetch(`/api/workspaces/${workspaceId}/popo/installations/${installationId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async createPopoRegistration(
+    workspaceId: string,
+    agentId: string,
+    body?: CreatePopoRegistrationRequest,
+  ): Promise<PopoRegistration> {
+    const search = new URLSearchParams({ agent_id: agentId });
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/popo/registrations?${search.toString()}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ bridge_id: body?.bridge_id ?? "" }),
+      },
+    );
+    return parseWithFallback(raw, PopoRegistrationSchema, EMPTY_POPO_REGISTRATION, {
+      endpoint: "POST /api/workspaces/:id/popo/registrations",
+    });
+  }
+
+  async getPopoRegistration(
+    workspaceId: string,
+    registrationId: string,
+  ): Promise<PopoRegistration> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/popo/registrations/${registrationId}`,
+    );
+    return parseWithFallback(raw, PopoRegistrationSchema, EMPTY_POPO_REGISTRATION, {
+      endpoint: "GET /api/workspaces/:id/popo/registrations/:registrationId",
+    });
+  }
+
+  async cancelPopoRegistration(workspaceId: string, registrationId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/popo/registrations/${registrationId}`, {
       method: "DELETE",
     });
   }

@@ -1197,7 +1197,22 @@
     "revoke_bridge_cancel": "取消",
     "revoking_bridge": "正在撤销…",
     "toast_bridge_revoked": "已撤销 Windows 主机",
-    "toast_bridge_revoke_failed": "撤销失败"
+    "toast_bridge_revoke_failed": "撤销失败",
+    "scan_to_create": "扫码创建",
+    "scan_starting": "正在开始…",
+    "scan_waiting_qr": "正在等待 Windows 主机返回二维码。",
+    "scan_hint": "打开 POPO 扫描此码。机器人密钥只保存在 Windows 主机上。",
+    "scan_expires": "10 分钟后过期。",
+    "scan_open_link": "改为打开链接",
+    "scan_success": "机器人已创建。",
+    "scan_error_expired": "二维码已过期，请重新扫描。",
+    "scan_error_denied": "已在 POPO 中取消或拒绝扫码。",
+    "scan_error_protocol": "Windows 主机未能完成注册。",
+    "scan_error_conflict": "此 POPO 机器人已连接到其他智能体。",
+    "scan_error_session_lost": "注册会话已丢失，请重新扫描。",
+    "scan_error_forbidden": "你已没有权限为此智能体连接 POPO。",
+    "scan_error_generic": "无法创建机器人，请重试。",
+    "scan_retry": "重新扫描"
   },
   "repositories": {
     "section_title": "代码仓库",

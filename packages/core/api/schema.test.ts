@@ -629,6 +629,31 @@ describe("ApiClient schema fallback", () => {
         ttl_seconds: 900,
       });
     });
+
+    it("falls back safely when registration create and poll responses are malformed", async () => {
+      stubFetchJson({ id: 123, status: ["pending"] });
+      const client = new ApiClient("https://api.example.test");
+      await expect(client.createPopoRegistration("ws-1", "agent-1")).resolves.toEqual({
+        id: "",
+        status: "pending",
+        qr_url: "",
+        robot_id: "",
+        installation_id: "",
+        error_reason: "",
+        poll_interval_seconds: 2,
+      });
+
+      stubFetchJson(null);
+      await expect(client.getPopoRegistration("ws-1", "reg-1")).resolves.toEqual({
+        id: "",
+        status: "pending",
+        qr_url: "",
+        robot_id: "",
+        installation_id: "",
+        error_reason: "",
+        poll_interval_seconds: 2,
+      });
+    });
   });
 
   describe("listDingTalkGroups", () => {

@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, ChevronRight, Copy, Trash2 } from "lucide-react";
+import { Check, ChevronRight, Copy, RefreshCw, Trash2 } from "lucide-react";
+// Named import, NOT default: react-qr-code is CJS; electron-vite's default
+// import interop hands back the module namespace (see lark-tab.tsx).
+import { QRCode } from "react-qr-code";
 import { PopoMark } from "./popo-mark";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
@@ -44,6 +47,7 @@ import {
   type PopoBridgePairing,
   type PopoBridgeRobot,
   type PopoInstallation,
+  type PopoRegistration,
 } from "@multica/core/types";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useLocale, useT, useTimeAgo } from "../../i18n";
@@ -601,6 +605,12 @@ export function PopoAgentBindButton({
   const [robotId, setRobotId] = useState("");
   const [robotName, setRobotName] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scan, setScan] = useState<PopoRegistration | null>(null);
+  const [scanStatus, setScanStatus] = useState<PopoRegistration["status"]>("pending");
+  const [scanErrorReason, setScanErrorReason] = useState<string | null>(null);
+  const [scanErrorMessage, setScanErrorMessage] = useState<string | null>(null);
+  const closedRef = useRef(false);
 
   const { data: listing } = useQuery({
     ...popoInstallationsOptions(wsId),
@@ -641,6 +651,80 @@ export function PopoAgentBindButton({
     }
   }, [dialogOpen, idleRobots, robotId]);
 
+  useEffect(() => {
+    if (!dialogOpen) {
+      closedRef.current = true;
+      return;
+    }
+    closedRef.current = false;
+  }, [dialogOpen]);
+
+  useEffect(() => {
+    if (!scan || (scanStatus !== "pending" && scanStatus !== "awaiting_scan")) return;
+    const intervalMs = Math.max(50, (scan.poll_interval_seconds || 2) * 1000);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const res = await api.getPopoRegistration(wsId, scan.id);
+        if (cancelled) return;
+        setScan(res);
+        setScanStatus(res.status);
+        if (res.status === "success") {
+          await qc.invalidateQueries({ queryKey: popoKeys.all(wsId) });
+          toast.success(t(($) => $.popo.connect_success_toast));
+          setTimeout(() => {
+            if (!cancelled) {
+              setDialogOpen(false);
+              setBridgeId("");
+              setRobotId("");
+              setRobotName("");
+              setScanning(false);
+              setScan(null);
+              setScanStatus("pending");
+              setScanErrorReason(null);
+              setScanErrorMessage(null);
+            }
+          }, 800);
+          return;
+        }
+        if (res.status === "error" || res.status === "expired") {
+          setScanErrorReason(res.error_reason || res.status);
+          return;
+        }
+        timer = setTimeout(poll, intervalMs);
+      } catch (e) {
+        if (cancelled) return;
+        if (e instanceof ApiError) {
+          if (e.status === 404) {
+            setScanStatus("error");
+            setScanErrorReason("session_lost");
+            setScanErrorMessage(e.message);
+            return;
+          }
+          if (e.status === 403 || e.status === 401) {
+            setScanStatus("error");
+            setScanErrorReason("forbidden");
+            setScanErrorMessage(e.message);
+            return;
+          }
+        }
+        timer = setTimeout(poll, intervalMs);
+      }
+    };
+
+    timer = setTimeout(poll, intervalMs);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+    // Poll from the registration id only. Including scanStatus would
+    // re-run this effect on success and cancel the close timeout.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scan?.id]);
+
   if (!canManage) return null;
 
   const existing = listing?.installations.find(
@@ -659,16 +743,37 @@ export function PopoAgentBindButton({
 
   if (!installSupported) return null;
 
-  function closeDialog() {
-    if (submitting) return;
-    setDialogOpen(false);
+  const scanInFlight = scanStatus === "pending" || scanStatus === "awaiting_scan";
+
+  function resetBindFields() {
     setBridgeId("");
     setRobotId("");
     setRobotName("");
   }
 
+  function resetScan() {
+    setScanning(false);
+    setScan(null);
+    setScanStatus("pending");
+    setScanErrorReason(null);
+    setScanErrorMessage(null);
+  }
+
+  function closeDialog() {
+    if (submitting) return;
+    const registrationId = scan?.id;
+    const shouldCancel = !!registrationId && scanInFlight;
+    closedRef.current = true;
+    setDialogOpen(false);
+    resetBindFields();
+    resetScan();
+    if (shouldCancel) {
+      void api.cancelPopoRegistration(wsId, registrationId).catch(() => undefined);
+    }
+  }
+
   async function handleSubmit() {
-    if (submitting || !agentId || !bridgeId || !robotId) return;
+    if (submitting || scanning || !agentId || !bridgeId || !robotId) return;
     setSubmitting(true);
     try {
       const installation = await api.registerPopoBot(wsId, agentId, {
@@ -682,9 +787,8 @@ export function PopoAgentBindButton({
       await qc.invalidateQueries({ queryKey: popoKeys.all(wsId) });
       toast.success(t(($) => $.popo.connect_success_toast));
       setDialogOpen(false);
-      setBridgeId("");
-      setRobotId("");
-      setRobotName("");
+      resetBindFields();
+      resetScan();
     } catch (e) {
       toast.error(
         e instanceof Error ? e.message : t(($) => $.popo.connect_failed_toast),
@@ -694,7 +798,50 @@ export function PopoAgentBindButton({
     }
   }
 
-  const canSubmit = !!bridgeId && !!robotId && !submitting;
+  async function beginScan() {
+    if (submitting || !agentId || onlineBridges.length === 0) return;
+    closedRef.current = false;
+    const previousId = scan?.id;
+    if (previousId && (scanStatus === "pending" || scanStatus === "awaiting_scan")) {
+      void api.cancelPopoRegistration(wsId, previousId).catch(() => undefined);
+    }
+    setScanning(true);
+    setScan(null);
+    setScanStatus("pending");
+    setScanErrorReason(null);
+    setScanErrorMessage(null);
+    try {
+      const created = await api.createPopoRegistration(
+        wsId,
+        agentId,
+        bridgeId ? { bridge_id: bridgeId } : undefined,
+      );
+      if (closedRef.current) return;
+      if (!created.id) {
+        throw new Error(t(($) => $.popo.scan_error_generic));
+      }
+      setScan(created);
+      setScanStatus(created.status);
+      if (created.status === "error" || created.status === "expired") {
+        setScanErrorReason(created.error_reason || created.status);
+      }
+    } catch (e) {
+      if (closedRef.current) return;
+      setScanStatus("error");
+      setScanErrorReason(
+        e instanceof ApiError && e.status === 409 ? "no_bridge" : "internal_error",
+      );
+      setScanErrorMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  const canSubmit = !!bridgeId && !!robotId && !submitting && !scanning && !scan;
+  const scanActive = !!scan && (scanStatus === "pending" || scanStatus === "awaiting_scan");
+  const canScan =
+    onlineBridges.length > 0 && !submitting && !scanning && !scanActive && scanStatus !== "success";
+  const showScan = !!scan || scanning || scanStatus === "error" || scanStatus === "expired";
 
   return (
     <div
@@ -726,7 +873,15 @@ export function PopoAgentBindButton({
             <DialogTitle>{t(($) => $.popo.connect_dialog_title)}</DialogTitle>
           </DialogHeader>
 
-          {onlineBridges.length === 0 ? (
+          {showScan ? (
+            <PopoScanPanel
+              scanning={scanning}
+              scan={scan}
+              status={scanStatus}
+              errorReason={scanErrorReason}
+              errorMessage={scanErrorMessage}
+            />
+          ) : onlineBridges.length === 0 ? (
             <p className="text-caption text-muted-foreground">
               {t(($) => $.popo.no_online_bridge)}
             </p>
@@ -803,20 +958,131 @@ export function PopoAgentBindButton({
             >
               {t(($) => $.popo.connect_cancel)}
             </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleSubmit}
-              disabled={!canSubmit}
-              data-testid="popo-connect-submit"
-            >
-              {submitting
-                ? t(($) => $.popo.connect_submitting)
-                : t(($) => $.popo.connect_submit)}
-            </Button>
+            {scanStatus === "error" || scanStatus === "expired" ? (
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void beginScan()}
+                disabled={scanning || onlineBridges.length === 0}
+                data-testid="popo-scan-retry"
+              >
+                <RefreshCw className="h-3 w-3" />
+                {t(($) => $.popo.scan_retry)}
+              </Button>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void beginScan()}
+                  disabled={!canScan}
+                  data-testid="popo-scan-to-create"
+                >
+                  {scanning
+                    ? t(($) => $.popo.scan_starting)
+                    : t(($) => $.popo.scan_to_create)}
+                </Button>
+                {!showScan && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleSubmit}
+                    disabled={!canSubmit}
+                    data-testid="popo-connect-submit"
+                  >
+                    {submitting
+                      ? t(($) => $.popo.connect_submitting)
+                      : t(($) => $.popo.connect_submit)}
+                  </Button>
+                )}
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function PopoScanPanel({
+  scanning,
+  scan,
+  status,
+  errorReason,
+  errorMessage,
+}: {
+  scanning: boolean;
+  scan: PopoRegistration | null;
+  status: PopoRegistration["status"];
+  errorReason: string | null;
+  errorMessage: string | null;
+}) {
+  const { t } = useT("settings");
+  const qrURL = scan?.qr_url ?? "";
+  return (
+    <div className="flex flex-col items-center gap-4 py-2" data-testid="popo-scan-panel">
+      {scanning && !scan && (
+        <p className="text-body text-muted-foreground">{t(($) => $.popo.scan_starting)}</p>
+      )}
+
+      {scan && (status === "pending" || status === "awaiting_scan") && !qrURL && (
+        <p className="text-caption text-muted-foreground">{t(($) => $.popo.scan_waiting_qr)}</p>
+      )}
+
+      {scan && (status === "pending" || status === "awaiting_scan") && qrURL ? (
+        <>
+          <div className="rounded-md border bg-white p-3" data-testid="popo-scan-qr">
+            <QRCode value={qrURL} size={192} />
+          </div>
+          <p className="text-center text-caption text-muted-foreground">
+            {t(($) => $.popo.scan_hint)}
+          </p>
+          <p className="text-caption text-muted-foreground">{t(($) => $.popo.scan_expires)}</p>
+          <a
+            href={qrURL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-caption text-muted-foreground underline"
+          >
+            {t(($) => $.popo.scan_open_link)}
+          </a>
+        </>
+      ) : null}
+
+      {status === "success" && (
+        <p className="text-body font-medium">{t(($) => $.popo.scan_success)}</p>
+      )}
+
+      {(status === "error" || status === "expired") && (
+        <div className="space-y-2 text-center">
+          <p className="text-body font-medium text-destructive">
+            {(() => {
+              switch (errorReason ?? status) {
+                case "expired":
+                  return t(($) => $.popo.scan_error_expired);
+                case "denied":
+                  return t(($) => $.popo.scan_error_denied);
+                case "protocol":
+                  return t(($) => $.popo.scan_error_protocol);
+                case "installation_conflict":
+                  return t(($) => $.popo.scan_error_conflict);
+                case "session_lost":
+                  return t(($) => $.popo.scan_error_session_lost);
+                case "forbidden":
+                  return t(($) => $.popo.scan_error_forbidden);
+                case "no_bridge":
+                  return t(($) => $.popo.no_online_bridge);
+                default:
+                  return t(($) => $.popo.scan_error_generic);
+              }
+            })()}
+          </p>
+          {errorMessage ? (
+            <p className="break-all text-micro text-muted-foreground">{errorMessage}</p>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

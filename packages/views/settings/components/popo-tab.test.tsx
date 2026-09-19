@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
@@ -31,6 +31,9 @@ const membersRef = vi.hoisted(() => ({
   current: [{ user_id: "user-1", role: "admin" as MemberRole }],
 }));
 const registerPopoBot = vi.hoisted(() => vi.fn());
+const createPopoRegistration = vi.hoisted(() => vi.fn());
+const getPopoRegistration = vi.hoisted(() => vi.fn());
+const cancelPopoRegistration = vi.hoisted(() => vi.fn());
 const createPopoBridgePairing = vi.hoisted(() => vi.fn());
 const revokePopoBridge = vi.hoisted(() => vi.fn());
 const ApiError = vi.hoisted(() => {
@@ -113,12 +116,24 @@ vi.mock("@multica/core/api", () => ({
   },
   api: {
     registerPopoBot,
+    createPopoRegistration,
+    getPopoRegistration,
+    cancelPopoRegistration,
     deletePopoInstallation: vi.fn(),
     createPopoBridgePairing,
     revokePopoBridge,
     getBaseUrl: () => "https://multica.example",
   },
 }));
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn(), message: vi.fn() },
+}));
+vi.mock("react-qr-code", () => {
+  const QrStub = ({ value }: { value: string }) => (
+    <span data-testid="qr-code" data-value={value} />
+  );
+  return { QRCode: QrStub, default: QrStub };
+});
 vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: () => <span>avatar</span>,
 }));
@@ -163,6 +178,9 @@ beforeEach(() => {
   };
   membersRef.current = [{ user_id: "user-1", role: "admin" }];
   registerPopoBot.mockReset();
+  createPopoRegistration.mockReset();
+  getPopoRegistration.mockReset();
+  cancelPopoRegistration.mockReset();
   createPopoBridgePairing.mockReset();
   revokePopoBridge.mockReset();
 });
@@ -240,6 +258,10 @@ describe("PopoTab", () => {
 });
 
 describe("PopoAgentBindButton", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("lists idle robots only and binds without a webhook URL", async () => {
     bridgesRef.current.data.bridges = [idleOnlineBridge()];
     registerPopoBot.mockResolvedValue({
@@ -261,6 +283,54 @@ describe("PopoAgentBindButton", () => {
       robot_id: "idle-1",
       robot_name: "",
     });
+  });
+
+  it("shows Scan to create next to idle bind", async () => {
+    bridgesRef.current.data.bridges = [idleOnlineBridge()];
+    renderUI(<PopoAgentBindButton agentId="agent-1" />);
+    await userEvent.click(screen.getByTestId("popo-agent-connect"));
+    expect(screen.getByTestId("popo-scan-to-create")).toBeTruthy();
+    expect(screen.getByTestId("popo-connect-submit")).toBeTruthy();
+  });
+
+  it("polls scan status until success and keeps the bind path available before scanning", async () => {
+    bridgesRef.current.data.bridges = [idleOnlineBridge()];
+    createPopoRegistration.mockResolvedValue({
+      id: "reg-1",
+      status: "awaiting_scan",
+      qr_url: "https://popo.example/qr",
+      robot_id: "",
+      installation_id: "",
+      error_reason: "",
+      poll_interval_seconds: 0.05,
+    });
+    getPopoRegistration.mockResolvedValue({
+      id: "reg-1",
+      status: "success",
+      qr_url: "https://popo.example/qr",
+      robot_id: "new-bot",
+      installation_id: "inst-9",
+      error_reason: "",
+      poll_interval_seconds: 0.05,
+    });
+    renderUI(<PopoAgentBindButton agentId="agent-1" />);
+    await userEvent.click(screen.getByTestId("popo-agent-connect"));
+    expect(screen.getByTestId("popo-connect-submit")).toBeEnabled();
+    await userEvent.click(screen.getByTestId("popo-scan-to-create"));
+    await waitFor(() => expect(createPopoRegistration).toHaveBeenCalledWith("ws-1", "agent-1", {
+      bridge_id: "b1",
+    }));
+    expect(registerPopoBot).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("qr-code")).toBeTruthy();
+    expect(screen.getByTestId("qr-code").getAttribute("data-value")).toBe(
+      "https://popo.example/qr",
+    );
+    await waitFor(() => expect(getPopoRegistration).toHaveBeenCalledWith("ws-1", "reg-1"));
+    await waitFor(() => expect(screen.getByText("Robot created.")).toBeTruthy());
+    await waitFor(
+      () => expect(screen.queryByTestId("popo-connect-dialog")).toBeNull(),
+      { timeout: 3000 },
+    );
   });
 
   it("tells the agent owner to pair a host when none are online", async () => {

@@ -1200,7 +1200,22 @@
     "revoke_bridge_cancel": "Cancel",
     "revoking_bridge": "Revoking…",
     "toast_bridge_revoked": "Windows host revoked",
-    "toast_bridge_revoke_failed": "Could not revoke this host"
+    "toast_bridge_revoke_failed": "Could not revoke this host",
+    "scan_to_create": "Scan to create",
+    "scan_starting": "Starting…",
+    "scan_waiting_qr": "Waiting for a QR code from the Windows host.",
+    "scan_hint": "Open POPO and scan this code. Robot keys stay on the Windows host.",
+    "scan_expires": "Expires in 10 minutes.",
+    "scan_open_link": "Open link instead",
+    "scan_success": "Robot created.",
+    "scan_error_expired": "The QR code expired. Scan again.",
+    "scan_error_denied": "Scan was cancelled or denied in POPO.",
+    "scan_error_protocol": "The Windows host could not complete registration.",
+    "scan_error_conflict": "This POPO robot is already connected to another agent.",
+    "scan_error_session_lost": "Registration was lost. Scan again.",
+    "scan_error_forbidden": "You no longer have permission to connect POPO for this agent.",
+    "scan_error_generic": "Could not create the robot. Try again.",
+    "scan_retry": "Scan again"
   },
   "repositories": {
     "section_title": "Repositories",

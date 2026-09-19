@@ -132,6 +132,43 @@ func (q *Queries) EnqueuePopoBridgeCommand(ctx context.Context, arg EnqueuePopoB
 	return i, err
 }
 
+const expirePopoRegistrationIfStale = `-- name: ExpirePopoRegistrationIfStale :one
+UPDATE popo_registration
+SET status = 'expired',
+    updated_at = now()
+WHERE id = $1
+  AND status IN ('pending', 'awaiting_scan')
+  AND expires_at <= $2
+RETURNING id, workspace_id, agent_id, initiator_id, bridge_id, status, qr_url, robot_id, robot_name, installation_id, error_reason, expires_at, created_at, updated_at
+`
+
+type ExpirePopoRegistrationIfStaleParams struct {
+	ID        pgtype.UUID        `json:"id"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) ExpirePopoRegistrationIfStale(ctx context.Context, arg ExpirePopoRegistrationIfStaleParams) (PopoRegistration, error) {
+	row := q.db.QueryRow(ctx, expirePopoRegistrationIfStale, arg.ID, arg.ExpiresAt)
+	var i PopoRegistration
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentID,
+		&i.InitiatorID,
+		&i.BridgeID,
+		&i.Status,
+		&i.QrUrl,
+		&i.RobotID,
+		&i.RobotName,
+		&i.InstallationID,
+		&i.ErrorReason,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getPopoBridgeByTokenHash = `-- name: GetPopoBridgeByTokenHash :one
 SELECT id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by FROM popo_bridge
 WHERE token_hash = $1
@@ -367,6 +404,93 @@ func (q *Queries) GetPopoOutboundMediaGrant(ctx context.Context, arg GetPopoOutb
 	return i, err
 }
 
+const getPopoRegistration = `-- name: GetPopoRegistration :one
+SELECT id, workspace_id, agent_id, initiator_id, bridge_id, status, qr_url, robot_id, robot_name, installation_id, error_reason, expires_at, created_at, updated_at FROM popo_registration
+WHERE id = $1
+`
+
+func (q *Queries) GetPopoRegistration(ctx context.Context, id pgtype.UUID) (PopoRegistration, error) {
+	row := q.db.QueryRow(ctx, getPopoRegistration, id)
+	var i PopoRegistration
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentID,
+		&i.InitiatorID,
+		&i.BridgeID,
+		&i.Status,
+		&i.QrUrl,
+		&i.RobotID,
+		&i.RobotName,
+		&i.InstallationID,
+		&i.ErrorReason,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPopoRegistrationForUpdate = `-- name: GetPopoRegistrationForUpdate :one
+SELECT id, workspace_id, agent_id, initiator_id, bridge_id, status, qr_url, robot_id, robot_name, installation_id, error_reason, expires_at, created_at, updated_at FROM popo_registration
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetPopoRegistrationForUpdate(ctx context.Context, id pgtype.UUID) (PopoRegistration, error) {
+	row := q.db.QueryRow(ctx, getPopoRegistrationForUpdate, id)
+	var i PopoRegistration
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentID,
+		&i.InitiatorID,
+		&i.BridgeID,
+		&i.Status,
+		&i.QrUrl,
+		&i.RobotID,
+		&i.RobotName,
+		&i.InstallationID,
+		&i.ErrorReason,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPopoRegistrationInWorkspace = `-- name: GetPopoRegistrationInWorkspace :one
+SELECT id, workspace_id, agent_id, initiator_id, bridge_id, status, qr_url, robot_id, robot_name, installation_id, error_reason, expires_at, created_at, updated_at FROM popo_registration
+WHERE id = $1 AND workspace_id = $2
+`
+
+type GetPopoRegistrationInWorkspaceParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetPopoRegistrationInWorkspace(ctx context.Context, arg GetPopoRegistrationInWorkspaceParams) (PopoRegistration, error) {
+	row := q.db.QueryRow(ctx, getPopoRegistrationInWorkspace, arg.ID, arg.WorkspaceID)
+	var i PopoRegistration
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentID,
+		&i.InitiatorID,
+		&i.BridgeID,
+		&i.Status,
+		&i.QrUrl,
+		&i.RobotID,
+		&i.RobotName,
+		&i.InstallationID,
+		&i.ErrorReason,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const heartbeatPopoBridge = `-- name: HeartbeatPopoBridge :one
 UPDATE popo_bridge
 SET last_heartbeat_at = now(),
@@ -597,6 +721,51 @@ func (q *Queries) InsertPopoOutboundMediaGrant(ctx context.Context, arg InsertPo
 		&i.AttachmentID,
 		&i.CreatedAt,
 		&i.ExpiresAt,
+	)
+	return i, err
+}
+
+const insertPopoRegistration = `-- name: InsertPopoRegistration :one
+INSERT INTO popo_registration (
+    workspace_id, agent_id, initiator_id, bridge_id, status, expires_at
+) VALUES (
+    $1, $2, $3, $4, 'pending', $5
+)
+RETURNING id, workspace_id, agent_id, initiator_id, bridge_id, status, qr_url, robot_id, robot_name, installation_id, error_reason, expires_at, created_at, updated_at
+`
+
+type InsertPopoRegistrationParams struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	InitiatorID pgtype.UUID        `json:"initiator_id"`
+	BridgeID    pgtype.UUID        `json:"bridge_id"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) InsertPopoRegistration(ctx context.Context, arg InsertPopoRegistrationParams) (PopoRegistration, error) {
+	row := q.db.QueryRow(ctx, insertPopoRegistration,
+		arg.WorkspaceID,
+		arg.AgentID,
+		arg.InitiatorID,
+		arg.BridgeID,
+		arg.ExpiresAt,
+	)
+	var i PopoRegistration
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentID,
+		&i.InitiatorID,
+		&i.BridgeID,
+		&i.Status,
+		&i.QrUrl,
+		&i.RobotID,
+		&i.RobotName,
+		&i.InstallationID,
+		&i.ErrorReason,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -1002,6 +1171,60 @@ func (q *Queries) SetPopoBridgeCommandReceipt(ctx context.Context, arg SetPopoBr
 		&i.LeaseExpiresAt,
 		&i.RemoteMessageID,
 		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updatePopoRegistration = `-- name: UpdatePopoRegistration :one
+UPDATE popo_registration
+SET status = $1,
+    qr_url = $2,
+    robot_id = $3,
+    robot_name = $4,
+    installation_id = $5,
+    error_reason = $6,
+    updated_at = now()
+WHERE id = $7
+  AND status IN ('pending', 'awaiting_scan')
+RETURNING id, workspace_id, agent_id, initiator_id, bridge_id, status, qr_url, robot_id, robot_name, installation_id, error_reason, expires_at, created_at, updated_at
+`
+
+type UpdatePopoRegistrationParams struct {
+	Status         string      `json:"status"`
+	QrUrl          string      `json:"qr_url"`
+	RobotID        string      `json:"robot_id"`
+	RobotName      string      `json:"robot_name"`
+	InstallationID pgtype.UUID `json:"installation_id"`
+	ErrorReason    string      `json:"error_reason"`
+	ID             pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdatePopoRegistration(ctx context.Context, arg UpdatePopoRegistrationParams) (PopoRegistration, error) {
+	row := q.db.QueryRow(ctx, updatePopoRegistration,
+		arg.Status,
+		arg.QrUrl,
+		arg.RobotID,
+		arg.RobotName,
+		arg.InstallationID,
+		arg.ErrorReason,
+		arg.ID,
+	)
+	var i PopoRegistration
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentID,
+		&i.InitiatorID,
+		&i.BridgeID,
+		&i.Status,
+		&i.QrUrl,
+		&i.RobotID,
+		&i.RobotName,
+		&i.InstallationID,
+		&i.ErrorReason,
+		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

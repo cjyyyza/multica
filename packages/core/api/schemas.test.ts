@@ -19,11 +19,13 @@ import {
   PopoBridgeSchema,
   ListPopoBridgesResponseSchema,
   PopoBridgePairingSchema,
+  PopoRegistrationSchema,
   EMPTY_POPO_INSTALLATION,
   EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE,
   EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE,
   EMPTY_LIST_POPO_BRIDGES_RESPONSE,
   EMPTY_POPO_BRIDGE_PAIRING,
+  EMPTY_POPO_REGISTRATION,
   AgentTaskListSchema,
   TaskMessageListSchema,
   AutopilotQuotaUsageSchema,
@@ -2150,6 +2152,51 @@ describe("POPO bridge schemas", () => {
         endpoint: "POST /api/workspaces/:id/popo/bridge-pairings",
       }),
     ).toEqual(EMPTY_POPO_BRIDGE_PAIRING);
+  });
+});
+
+describe("POPO registration schemas", () => {
+  it("parses a well-formed registration", () => {
+    const parsed = PopoRegistrationSchema.parse({
+      id: "r1",
+      status: "awaiting_scan",
+      qr_url: "https://popo.example/qr",
+      robot_id: "",
+      installation_id: "",
+      error_reason: "",
+      poll_interval_seconds: 2,
+    });
+    expect(parsed.status).toBe("awaiting_scan");
+    expect(parsed.qr_url).toBe("https://popo.example/qr");
+    expect(parsed.poll_interval_seconds).toBe(2);
+  });
+
+  it("defaults incomplete data so older clients keep a pending poll shape", () => {
+    const parsed = PopoRegistrationSchema.parse({ id: "r1" });
+    expect(parsed.status).toBe("pending");
+    expect(parsed.qr_url).toBe("");
+    expect(parsed.robot_id).toBe("");
+    expect(parsed.installation_id).toBe("");
+    expect(parsed.error_reason).toBe("");
+    expect(parsed.poll_interval_seconds).toBe(2);
+  });
+
+  it("keeps an unknown status string from a newer backend", () => {
+    const parsed = PopoRegistrationSchema.parse({ id: "r1", status: "waiting_host" });
+    expect(parsed.status).toBe("waiting_host");
+  });
+
+  it("falls back safely for malformed create and poll responses", () => {
+    expect(
+      parseWithFallback(42, PopoRegistrationSchema, EMPTY_POPO_REGISTRATION, {
+        endpoint: "POST /api/workspaces/:id/popo/registrations",
+      }),
+    ).toEqual(EMPTY_POPO_REGISTRATION);
+    expect(
+      parseWithFallback(null, PopoRegistrationSchema, EMPTY_POPO_REGISTRATION, {
+        endpoint: "GET /api/workspaces/:id/popo/registrations/:registrationId",
+      }),
+    ).toEqual(EMPTY_POPO_REGISTRATION);
   });
 });
 

@@ -1197,7 +1197,22 @@
     "revoke_bridge_cancel": "キャンセル",
     "revoking_bridge": "無効化中…",
     "toast_bridge_revoked": "Windows ホストを無効化しました",
-    "toast_bridge_revoke_failed": "無効化に失敗しました"
+    "toast_bridge_revoke_failed": "無効化に失敗しました",
+    "scan_to_create": "スキャンして作成",
+    "scan_starting": "開始しています…",
+    "scan_waiting_qr": "Windows ホストからの QR コードを待っています。",
+    "scan_hint": "POPO でこのコードをスキャンしてください。ロボットの鍵は Windows ホストにだけ保存されます。",
+    "scan_expires": "10 分で期限切れになります。",
+    "scan_open_link": "リンクを開く",
+    "scan_success": "ロボットを作成しました。",
+    "scan_error_expired": "QR コードの期限が切れました。もう一度スキャンしてください。",
+    "scan_error_denied": "POPO でスキャンがキャンセルまたは拒否されました。",
+    "scan_error_protocol": "Windows ホストが登録を完了できませんでした。",
+    "scan_error_conflict": "この POPO ロボットは別のエージェントに既に接続されています。",
+    "scan_error_session_lost": "登録セッションが失われました。もう一度スキャンしてください。",
+    "scan_error_forbidden": "このエージェントに POPO を接続する権限がなくなりました。",
+    "scan_error_generic": "ロボットを作成できませんでした。再試行してください。",
+    "scan_retry": "再スキャン"
   },
   "repositories": {
     "section_title": "リポジトリ",

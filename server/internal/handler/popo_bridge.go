@@ -14,6 +14,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/integrations/popo"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func writePopoNotConfigured(w http.ResponseWriter) {
@@ -499,6 +500,49 @@ func readPopoMediaBody(w http.ResponseWriter, r *http.Request, maxBytes int64) (
 		return nil, "", errPopoMediaTooLarge
 	}
 	return data, ct, nil
+}
+
+type popoRegistrationProgressRequest struct {
+	QRURL       string `json:"qr_url"`
+	RobotID     string `json:"robot_id"`
+	RobotName   string `json:"robot_name"`
+	ErrorReason string `json:"error_reason"`
+}
+
+func (h *Handler) ProgressPopoRegistration(w http.ResponseWriter, r *http.Request) {
+	if h.PopoRegistration == nil {
+		writePopoNotConfigured(w)
+		return
+	}
+	bridge, ok := h.popoBridgeFromRequest(w, r)
+	if !ok {
+		return
+	}
+	regUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "registration id")
+	if !ok {
+		return
+	}
+	var body popoRegistrationProgressRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	result, err := h.PopoRegistration.ApplyProgress(r.Context(), bridge, regUUID, popo.RegistrationProgress{
+		QRURL:       body.QRURL,
+		RobotID:     body.RobotID,
+		RobotName:   body.RobotName,
+		ErrorReason: body.ErrorReason,
+	})
+	if err != nil {
+		writePopoRegistrationError(w, err)
+		return
+	}
+	if result.Created != nil {
+		h.publish(protocol.EventPopoInstallationCreated, uuidToString(result.Created.WorkspaceID), "bridge", uuidToString(bridge.ID), map[string]any{
+			"id": uuidToString(result.Created.ID),
+		})
+	}
+	writeJSON(w, http.StatusOK, popoRegistrationToResponse(result.Registration))
 }
 
 func writePopoMediaError(w http.ResponseWriter, err error) {

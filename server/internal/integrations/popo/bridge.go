@@ -37,6 +37,10 @@ var (
 	ErrMediaInvalid             = errors.New("popo: invalid media session request")
 	ErrOutboundMediaDenied      = errors.New("popo: outbound media is not granted to this bridge")
 	ErrMediaContentTypeMismatch = errors.New("popo: media content type does not match the session")
+	ErrNoOnlineBridge           = errors.New("popo: pair a Windows host first")
+	ErrRegistrationNotFound     = errors.New("popo: registration not found")
+	ErrInvalidQRURL             = errors.New("popo: qr_url must be an http(s) URL")
+	ErrInvalidProgress          = errors.New("popo: qr_url, robot_id, or error_reason is required")
 )
 
 type RobotReport struct {

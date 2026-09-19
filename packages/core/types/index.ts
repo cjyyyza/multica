@@ -260,6 +260,8 @@ export type {
   ListPopoBridgesResponse,
   PopoBridgePairing,
   CreatePopoBridgePairingRequest,
+  CreatePopoRegistrationRequest,
+  PopoRegistration,
 } from "./popo";
 export { isIdlePopoRobot } from "./popo";
 export type {

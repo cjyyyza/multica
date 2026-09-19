@@ -109,6 +109,37 @@ func (s *InstallService) Register(ctx context.Context, p RegisterParams) (db.Cha
 	if err := robotIdleOnHeartbeat(bridge, robotID, p.AgentID, liveOwnerAgent, s.now()); err != nil {
 		return db.ChannelInstallation{}, err
 	}
+	return s.writeInstall(ctx, p, robotID)
+}
+
+// RegisterFromScan binds a robot created by a Windows QR scan. The robot is
+// not required to appear on a heartbeat: occupancy is Windows-side, and the
+// websocket may not have been reported yet. Secrets never enter config.
+func (s *InstallService) RegisterFromScan(ctx context.Context, p RegisterParams) (db.ChannelInstallation, error) {
+	if !p.BridgeID.Valid {
+		return db.ChannelInstallation{}, ErrInvalidBridgeID
+	}
+	robotID := strings.TrimSpace(p.RobotID)
+	if robotID == "" {
+		return db.ChannelInstallation{}, ErrInvalidRobotID
+	}
+	bridge, err := s.q.GetPopoBridgeInWorkspace(ctx, db.GetPopoBridgeInWorkspaceParams{
+		ID:          p.BridgeID,
+		WorkspaceID: p.WorkspaceID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.ChannelInstallation{}, ErrBridgeNotFound
+		}
+		return db.ChannelInstallation{}, err
+	}
+	if bridge.Status != BridgeStatusActive {
+		return db.ChannelInstallation{}, ErrBridgeRevoked
+	}
+	return s.writeInstall(ctx, p, robotID)
+}
+
+func (s *InstallService) writeInstall(ctx context.Context, p RegisterParams, robotID string) (db.ChannelInstallation, error) {
 	cfg := installConfig{
 		AppID:     robotID,
 		RobotName: strings.TrimSpace(p.RobotName),

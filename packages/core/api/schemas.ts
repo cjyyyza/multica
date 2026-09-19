@@ -49,6 +49,7 @@ import type {
   RedeemPopoBindingTokenResponse,
   ListPopoBridgesResponse,
   PopoBridgePairing,
+  PopoRegistration,
   GroupedIssuesResponse,
   GitHubConnectResponse,
   GitHubPullRequest,
@@ -3376,6 +3377,26 @@ export const EMPTY_POPO_BRIDGE_PAIRING: PopoBridgePairing = {
   pairing_code: "",
   expires_at: "",
   ttl_seconds: 900,
+};
+
+export const PopoRegistrationSchema = z.object({
+  id: z.string(),
+  status: z.string().default("pending"),
+  qr_url: z.string().default(""),
+  robot_id: z.string().default(""),
+  installation_id: z.string().default(""),
+  error_reason: z.string().default(""),
+  poll_interval_seconds: z.number().default(2),
+}).loose();
+
+export const EMPTY_POPO_REGISTRATION: PopoRegistration = {
+  id: "",
+  status: "pending",
+  qr_url: "",
+  robot_id: "",
+  installation_id: "",
+  error_reason: "",
+  poll_interval_seconds: 2,
 };
 
 // Skills. Introduced for `POST /api/skills/:id/refresh` (update a skill from

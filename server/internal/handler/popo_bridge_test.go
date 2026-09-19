@@ -27,14 +27,20 @@ func wirePopo(t *testing.T) {
 		bridge.WithMedia(testHandler.Storage, engine.NewDBMediaIntentLedger(testHandler.Queries))
 	}
 	binding := popo.NewBindingTokenService(testHandler.Queries, testPool)
-	prevInstall, prevBridge, prevBind := testHandler.PopoInstall, testHandler.PopoBridge, testHandler.PopoBindingTokens
+	reg, rerr := popo.NewRegistrationService(testHandler.Queries, testPool, install)
+	if rerr != nil {
+		t.Fatalf("NewRegistrationService: %v", rerr)
+	}
+	prevInstall, prevBridge, prevBind, prevReg := testHandler.PopoInstall, testHandler.PopoBridge, testHandler.PopoBindingTokens, testHandler.PopoRegistration
 	testHandler.PopoInstall = install
 	testHandler.PopoBridge = bridge
 	testHandler.PopoBindingTokens = binding
+	testHandler.PopoRegistration = reg
 	t.Cleanup(func() {
 		testHandler.PopoInstall = prevInstall
 		testHandler.PopoBridge = prevBridge
 		testHandler.PopoBindingTokens = prevBind
+		testHandler.PopoRegistration = prevReg
 	})
 }
 
@@ -44,6 +50,7 @@ func popoCleanupBridge(t *testing.T, bridgeID string) {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM popo_inbound_event WHERE bridge_id = $1`, bridgeID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM popo_media_staging WHERE bridge_id = $1`, bridgeID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM popo_outbound_media_grant WHERE bridge_id = $1`, bridgeID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM popo_registration WHERE bridge_id = $1`, bridgeID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM popo_bridge_command WHERE bridge_id = $1`, bridgeID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM popo_bridge_pairing WHERE bridge_id = $1`, bridgeID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM popo_bridge WHERE id = $1`, bridgeID)

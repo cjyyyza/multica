@@ -1167,6 +1167,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			slog.Error("popo: InstallService init failed; install disabled", "error", ierr)
 		} else {
 			h.PopoInstall = installSvc
+			regSvc, rerr := popo.NewRegistrationService(queries, pool, installSvc)
+			if rerr != nil {
+				slog.Error("popo: RegistrationService init failed; QR register disabled", "error", rerr)
+			} else {
+				h.PopoRegistration = regSvc
+			}
 		}
 		slog.Info("popo integration enabled (Windows bridge)")
 	} else {
@@ -1468,6 +1474,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Get("/media/outbound/{attachmentId}", h.GetPopoBridgeOutboundMedia)
 		r.Get("/commands", h.ListPopoBridgeCommands)
 		r.Post("/commands/{id}/receipt", h.AckPopoBridgeCommand)
+		r.Post("/registrations/{id}/progress", h.ProgressPopoRegistration)
 	})
 	// GitHub App webhook (no Multica auth — requests are authenticated via
 	// HMAC-SHA256 signature in the handler) and post-install setup callback.
@@ -1825,6 +1832,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/popo/bridges", h.ListPopoBridges)
 					r.Post("/popo/install", h.RegisterPopoBot)
 					r.Delete("/popo/installations/{installationId}", h.RevokePopoInstallation)
+					r.Post("/popo/registrations", h.CreatePopoRegistration)
+					r.Get("/popo/registrations/{registrationId}", h.GetPopoRegistration)
+					r.Delete("/popo/registrations/{registrationId}", h.CancelPopoRegistration)
 				})
 				r.Group(func(r chi.Router) {
 					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))

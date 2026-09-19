@@ -114,6 +114,7 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"popo_media_staging":                 workspaceDelete,
 	"popo_outbound_media_grant":          workspaceDelete,
 	"popo_outbound_queue":                workspaceDelete,
+	"popo_registration":                  workspaceDelete,
 	"project":                            workspaceDelete,
 	"project_resource":                   workspaceDelete,
 	"quick_action":                       workspaceDelete,

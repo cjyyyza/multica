@@ -1319,6 +1319,23 @@ type PopoOutboundQueue struct {
 	LastError      pgtype.Text        `json:"last_error"`
 }
 
+type PopoRegistration struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	AgentID        pgtype.UUID        `json:"agent_id"`
+	InitiatorID    pgtype.UUID        `json:"initiator_id"`
+	BridgeID       pgtype.UUID        `json:"bridge_id"`
+	Status         string             `json:"status"`
+	QrUrl          string             `json:"qr_url"`
+	RobotID        string             `json:"robot_id"`
+	RobotName      string             `json:"robot_name"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	ErrorReason    string             `json:"error_reason"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Project struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`

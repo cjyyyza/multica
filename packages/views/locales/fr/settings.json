@@ -1200,7 +1200,22 @@
     "revoke_bridge_cancel": "Annuler",
     "revoking_bridge": "Révocation…",
     "toast_bridge_revoked": "Hôte Windows révoqué",
-    "toast_bridge_revoke_failed": "Impossible de révoquer cet hôte"
+    "toast_bridge_revoke_failed": "Impossible de révoquer cet hôte",
+    "scan_to_create": "Scanner pour créer",
+    "scan_starting": "Démarrage…",
+    "scan_waiting_qr": "En attente d'un QR code de l'hôte Windows.",
+    "scan_hint": "Ouvrez POPO et scannez ce code. Les clés du robot restent sur l'hôte Windows.",
+    "scan_expires": "Expire dans 10 minutes.",
+    "scan_open_link": "Ouvrir le lien à la place",
+    "scan_success": "Robot créé.",
+    "scan_error_expired": "Le QR code a expiré. Scannez à nouveau.",
+    "scan_error_denied": "Le scan a été annulé ou refusé dans POPO.",
+    "scan_error_protocol": "L'hôte Windows n'a pas pu terminer l'enregistrement.",
+    "scan_error_conflict": "Ce robot POPO est déjà connecté à un autre agent.",
+    "scan_error_session_lost": "La session d'enregistrement a été perdue. Scannez à nouveau.",
+    "scan_error_forbidden": "Vous n'avez plus l'autorisation de connecter POPO pour cet agent.",
+    "scan_error_generic": "Impossible de créer le robot. Réessayez.",
+    "scan_retry": "Scanner à nouveau"
   },
   "repositories": {
     "section_title": "Dépôts",

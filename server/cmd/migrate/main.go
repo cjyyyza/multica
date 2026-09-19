@@ -338,6 +338,7 @@ var concurrentIndexCleanups = map[string]string{
 	"531_popo_outbound_media_grant_command_index":               "idx_popo_outbound_media_grant_command_attachment",
 	"532_popo_outbound_media_grant_bridge_index":                "idx_popo_outbound_media_grant_bridge_attachment",
 	"533_popo_outbound_media_grant_workspace_index":             "idx_popo_outbound_media_grant_workspace",
+	"535_popo_registration_workspace_index":                     "idx_popo_registration_workspace",
 }
 
 // concurrentDownIndexCleanups covers every migration whose down direction

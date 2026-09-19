@@ -50,7 +50,9 @@ const (
 	BridgeStatusActive  = "active"
 	BridgeStatusRevoked = "revoked"
 
-	CommandTypeSend = "send"
+	CommandTypeSend               = "send"
+	CommandTypeRegisterQR         = "register_qr"
+	CommandTypeCancelRegistration = "cancel_registration"
 
 	CommandStatusPending   = "pending"
 	CommandStatusLeased    = "leased"
@@ -58,6 +60,22 @@ const (
 	CommandStatusFailed    = "failed"
 	CommandStatusUnknown   = "unknown"
 	CommandStatusCancelled = "cancelled"
+
+	RegistrationTTL                 = 10 * time.Minute
+	RegistrationPollIntervalSeconds = 2
+	RegistrationEnvProduction       = "production"
+
+	RegistrationStatusPending      = "pending"
+	RegistrationStatusAwaitingScan = "awaiting_scan"
+	RegistrationStatusSuccess      = "success"
+	RegistrationStatusError        = "error"
+	RegistrationStatusExpired      = "expired"
+
+	RegistrationReasonDenied   = "denied"
+	RegistrationReasonExpired  = "expired"
+	RegistrationReasonProtocol = "protocol"
+	RegistrationReasonConflict = "installation_conflict"
+	RegistrationReasonInternal = "internal_error"
 
 	OccupiedByDJ01Bot = "dj01bot"
 	OccupiedBySparse  = "sparse"
