@@ -1,55 +1,47 @@
 ---
 title: POPO Bot
-description: Connect a Multica agent to POPO through the Windows-local dj01bot gateway.
+description: Connect a Multica agent to POPO through a Windows dj01bot bridge.
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-POPO is the same product surface as Feishu/Lark (IM channel + shared engine), but the transport is Windows-local. Multica never opens POPO, popo-cli, or dj01bot from the API server or from a cloud/Mac agent.
+POPO uses the same product surface as Feishu/Lark (IM channel + shared engine). A Windows process holds the POPO connection and talks to Multica over a workspace-scoped bridge token. The API server never opens POPO, popo-cli, or dj01bot.
 
-One dj01bot robot maps to one Multica agent. Use a stable `robot_id` from `~/.dj01bot/config.json` (`websocketRobots[].id`). Leave it empty to use the default webhook robot (`default`).
+One dj01bot robot maps to one Multica agent. Use a stable `robot_id` from `~/.dj01bot/config.json` (`websocketRobots[].id`), or `default`.
 
 ## Before you start
 
-- A workspace owner or admin must connect the robot in Multica.
-- This Windows machine must already run a working dj01bot (`start.bat` / `dj01bot gateway`).
-- In `~/.dj01bot/config.json`, set `gateway.webhook.enabled` to true (default port `28792`).
-- Keep `multica popo gateway` running on this Windows machine after you connect.
+- A workspace owner or admin mints a pairing code in Multica.
+- This Windows machine already runs a working dj01bot (`start.bat` / `dj01bot gateway`).
+- Self-hosted servers set `MULTICA_POPO_ENABLED=true`.
 
-<Callout type="warning">
-Do not point the webhook URL at a public host. Multica only accepts loopback addresses such as `http://127.0.0.1:28792`. The API process never dials dj01bot.
+<Callout type="info">
+The Go command `multica popo gateway` is gone. Use `python -m nanobot.multica_bridge`.
 </Callout>
 
-## 1. Connect it to an agent
+## 1. Pair the Windows bridge
 
-1. In Multica, open **Agents**, select an agent, and open **Integrations**.
-2. Click **Connect POPO**.
-3. Enter the robot id (or leave empty for `default`), an optional display name, and the loopback webhook URL.
-4. Click **Connect**.
-
-The server stores the installation. It does not health-check dj01bot.
-
-## 2. Run the Windows gateway
+1. In Multica, create a one-time pairing code (workspace owner/admin).
+2. On Windows:
 
 ```bash
-multica popo gateway
+python -m nanobot.multica_bridge pair --server https://your-multica.example --pairing-code <code>
+python -m nanobot.multica_bridge run --server https://your-multica.example
 ```
 
-This command:
+Pairing writes `{server, bridge_id, token, workspace_id}` under `%LOCALAPPDATA%/dj01bot/multica-bridge/`. Keep `run` going so heartbeats stay fresh (45s without a heartbeat is offline).
 
-- Refuses to run off Windows unless `MULTICA_POPO_ALLOW_NON_WINDOWS=1` (tests only).
-- Probes dj01bot `GET /webhook/health`.
-- Listens on `127.0.0.1:18681` for POPO Open callbacks (`/api/popo_open`).
-- Forwards text events to Multica.
-- Polls queued replies and posts them to dj01bot `POST /outbound` with `channel=popo_open`.
+## 2. Connect a robot to an agent
 
-Point the POPO Open HTTP `callbackUrl` at `http://127.0.0.1:18681/api/popo_open` so the same events are not also consumed by dj01bot's own AgentLoop on `18680`.
+1. Open **Agents**, select an agent, then **Integrations**.
+2. Choose an online Windows bridge and an idle robot (`connected` and not occupied by dj01bot/Sparse).
+3. Click **Connect**.
+
+A robot can belong to only one live Multica agent.
 
 ## First use and account binding
 
-The first time a member messages the robot, it sends a single-use Multica account-binding link (`/popo/bind?token=`). Open it, sign in to the same Multica workspace, then return to POPO and send the message again. The link expires after 15 minutes.
-
-In a group, the robot never posts the bearer link publicly. It asks the sender to start a private chat first.
+The first time a member messages the robot, it sends a single-use Multica account-binding link (`/popo/bind?token=`). Open it, sign in to the same workspace, then send the message again. The link expires after 15 minutes.
 
 ## Use the robot
 
@@ -59,27 +51,23 @@ Send text directly. No @-mention is required.
 
 ### Groups
 
-Only `IM_CHAT_TO_ROBOT_AT_MSG` (@ the robot) enters the engine. Unaddressed group chatter is dropped.
+Group @, media, QR onboarding, and `/reply` `/status` `/stop` are not in this version.
 
 ### Commands
 
 - `/new` and `/clear` use the shared engine, same as Feishu.
 - `/issue <title>` creates a Multica issue (`origin_type=popo_chat`).
 
-This version accepts text only. Cards, media, and streaming cards are not supported.
-
 ## Manage connections
 
-Open **Settings → Integrations → POPO** to view connected robots. Owners and admins can disconnect one. Disconnecting stops inbound/outbound for that agent but preserves Multica conversations.
+**Settings → Integrations → POPO** lists bridges and robots. Owners and admins can revoke a bridge token immediately. Disconnecting a robot stops inbound/outbound for that agent but keeps Multica conversations.
 
 ## Self-hosting setup
 
-Set a stable 32-byte encryption key before starting the API server:
-
 ```dotenv
-MULTICA_POPO_SECRET_KEY=<base64-encoded 32-byte key>
+MULTICA_POPO_ENABLED=true
 ```
 
-Generate one with `openssl rand -base64 32`. Losing it makes stored webhook tokens unreadable and requires reconnecting each robot.
+Unset or any value other than `true` hides the management APIs (`configured: false`) and returns `503 popo_not_configured` on the Windows bridge routes.
 
 `popo-cli` is a logged-in user identity used by other Windows tools. It is not this robot channel.

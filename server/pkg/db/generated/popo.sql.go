@@ -11,124 +11,416 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const ackPopoOutbound = `-- name: AckPopoOutbound :execrows
-UPDATE popo_outbound_queue
-SET delivered_at = now(),
-    last_error = NULL
+const consumePopoBridgePairing = `-- name: ConsumePopoBridgePairing :one
+UPDATE popo_bridge_pairing
+SET consumed_at = now(),
+    bridge_id = $2
 WHERE id = $1
-  AND workspace_id = $2
-  AND delivered_at IS NULL
+  AND consumed_at IS NULL
+  AND expires_at > now()
+RETURNING id, workspace_id, code_hash, created_by, hostname, expires_at, consumed_at, bridge_id, created_at
 `
 
-type AckPopoOutboundParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+type ConsumePopoBridgePairingParams struct {
+	ID       pgtype.UUID `json:"id"`
+	BridgeID pgtype.UUID `json:"bridge_id"`
 }
 
-func (q *Queries) AckPopoOutbound(ctx context.Context, arg AckPopoOutboundParams) (int64, error) {
-	result, err := q.db.Exec(ctx, ackPopoOutbound, arg.ID, arg.WorkspaceID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const enqueuePopoOutbound = `-- name: EnqueuePopoOutbound :one
-
-INSERT INTO popo_outbound_queue (
-    workspace_id, installation_id, chat_id, robot_id, content
-) VALUES (
-    $1, $2, $3, $4, $5
-)
-RETURNING id, workspace_id, installation_id, chat_id, robot_id, content, created_at, delivered_at, last_error
-`
-
-type EnqueuePopoOutboundParams struct {
-	WorkspaceID    pgtype.UUID `json:"workspace_id"`
-	InstallationID pgtype.UUID `json:"installation_id"`
-	ChatID         string      `json:"chat_id"`
-	RobotID        string      `json:"robot_id"`
-	Content        string      `json:"content"`
-}
-
-// POPO outbound queue: Multica never calls dj01bot. The Windows CLI polls
-// these rows and POSTs them to the local gateway /outbound.
-func (q *Queries) EnqueuePopoOutbound(ctx context.Context, arg EnqueuePopoOutboundParams) (PopoOutboundQueue, error) {
-	row := q.db.QueryRow(ctx, enqueuePopoOutbound,
-		arg.WorkspaceID,
-		arg.InstallationID,
-		arg.ChatID,
-		arg.RobotID,
-		arg.Content,
-	)
-	var i PopoOutboundQueue
+func (q *Queries) ConsumePopoBridgePairing(ctx context.Context, arg ConsumePopoBridgePairingParams) (PopoBridgePairing, error) {
+	row := q.db.QueryRow(ctx, consumePopoBridgePairing, arg.ID, arg.BridgeID)
+	var i PopoBridgePairing
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
-		&i.InstallationID,
-		&i.ChatID,
-		&i.RobotID,
-		&i.Content,
+		&i.CodeHash,
+		&i.CreatedBy,
+		&i.Hostname,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.BridgeID,
 		&i.CreatedAt,
-		&i.DeliveredAt,
-		&i.LastError,
 	)
 	return i, err
 }
 
-const failPopoOutbound = `-- name: FailPopoOutbound :execrows
-UPDATE popo_outbound_queue
-SET last_error = $3
-WHERE id = $1
-  AND workspace_id = $2
-  AND delivered_at IS NULL
+const createPopoBridgePairing = `-- name: CreatePopoBridgePairing :one
+
+INSERT INTO popo_bridge_pairing (
+    workspace_id, code_hash, created_by, hostname, expires_at
+) VALUES (
+    $1, $2, $3, $4, $5
+)
+RETURNING id, workspace_id, code_hash, created_by, hostname, expires_at, consumed_at, bridge_id, created_at
 `
 
-type FailPopoOutboundParams struct {
+type CreatePopoBridgePairingParams struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	CodeHash    string             `json:"code_hash"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	Hostname    string             `json:"hostname"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+}
+
+// POPO Windows-bridge protocol. The API never opens POPO or dj01bot.
+// popo_outbound_queue is left in place but is no longer written.
+func (q *Queries) CreatePopoBridgePairing(ctx context.Context, arg CreatePopoBridgePairingParams) (PopoBridgePairing, error) {
+	row := q.db.QueryRow(ctx, createPopoBridgePairing,
+		arg.WorkspaceID,
+		arg.CodeHash,
+		arg.CreatedBy,
+		arg.Hostname,
+		arg.ExpiresAt,
+	)
+	var i PopoBridgePairing
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.CodeHash,
+		&i.CreatedBy,
+		&i.Hostname,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.BridgeID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const enqueuePopoBridgeCommand = `-- name: EnqueuePopoBridgeCommand :one
+INSERT INTO popo_bridge_command (
+    workspace_id, bridge_id, installation_id, type, delivery_id, payload, status
+) VALUES (
+    $1, $2, $3, $4, $5, $6, 'pending'
+)
+RETURNING id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at
+`
+
+type EnqueuePopoBridgeCommandParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	BridgeID       pgtype.UUID `json:"bridge_id"`
+	InstallationID pgtype.UUID `json:"installation_id"`
+	Type           string      `json:"type"`
+	DeliveryID     pgtype.UUID `json:"delivery_id"`
+	Payload        []byte      `json:"payload"`
+}
+
+func (q *Queries) EnqueuePopoBridgeCommand(ctx context.Context, arg EnqueuePopoBridgeCommandParams) (PopoBridgeCommand, error) {
+	row := q.db.QueryRow(ctx, enqueuePopoBridgeCommand,
+		arg.WorkspaceID,
+		arg.BridgeID,
+		arg.InstallationID,
+		arg.Type,
+		arg.DeliveryID,
+		arg.Payload,
+	)
+	var i PopoBridgeCommand
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BridgeID,
+		&i.InstallationID,
+		&i.Type,
+		&i.DeliveryID,
+		&i.Payload,
+		&i.Status,
+		&i.LeaseExpiresAt,
+		&i.RemoteMessageID,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPopoBridgeByTokenHash = `-- name: GetPopoBridgeByTokenHash :one
+SELECT id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by FROM popo_bridge
+WHERE token_hash = $1
+`
+
+func (q *Queries) GetPopoBridgeByTokenHash(ctx context.Context, tokenHash string) (PopoBridge, error) {
+	row := q.db.QueryRow(ctx, getPopoBridgeByTokenHash, tokenHash)
+	var i PopoBridge
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.TokenHash,
+		&i.Hostname,
+		&i.Status,
+		&i.LastHeartbeatAt,
+		&i.RobotsJson,
+		&i.CreatedAt,
+		&i.RevokedAt,
+		&i.RevokedBy,
+	)
+	return i, err
+}
+
+const getPopoBridgeCommandForBridge = `-- name: GetPopoBridgeCommandForBridge :one
+SELECT id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at FROM popo_bridge_command
+WHERE id = $1 AND bridge_id = $2
+`
+
+type GetPopoBridgeCommandForBridgeParams struct {
+	ID       pgtype.UUID `json:"id"`
+	BridgeID pgtype.UUID `json:"bridge_id"`
+}
+
+func (q *Queries) GetPopoBridgeCommandForBridge(ctx context.Context, arg GetPopoBridgeCommandForBridgeParams) (PopoBridgeCommand, error) {
+	row := q.db.QueryRow(ctx, getPopoBridgeCommandForBridge, arg.ID, arg.BridgeID)
+	var i PopoBridgeCommand
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BridgeID,
+		&i.InstallationID,
+		&i.Type,
+		&i.DeliveryID,
+		&i.Payload,
+		&i.Status,
+		&i.LeaseExpiresAt,
+		&i.RemoteMessageID,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPopoBridgeInWorkspace = `-- name: GetPopoBridgeInWorkspace :one
+SELECT id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by FROM popo_bridge
+WHERE id = $1 AND workspace_id = $2
+`
+
+type GetPopoBridgeInWorkspaceParams struct {
 	ID          pgtype.UUID `json:"id"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	LastError   pgtype.Text `json:"last_error"`
 }
 
-func (q *Queries) FailPopoOutbound(ctx context.Context, arg FailPopoOutboundParams) (int64, error) {
-	result, err := q.db.Exec(ctx, failPopoOutbound, arg.ID, arg.WorkspaceID, arg.LastError)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+func (q *Queries) GetPopoBridgeInWorkspace(ctx context.Context, arg GetPopoBridgeInWorkspaceParams) (PopoBridge, error) {
+	row := q.db.QueryRow(ctx, getPopoBridgeInWorkspace, arg.ID, arg.WorkspaceID)
+	var i PopoBridge
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.TokenHash,
+		&i.Hostname,
+		&i.Status,
+		&i.LastHeartbeatAt,
+		&i.RobotsJson,
+		&i.CreatedAt,
+		&i.RevokedAt,
+		&i.RevokedBy,
+	)
+	return i, err
 }
 
-const listPendingPopoOutbound = `-- name: ListPendingPopoOutbound :many
-SELECT id, workspace_id, installation_id, chat_id, robot_id, content, created_at, delivered_at, last_error FROM popo_outbound_queue
-WHERE workspace_id = $1 AND delivered_at IS NULL
-ORDER BY created_at ASC
-LIMIT $2
+const getPopoBridgePairingByCodeHashForUpdate = `-- name: GetPopoBridgePairingByCodeHashForUpdate :one
+SELECT id, workspace_id, code_hash, created_by, hostname, expires_at, consumed_at, bridge_id, created_at FROM popo_bridge_pairing
+WHERE code_hash = $1
+FOR UPDATE
 `
 
-type ListPendingPopoOutboundParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Limit       int32       `json:"limit"`
+func (q *Queries) GetPopoBridgePairingByCodeHashForUpdate(ctx context.Context, codeHash string) (PopoBridgePairing, error) {
+	row := q.db.QueryRow(ctx, getPopoBridgePairingByCodeHashForUpdate, codeHash)
+	var i PopoBridgePairing
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.CodeHash,
+		&i.CreatedBy,
+		&i.Hostname,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.BridgeID,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
-func (q *Queries) ListPendingPopoOutbound(ctx context.Context, arg ListPendingPopoOutboundParams) ([]PopoOutboundQueue, error) {
-	rows, err := q.db.Query(ctx, listPendingPopoOutbound, arg.WorkspaceID, arg.Limit)
+const getPopoInboundEvent = `-- name: GetPopoInboundEvent :one
+SELECT id, workspace_id, bridge_id, installation_id, event_id, robot_id, accepted, duplicate, created_at FROM popo_inbound_event
+WHERE installation_id = $1 AND event_id = $2
+`
+
+type GetPopoInboundEventParams struct {
+	InstallationID pgtype.UUID `json:"installation_id"`
+	EventID        string      `json:"event_id"`
+}
+
+func (q *Queries) GetPopoInboundEvent(ctx context.Context, arg GetPopoInboundEventParams) (PopoInboundEvent, error) {
+	row := q.db.QueryRow(ctx, getPopoInboundEvent, arg.InstallationID, arg.EventID)
+	var i PopoInboundEvent
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BridgeID,
+		&i.InstallationID,
+		&i.EventID,
+		&i.RobotID,
+		&i.Accepted,
+		&i.Duplicate,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const heartbeatPopoBridge = `-- name: HeartbeatPopoBridge :one
+UPDATE popo_bridge
+SET last_heartbeat_at = now(),
+    robots_json = $2
+WHERE id = $1
+  AND status = 'active'
+RETURNING id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by
+`
+
+type HeartbeatPopoBridgeParams struct {
+	ID         pgtype.UUID `json:"id"`
+	RobotsJson []byte      `json:"robots_json"`
+}
+
+func (q *Queries) HeartbeatPopoBridge(ctx context.Context, arg HeartbeatPopoBridgeParams) (PopoBridge, error) {
+	row := q.db.QueryRow(ctx, heartbeatPopoBridge, arg.ID, arg.RobotsJson)
+	var i PopoBridge
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.TokenHash,
+		&i.Hostname,
+		&i.Status,
+		&i.LastHeartbeatAt,
+		&i.RobotsJson,
+		&i.CreatedAt,
+		&i.RevokedAt,
+		&i.RevokedBy,
+	)
+	return i, err
+}
+
+const insertPopoBridge = `-- name: InsertPopoBridge :one
+INSERT INTO popo_bridge (
+    workspace_id, token_hash, hostname, status
+) VALUES (
+    $1, $2, $3, 'active'
+)
+RETURNING id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by
+`
+
+type InsertPopoBridgeParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	TokenHash   string      `json:"token_hash"`
+	Hostname    string      `json:"hostname"`
+}
+
+func (q *Queries) InsertPopoBridge(ctx context.Context, arg InsertPopoBridgeParams) (PopoBridge, error) {
+	row := q.db.QueryRow(ctx, insertPopoBridge, arg.WorkspaceID, arg.TokenHash, arg.Hostname)
+	var i PopoBridge
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.TokenHash,
+		&i.Hostname,
+		&i.Status,
+		&i.LastHeartbeatAt,
+		&i.RobotsJson,
+		&i.CreatedAt,
+		&i.RevokedAt,
+		&i.RevokedBy,
+	)
+	return i, err
+}
+
+const insertPopoInboundEvent = `-- name: InsertPopoInboundEvent :one
+INSERT INTO popo_inbound_event (
+    workspace_id, bridge_id, installation_id, event_id, robot_id, accepted, duplicate
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7
+)
+RETURNING id, workspace_id, bridge_id, installation_id, event_id, robot_id, accepted, duplicate, created_at
+`
+
+type InsertPopoInboundEventParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	BridgeID       pgtype.UUID `json:"bridge_id"`
+	InstallationID pgtype.UUID `json:"installation_id"`
+	EventID        string      `json:"event_id"`
+	RobotID        string      `json:"robot_id"`
+	Accepted       bool        `json:"accepted"`
+	Duplicate      bool        `json:"duplicate"`
+}
+
+func (q *Queries) InsertPopoInboundEvent(ctx context.Context, arg InsertPopoInboundEventParams) (PopoInboundEvent, error) {
+	row := q.db.QueryRow(ctx, insertPopoInboundEvent,
+		arg.WorkspaceID,
+		arg.BridgeID,
+		arg.InstallationID,
+		arg.EventID,
+		arg.RobotID,
+		arg.Accepted,
+		arg.Duplicate,
+	)
+	var i PopoInboundEvent
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BridgeID,
+		&i.InstallationID,
+		&i.EventID,
+		&i.RobotID,
+		&i.Accepted,
+		&i.Duplicate,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const leasePopoBridgeCommands = `-- name: LeasePopoBridgeCommands :many
+WITH picked AS (
+    SELECT cmd.id
+    FROM popo_bridge_command AS cmd
+    WHERE cmd.bridge_id = $2
+      AND cmd.status = 'pending'
+    ORDER BY cmd.created_at ASC
+    LIMIT $3
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE popo_bridge_command AS c
+SET status = 'leased',
+    lease_expires_at = $1,
+    updated_at = now()
+FROM picked
+WHERE c.id = picked.id
+RETURNING c.id, c.workspace_id, c.bridge_id, c.installation_id, c.type, c.delivery_id, c.payload, c.status, c.lease_expires_at, c.remote_message_id, c.last_error, c.created_at, c.updated_at
+`
+
+type LeasePopoBridgeCommandsParams struct {
+	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
+	LeaseBridgeID  pgtype.UUID        `json:"lease_bridge_id"`
+	MaxN           int32              `json:"max_n"`
+}
+
+func (q *Queries) LeasePopoBridgeCommands(ctx context.Context, arg LeasePopoBridgeCommandsParams) ([]PopoBridgeCommand, error) {
+	rows, err := q.db.Query(ctx, leasePopoBridgeCommands, arg.LeaseExpiresAt, arg.LeaseBridgeID, arg.MaxN)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []PopoOutboundQueue{}
+	items := []PopoBridgeCommand{}
 	for rows.Next() {
-		var i PopoOutboundQueue
+		var i PopoBridgeCommand
 		if err := rows.Scan(
 			&i.ID,
 			&i.WorkspaceID,
+			&i.BridgeID,
 			&i.InstallationID,
-			&i.ChatID,
-			&i.RobotID,
-			&i.Content,
-			&i.CreatedAt,
-			&i.DeliveredAt,
+			&i.Type,
+			&i.DeliveryID,
+			&i.Payload,
+			&i.Status,
+			&i.LeaseExpiresAt,
+			&i.RemoteMessageID,
 			&i.LastError,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -138,4 +430,138 @@ func (q *Queries) ListPendingPopoOutbound(ctx context.Context, arg ListPendingPo
 		return nil, err
 	}
 	return items, nil
+}
+
+const listPopoBridgesByWorkspace = `-- name: ListPopoBridgesByWorkspace :many
+SELECT id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by FROM popo_bridge
+WHERE workspace_id = $1
+ORDER BY created_at ASC
+`
+
+func (q *Queries) ListPopoBridgesByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]PopoBridge, error) {
+	rows, err := q.db.Query(ctx, listPopoBridgesByWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PopoBridge{}
+	for rows.Next() {
+		var i PopoBridge
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.TokenHash,
+			&i.Hostname,
+			&i.Status,
+			&i.LastHeartbeatAt,
+			&i.RobotsJson,
+			&i.CreatedAt,
+			&i.RevokedAt,
+			&i.RevokedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const reclaimExpiredPopoBridgeCommandLeases = `-- name: ReclaimExpiredPopoBridgeCommandLeases :exec
+UPDATE popo_bridge_command
+SET status = 'pending',
+    lease_expires_at = NULL,
+    updated_at = now()
+WHERE bridge_id = $1
+  AND status = 'leased'
+  AND lease_expires_at IS NOT NULL
+  AND lease_expires_at < now()
+`
+
+func (q *Queries) ReclaimExpiredPopoBridgeCommandLeases(ctx context.Context, bridgeID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, reclaimExpiredPopoBridgeCommandLeases, bridgeID)
+	return err
+}
+
+const revokePopoBridge = `-- name: RevokePopoBridge :one
+UPDATE popo_bridge
+SET status = 'revoked',
+    revoked_at = now(),
+    revoked_by = $3
+WHERE id = $1
+  AND workspace_id = $2
+  AND status = 'active'
+RETURNING id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by
+`
+
+type RevokePopoBridgeParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RevokedBy   pgtype.UUID `json:"revoked_by"`
+}
+
+func (q *Queries) RevokePopoBridge(ctx context.Context, arg RevokePopoBridgeParams) (PopoBridge, error) {
+	row := q.db.QueryRow(ctx, revokePopoBridge, arg.ID, arg.WorkspaceID, arg.RevokedBy)
+	var i PopoBridge
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.TokenHash,
+		&i.Hostname,
+		&i.Status,
+		&i.LastHeartbeatAt,
+		&i.RobotsJson,
+		&i.CreatedAt,
+		&i.RevokedAt,
+		&i.RevokedBy,
+	)
+	return i, err
+}
+
+const setPopoBridgeCommandReceipt = `-- name: SetPopoBridgeCommandReceipt :one
+UPDATE popo_bridge_command
+SET status = $3,
+    remote_message_id = $4,
+    last_error = $5,
+    lease_expires_at = NULL,
+    updated_at = now()
+WHERE id = $1 AND bridge_id = $2
+RETURNING id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at
+`
+
+type SetPopoBridgeCommandReceiptParams struct {
+	ID              pgtype.UUID `json:"id"`
+	BridgeID        pgtype.UUID `json:"bridge_id"`
+	Status          string      `json:"status"`
+	RemoteMessageID pgtype.Text `json:"remote_message_id"`
+	LastError       pgtype.Text `json:"last_error"`
+}
+
+func (q *Queries) SetPopoBridgeCommandReceipt(ctx context.Context, arg SetPopoBridgeCommandReceiptParams) (PopoBridgeCommand, error) {
+	row := q.db.QueryRow(ctx, setPopoBridgeCommandReceipt,
+		arg.ID,
+		arg.BridgeID,
+		arg.Status,
+		arg.RemoteMessageID,
+		arg.LastError,
+	)
+	var i PopoBridgeCommand
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BridgeID,
+		&i.InstallationID,
+		&i.Type,
+		&i.DeliveryID,
+		&i.Payload,
+		&i.Status,
+		&i.LeaseExpiresAt,
+		&i.RemoteMessageID,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

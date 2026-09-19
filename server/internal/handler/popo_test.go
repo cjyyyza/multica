@@ -42,19 +42,22 @@ func TestPopoMutationHandlersRejectUnconfiguredDeployment(t *testing.T) {
 		method string
 		path   string
 		body   string
+		status int
 		run    func(*Handler, http.ResponseWriter, *http.Request)
 	}{
 		{
-			name:   "register",
+			name:   "register install",
 			method: http.MethodPost,
 			path:   "/api/workspaces/x/popo/install?agent_id=y",
-			body:   `{"robot_id":"default"}`,
+			body:   `{"bridge_id":"11111111-1111-1111-1111-111111111111","robot_id":"default"}`,
+			status: http.StatusForbidden,
 			run:    (*Handler).RegisterPopoBot,
 		},
 		{
-			name:   "revoke",
+			name:   "revoke install",
 			method: http.MethodDelete,
 			path:   "/api/workspaces/x/popo/installations/y",
+			status: http.StatusForbidden,
 			run:    (*Handler).RevokePopoInstallation,
 		},
 		{
@@ -62,27 +65,39 @@ func TestPopoMutationHandlersRejectUnconfiguredDeployment(t *testing.T) {
 			method: http.MethodPost,
 			path:   "/api/popo/binding/redeem",
 			body:   `{"token":"placeholder"}`,
+			status: http.StatusForbidden,
 			run:    (*Handler).RedeemPopoBindingToken,
 		},
 		{
-			name:   "ingest",
+			name:   "pairing",
 			method: http.MethodPost,
-			path:   "/api/workspaces/x/popo/inbound",
-			body:   `{"robot_id":"default","event":{}}`,
-			run:    (*Handler).IngestPopoEvent,
+			path:   "/api/workspaces/x/popo/bridge-pairings",
+			body:   `{}`,
+			status: http.StatusForbidden,
+			run:    (*Handler).CreatePopoBridgePairing,
 		},
 		{
-			name:   "list outbound",
+			name:   "bridge register",
+			method: http.MethodPost,
+			path:   "/api/popo/bridge/register",
+			body:   `{"protocol_version":1,"pairing_code":"x"}`,
+			status: http.StatusServiceUnavailable,
+			run:    (*Handler).RegisterPopoBridge,
+		},
+		{
+			name:   "bridge inbound",
+			method: http.MethodPost,
+			path:   "/api/popo/bridge/inbound",
+			body:   `{"protocol_version":1,"event_id":"e"}`,
+			status: http.StatusServiceUnavailable,
+			run:    (*Handler).IngestPopoBridgeInbound,
+		},
+		{
+			name:   "bridge commands",
 			method: http.MethodGet,
-			path:   "/api/workspaces/x/popo/outbound",
-			run:    (*Handler).ListPopoOutbound,
-		},
-		{
-			name:   "ack outbound",
-			method: http.MethodPost,
-			path:   "/api/workspaces/x/popo/outbound-ack",
-			body:   `{"results":[]}`,
-			run:    (*Handler).AckPopoOutbound,
+			path:   "/api/popo/bridge/commands",
+			status: http.StatusServiceUnavailable,
+			run:    (*Handler).ListPopoBridgeCommands,
 		},
 	}
 
@@ -92,8 +107,11 @@ func TestPopoMutationHandlersRejectUnconfiguredDeployment(t *testing.T) {
 			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
 			w := httptest.NewRecorder()
 			tt.run(h, w, req)
-			if w.Code != http.StatusForbidden {
-				t.Fatalf("expected 403, got %d body=%s", w.Code, w.Body.String())
+			if w.Code != tt.status {
+				t.Fatalf("expected %d, got %d body=%s", tt.status, w.Code, w.Body.String())
+			}
+			if tt.status == http.StatusServiceUnavailable && !strings.Contains(w.Body.String(), "popo_not_configured") {
+				t.Fatalf("expected popo_not_configured: %s", w.Body.String())
 			}
 		})
 	}
@@ -108,7 +126,7 @@ func TestPopoInstallationResponseNeverExposesStoredCredential(t *testing.T) {
 		InstallerUserID: parseUUID("44444444-4444-4444-4444-444444444444"),
 		Status:          "active",
 		Config: json.RawMessage(
-			`{"app_id":"default","robot_name":"dj01","webhook_url":"http://127.0.0.1:28792","webhook_token_encrypted":"ciphertext-sentinel"}`,
+			`{"app_id":"default","robot_name":"dj01","bridge_id":"55555555-5555-5555-5555-555555555555","webhook_token_encrypted":"ciphertext-sentinel"}`,
 		),
 		InstalledAt: pgtype.Timestamptz{Time: now, Valid: true},
 		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
@@ -116,7 +134,7 @@ func TestPopoInstallationResponseNeverExposesStoredCredential(t *testing.T) {
 	}
 
 	got := popoInstallationToResponse(row)
-	if got.RobotID != "default" || got.WebhookURL != "http://127.0.0.1:28792" {
+	if got.RobotID != "default" || got.BridgeID != "55555555-5555-5555-5555-555555555555" {
 		t.Fatalf("public identity = %+v", got)
 	}
 	payload, err := json.Marshal(got)

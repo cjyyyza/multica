@@ -202,10 +202,9 @@ services:
       # for a debugging session and unset it when that session ends, because
       # what it records is user message content.
       MULTICA_WECOM_TRACE: ${MULTICA_WECOM_TRACE:-}
-      # POPO Open / dj01bot. Encrypts the optional loopback webhook token
-      # at rest. The API never calls POPO or dj01bot; unset disables the
-      # integration. Delivery is Windows-local via `multica popo gateway`.
-      MULTICA_POPO_SECRET_KEY: ${MULTICA_POPO_SECRET_KEY:-}
+      # POPO Open / dj01bot Windows bridge. Set to true to enable pairing
+      # and inbound. The API never calls POPO or dj01bot.
+      MULTICA_POPO_ENABLED: ${MULTICA_POPO_ENABLED:-}
     restart: unless-stopped
 
   frontend:

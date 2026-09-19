@@ -1133,42 +1133,37 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		slog.Info("telegram integration disabled (MULTICA_TELEGRAM_SECRET_KEY not set)")
 	}
 
-	// POPO Open / dj01bot. Install is Telegram-style BYO (robot id +
-	// loopback webhook URL). Transport is Windows-local: the API never
-	// opens POPO, popo-cli, or dj01bot. Gated by MULTICA_POPO_SECRET_KEY.
-	if popoKey, err := secretbox.LoadKey("MULTICA_POPO_SECRET_KEY"); err == nil {
-		box, err := secretbox.New(popoKey)
-		if err != nil {
-			slog.Error("popo: secretbox.New failed; popo integration disabled", "error", err)
+	// POPO Open / dj01bot. Transport is a workspace-scoped Windows bridge:
+	// the API never opens POPO, popo-cli, or dj01bot. Gated by
+	// MULTICA_POPO_ENABLED=true.
+	if strings.TrimSpace(os.Getenv("MULTICA_POPO_ENABLED")) == "true" {
+		popoBridge := popo.NewBridgeService(queries, pool)
+		h.PopoBridge = popoBridge
+		popoBindingSvc := popo.NewBindingTokenService(queries, pool)
+		h.PopoBindingTokens = popoBindingSvc
+		popoReplier := popo.NewOutboundReplier(popo.OutboundReplierConfig{
+			Binding: popoBindingSvc,
+			Queue:   popoBridge,
+			AppURL:  appURLFromEnv(),
+			Logger:  slog.Default(),
+		})
+		channelRouter.Register(popo.TypePopo, popo.NewPopoResolverSet(queries, pool, popoReplier))
+		popoOutbound := popo.NewOutbound(queries, popoBridge, slog.Default())
+		popoOutbound.Register(bus)
+		popo.RegisterPopo(channelRegistry, popo.ChannelDeps{
+			Queue:  popoBridge,
+			Lookup: queries,
+			Logger: slog.Default(),
+		})
+		installSvc, ierr := popo.NewInstallService(queries, pool)
+		if ierr != nil {
+			slog.Error("popo: InstallService init failed; install disabled", "error", ierr)
 		} else {
-			popoQueue := popo.NewQueue(queries)
-			h.PopoQueue = popoQueue
-			popoBindingSvc := popo.NewBindingTokenService(queries, pool)
-			h.PopoBindingTokens = popoBindingSvc
-			popoReplier := popo.NewOutboundReplier(popo.OutboundReplierConfig{
-				Binding: popoBindingSvc,
-				Queue:   popoQueue,
-				AppURL:  appURLFromEnv(),
-				Logger:  slog.Default(),
-			})
-			channelRouter.Register(popo.TypePopo, popo.NewPopoResolverSet(queries, pool, popoReplier))
-			popoOutbound := popo.NewOutbound(queries, popoQueue, slog.Default())
-			popoOutbound.Register(bus)
-			popo.RegisterPopo(channelRegistry, popo.ChannelDeps{
-				Queue:  popoQueue,
-				Lookup: queries,
-				Logger: slog.Default(),
-			})
-			installSvc, ierr := popo.NewInstallService(queries, pool, box)
-			if ierr != nil {
-				slog.Error("popo: InstallService init failed; install disabled", "error", ierr)
-			} else {
-				h.PopoInstall = installSvc
-			}
-			slog.Info("popo integration enabled (Windows-local dj01bot gateway)")
+			h.PopoInstall = installSvc
 		}
+		slog.Info("popo integration enabled (Windows bridge)")
 	} else {
-		slog.Info("popo integration disabled (MULTICA_POPO_SECRET_KEY not set)")
+		slog.Info("popo integration disabled (MULTICA_POPO_ENABLED is not true)")
 	}
 
 	// Composio integration (MUL-3720). Gated by COMPOSIO_API_KEY plus the
@@ -1455,6 +1450,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// purpose: the bearer token in the URL path IS the credential. Workspace
 	// context is derived from the trigger row, never from request headers.
 	r.Post("/api/webhooks/autopilots/{token}", h.HandleAutopilotWebhook)
+	// POPO Windows bridge. Bearer is a workspace-scoped bridge token, not a
+	// user JWT. Register consumes a one-time pairing code instead.
+	r.Route("/api/popo/bridge", func(r chi.Router) {
+		r.Post("/register", h.RegisterPopoBridge)
+		r.Post("/heartbeat", h.PopoBridgeHeartbeat)
+		r.Post("/inbound", h.IngestPopoBridgeInbound)
+		r.Get("/commands", h.ListPopoBridgeCommands)
+		r.Post("/commands/{id}/receipt", h.AckPopoBridgeCommand)
+	})
 	// GitHub App webhook (no Multica auth — requests are authenticated via
 	// HMAC-SHA256 signature in the handler) and post-install setup callback.
 	r.Post("/api/webhooks/github", h.HandleGitHubWebhook)
@@ -1800,21 +1804,22 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/telegram/install", h.RegisterTelegramBot)
 				})
 
-				// POPO / dj01bot. Listing is member-visible; install +
-				// revoke are admin-only. Inbound + outbound poll/ack are
-				// member-visible so the Windows CLI can run as a
-				// workspace member without cloud-side POPO access.
+				// POPO / dj01bot. Listing is member-visible. Install and
+				// revoke use canManageAgent (agent owner or workspace
+				// owner/admin). Pairing mint and bridge revoke are
+				// owner/admin only. Windows uses /api/popo/bridge/*, not
+				// these member routes.
 				r.Group(func(r chi.Router) {
 					r.Use(middleware.RequireWorkspaceMemberFromURL(queries, "id"))
 					r.Get("/popo/installations", h.ListPopoInstallations)
-					r.Post("/popo/inbound", h.IngestPopoEvent)
-					r.Get("/popo/outbound", h.ListPopoOutbound)
-					r.Post("/popo/outbound-ack", h.AckPopoOutbound)
+					r.Get("/popo/bridges", h.ListPopoBridges)
+					r.Post("/popo/install", h.RegisterPopoBot)
+					r.Delete("/popo/installations/{installationId}", h.RevokePopoInstallation)
 				})
 				r.Group(func(r chi.Router) {
 					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
-					r.Delete("/popo/installations/{installationId}", h.RevokePopoInstallation)
-					r.Post("/popo/install", h.RegisterPopoBot)
+					r.Post("/popo/bridge-pairings", h.CreatePopoBridgePairing)
+					r.Delete("/popo/bridges/{bridgeId}", h.RevokePopoBridge)
 				})
 			})
 		})

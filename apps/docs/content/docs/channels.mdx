@@ -31,7 +31,7 @@ WeCom handles text messages today. Voice, image, and file messages get a short r
 
 Telegram handles text messages today. Unsupported media gets a short reply explaining that, and is not passed to the agent.
 
-POPO handles text messages today through a Windows-local dj01bot gateway. The API server never opens POPO or dj01bot.
+POPO handles text messages today through a Windows dj01bot bridge. The API server never opens POPO or dj01bot.
 
 Step-by-step guides:
 
@@ -114,5 +114,5 @@ In every mode, a reply produced while *no* replica holds a live connection (all 
 - [Slack Bot integration](/slack-bot-integration) — create a Slack app and paste its tokens into Multica.
 - [DingTalk Bot integration](/dingtalk-bot-integration) — create a Stream-mode robot and paste its credentials into Multica.
 - [Telegram Bot integration](/telegram-bot-integration) — create a Bot with @BotFather and paste its token into Multica.
-- [POPO Bot integration](/popo-bot-integration) — connect a Windows dj01bot robot and keep `multica popo gateway` running.
+- [POPO Bot integration](/popo-bot-integration) — pair a Windows dj01bot bridge with `python -m nanobot.multica_bridge`.
 - [Chat](/chat) — the conversation and execution model behind every Bot.

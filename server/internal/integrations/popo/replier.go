@@ -133,13 +133,24 @@ func (r *OutboundReplier) post(ctx context.Context, inst engine.ResolvedInstalla
 		return errors.New("popo outbound queue not configured")
 	}
 	robotID := ""
+	var bridgeID pgtype.UUID
 	if row, ok := inst.Platform.(db.ChannelInstallation); ok {
-		robotID = DecodePublicConfig(row.Config).RobotID
+		info := DecodePublicConfig(row.Config)
+		robotID = info.RobotID
+		if parsed, err := util.ParseUUID(info.BridgeID); err == nil {
+			bridgeID = parsed
+		}
+	}
+	chatType := string(msg.Source.ChatType)
+	if chatType == "" {
+		chatType = string(channel.ChatTypeP2P)
 	}
 	return r.queue.Enqueue(ctx, OutboundItem{
 		WorkspaceID:    inst.WorkspaceID,
 		InstallationID: inst.ID,
+		BridgeID:       bridgeID,
 		ChatID:         msg.Source.ChatID,
+		ChatType:       chatType,
 		RobotID:        robotID,
 		Content:        text,
 	})

@@ -317,6 +317,15 @@ var concurrentIndexCleanups = map[string]string{
 	"482_agent_task_queue_telemetry_started_index":              "idx_agent_task_queue_telemetry_started",
 	"484_issue_triage_state_index":                              "idx_issue_triage_state",
 	"503_popo_outbound_queue_workspace_index":                   "idx_popo_outbound_queue_workspace_pending",
+	"505_popo_bridge_pairing_code_hash_index":                   "idx_popo_bridge_pairing_code_hash",
+	"506_popo_bridge_pairing_workspace_index":                   "idx_popo_bridge_pairing_workspace",
+	"508_popo_bridge_token_hash_index":                          "idx_popo_bridge_token_hash",
+	"509_popo_bridge_workspace_index":                           "idx_popo_bridge_workspace",
+	"511_popo_bridge_command_delivery_id_index":                 "idx_popo_bridge_command_delivery_id",
+	"512_popo_bridge_command_lease_index":                       "idx_popo_bridge_command_lease",
+	"513_popo_bridge_command_workspace_index":                   "idx_popo_bridge_command_workspace",
+	"515_popo_inbound_event_unique_index":                       "idx_popo_inbound_event_install_event",
+	"516_popo_inbound_event_workspace_index":                    "idx_popo_inbound_event_workspace",
 }
 
 // concurrentDownIndexCleanups covers every migration whose down direction

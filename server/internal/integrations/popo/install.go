@@ -2,26 +2,24 @@ package popo
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
-	"github.com/multica-ai/multica/server/internal/util/secretbox"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 var (
 	ErrInstallationNotFound       = errors.New("popo installation not found")
 	ErrInvalidRobotID             = errors.New("popo: robot_id is required")
-	ErrInvalidWebhookURL          = errors.New("popo: webhook_url must be an http(s) URL")
-	ErrWebhookNotLoopback         = errors.New("popo: webhook_url must be a loopback address; the server never calls dj01bot")
 	ErrBotOwnedByAnotherWorkspace = errors.New("popo: this robot is already connected to a different Multica workspace")
 	ErrBotOwnedBySameWorkspace    = errors.New("popo: this robot is already connected to another agent in this workspace")
 	ErrBotOwnedByArchivedAgent    = errors.New("popo: this robot is connected to an archived agent in this workspace")
@@ -34,9 +32,11 @@ type installQueries interface {
 	UpsertChannelInstallation(ctx context.Context, arg db.UpsertChannelInstallationParams) (db.ChannelInstallation, error)
 	ReclaimDeadChannelInstallationByAppID(ctx context.Context, arg db.ReclaimDeadChannelInstallationByAppIDParams) (pgtype.UUID, error)
 	GetChannelInstallationOwnerByAppID(ctx context.Context, arg db.GetChannelInstallationOwnerByAppIDParams) (db.GetChannelInstallationOwnerByAppIDRow, error)
+	GetChannelInstallationByAppID(ctx context.Context, arg db.GetChannelInstallationByAppIDParams) (db.ChannelInstallation, error)
 	ListChannelInstallationsByWorkspace(ctx context.Context, arg db.ListChannelInstallationsByWorkspaceParams) ([]db.ChannelInstallation, error)
 	GetChannelInstallationInWorkspace(ctx context.Context, arg db.GetChannelInstallationInWorkspaceParams) (db.ChannelInstallation, error)
 	SetChannelInstallationStatus(ctx context.Context, arg db.SetChannelInstallationStatusParams) error
+	GetPopoBridgeInWorkspace(ctx context.Context, arg db.GetPopoBridgeInWorkspaceParams) (db.PopoBridge, error)
 }
 
 type dbInstallQueries struct{ *db.Queries }
@@ -45,60 +45,74 @@ func (q dbInstallQueries) WithTx(tx pgx.Tx) installQueries {
 	return dbInstallQueries{q.Queries.WithTx(tx)}
 }
 
-// InstallService owns at-rest encryption of the optional webhook token.
-// The box MUST be non-nil. Register does not call dj01bot.
 type InstallService struct {
-	box *secretbox.Box
 	q   installQueries
 	tx  engine.TxStarter
+	now func() time.Time
 }
 
-func NewInstallService(q *db.Queries, tx engine.TxStarter, box *secretbox.Box) (*InstallService, error) {
+func NewInstallService(q *db.Queries, tx engine.TxStarter) (*InstallService, error) {
 	if q == nil {
 		return nil, errors.New("popo: InstallService requires queries")
 	}
-	return newInstallService(dbInstallQueries{q}, tx, box)
+	return newInstallService(dbInstallQueries{q}, tx)
 }
 
-func newInstallService(q installQueries, tx engine.TxStarter, box *secretbox.Box) (*InstallService, error) {
-	if box == nil {
-		return nil, errors.New("popo: InstallService requires a non-nil secretbox.Box")
-	}
+func newInstallService(q installQueries, tx engine.TxStarter) (*InstallService, error) {
 	if q == nil {
 		return nil, errors.New("popo: InstallService requires queries")
 	}
 	if tx == nil {
 		return nil, errors.New("popo: InstallService requires a tx starter")
 	}
-	return &InstallService{box: box, q: q, tx: tx}, nil
+	return &InstallService{q: q, tx: tx, now: time.Now}, nil
 }
 
 type RegisterParams struct {
-	WorkspaceID  pgtype.UUID
-	AgentID      pgtype.UUID
-	InitiatorID  pgtype.UUID
-	RobotID      string
-	RobotName    string
-	WebhookURL   string
-	WebhookToken string
+	WorkspaceID pgtype.UUID
+	AgentID     pgtype.UUID
+	InitiatorID pgtype.UUID
+	BridgeID    pgtype.UUID
+	RobotID     string
+	RobotName   string
 }
 
 func (s *InstallService) Register(ctx context.Context, p RegisterParams) (db.ChannelInstallation, error) {
+	if !p.BridgeID.Valid {
+		return db.ChannelInstallation{}, ErrInvalidBridgeID
+	}
 	robotID, err := normalizeRobotID(p.RobotID)
 	if err != nil {
 		return db.ChannelInstallation{}, err
 	}
-	webhookURL, err := normalizeWebhookURL(p.WebhookURL)
+	bridge, err := s.q.GetPopoBridgeInWorkspace(ctx, db.GetPopoBridgeInWorkspaceParams{
+		ID:          p.BridgeID,
+		WorkspaceID: p.WorkspaceID,
+	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.ChannelInstallation{}, ErrBridgeNotFound
+		}
 		return db.ChannelInstallation{}, err
 	}
-	cfg := installConfig{AppID: robotID, RobotName: p.RobotName, WebhookURL: webhookURL}
-	if token := strings.TrimSpace(p.WebhookToken); token != "" {
-		sealed, err := s.box.Seal([]byte(token))
-		if err != nil {
-			return db.ChannelInstallation{}, fmt.Errorf("encrypt popo webhook token: %w", err)
-		}
-		cfg.WebhookTokenEncrypted = base64.StdEncoding.EncodeToString(sealed)
+	if bridge.Status != BridgeStatusActive {
+		return db.ChannelInstallation{}, ErrBridgeRevoked
+	}
+	liveOwner, _ := s.q.GetChannelInstallationByAppID(ctx, db.GetChannelInstallationByAppIDParams{
+		ChannelType: string(TypePopo),
+		AppID:       robotID,
+	})
+	var liveOwnerAgent pgtype.UUID
+	if liveOwner.Status == "active" && liveOwner.WorkspaceID == p.WorkspaceID {
+		liveOwnerAgent = liveOwner.AgentID
+	}
+	if err := robotIdleOnHeartbeat(bridge, robotID, p.AgentID, liveOwnerAgent, s.now()); err != nil {
+		return db.ChannelInstallation{}, err
+	}
+	cfg := installConfig{
+		AppID:     robotID,
+		RobotName: strings.TrimSpace(p.RobotName),
+		BridgeID:  util.UUIDToString(p.BridgeID),
 	}
 	cfgJSON, err := json.Marshal(cfg)
 	if err != nil {
@@ -203,21 +217,4 @@ func (s *InstallService) Revoke(ctx context.Context, id pgtype.UUID) error {
 		ID:     id,
 		Status: "revoked",
 	})
-}
-
-func (s *InstallService) ActiveInWorkspaceByRobot(ctx context.Context, wsID pgtype.UUID, robotID string) (db.ChannelInstallation, error) {
-	robotID, err := normalizeRobotID(robotID)
-	if err != nil {
-		return db.ChannelInstallation{}, err
-	}
-	rows, err := s.ListByWorkspace(ctx, wsID)
-	if err != nil {
-		return db.ChannelInstallation{}, err
-	}
-	for _, row := range rows {
-		if row.Status == "active" && DecodePublicConfig(row.Config).RobotID == robotID {
-			return row, nil
-		}
-	}
-	return db.ChannelInstallation{}, ErrInstallationNotFound
 }

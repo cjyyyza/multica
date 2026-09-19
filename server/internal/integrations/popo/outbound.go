@@ -10,13 +10,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// Outbound enqueues the agent's final chat reply for the Windows CLI.
-// No streaming cards — dj01bot /outbound is text.
+// Outbound enqueues the agent's final chat reply as a bridge send command.
 type Outbound struct {
 	q      outboundQueries
 	queue  Enqueuer
@@ -73,11 +73,18 @@ func (o *Outbound) handleChatDone(e events.Event) {
 			chatID = cfg.ChatID
 		}
 	}
+	info := DecodePublicConfig(inst.Config)
+	var bridgeID pgtype.UUID
+	if parsed, err := util.ParseUUID(info.BridgeID); err == nil {
+		bridgeID = parsed
+	}
 	if err := o.queue.Enqueue(ctx, OutboundItem{
 		WorkspaceID:    inst.WorkspaceID,
 		InstallationID: inst.ID,
+		BridgeID:       bridgeID,
 		ChatID:         chatID,
-		RobotID:        DecodePublicConfig(inst.Config).RobotID,
+		ChatType:       string(channel.ChatTypeP2P),
+		RobotID:        info.RobotID,
 		Content:        content,
 	}); err != nil {
 		o.logger.WarnContext(ctx, "popo outbound: enqueue failed",

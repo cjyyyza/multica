@@ -1194,6 +1194,59 @@ type PluginStorage struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
+type PopoBridge struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	TokenHash       string             `json:"token_hash"`
+	Hostname        string             `json:"hostname"`
+	Status          string             `json:"status"`
+	LastHeartbeatAt pgtype.Timestamptz `json:"last_heartbeat_at"`
+	RobotsJson      []byte             `json:"robots_json"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	RevokedAt       pgtype.Timestamptz `json:"revoked_at"`
+	RevokedBy       pgtype.UUID        `json:"revoked_by"`
+}
+
+type PopoBridgeCommand struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	BridgeID        pgtype.UUID        `json:"bridge_id"`
+	InstallationID  pgtype.UUID        `json:"installation_id"`
+	Type            string             `json:"type"`
+	DeliveryID      pgtype.UUID        `json:"delivery_id"`
+	Payload         []byte             `json:"payload"`
+	Status          string             `json:"status"`
+	LeaseExpiresAt  pgtype.Timestamptz `json:"lease_expires_at"`
+	RemoteMessageID pgtype.Text        `json:"remote_message_id"`
+	LastError       pgtype.Text        `json:"last_error"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PopoBridgePairing struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	CodeHash    string             `json:"code_hash"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	Hostname    string             `json:"hostname"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt  pgtype.Timestamptz `json:"consumed_at"`
+	BridgeID    pgtype.UUID        `json:"bridge_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type PopoInboundEvent struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	BridgeID       pgtype.UUID        `json:"bridge_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	EventID        string             `json:"event_id"`
+	RobotID        string             `json:"robot_id"`
+	Accepted       bool               `json:"accepted"`
+	Duplicate      bool               `json:"duplicate"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
 type PopoOutboundQueue struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

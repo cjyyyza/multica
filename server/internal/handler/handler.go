@@ -357,14 +357,14 @@ type Handler struct {
 	TelegramOutbound *telegram.Outbound
 
 	// PopoInstall owns the POPO Open / dj01bot install lifecycle. Nil
-	// unless MULTICA_POPO_SECRET_KEY is set. The API never calls dj01bot.
+	// unless MULTICA_POPO_ENABLED=true. The API never calls dj01bot.
 	PopoInstall *popo.InstallService
 	// PopoBindingTokens mints/redeems the user-binding tokens behind the
 	// "link your POPO account" prompt. Nil unless POPO is configured.
 	PopoBindingTokens *popo.BindingTokenService
-	// PopoQueue stores agent replies for the Windows-local
-	// `multica popo gateway`. The API process never delivers them.
-	PopoQueue *popo.Queue
+	// PopoBridge owns pairing, Windows-bridge tokens, inbound persist,
+	// and the send-command queue. Nil unless POPO is configured.
+	PopoBridge *popo.BridgeService
 
 	// channelFileDelivery names the channel types that can, IN THIS
 	// DEPLOYMENT, carry a file the agent produced the last hop into the

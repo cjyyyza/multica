@@ -1,17 +1,16 @@
 ---
 title: POPO Bot
-description: Windows 上の dj01bot ゲートウェイ経由で Multica エージェントを POPO に接続します。
+description: Windows 上の dj01bot ブリッジ経由で Multica エージェントを POPO に接続します。
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-POPO の製品面は Feishu/Lark と同じ（IM チャネル + 共有エンジン）ですが、転送は Windows ローカルだけです。API サーバーやクラウド / Mac エージェントは POPO、popo-cli、dj01bot を開きません。
+POPO の製品面は Feishu/Lark と同じ（IM チャネル + 共有エンジン）です。Windows プロセスが POPO 接続を持ち、ワークスペース限定のブリッジ資格情報で Multica に接続します。API サーバーは POPO、popo-cli、dj01bot を開きません。
 
 手順の詳細は [英語版](/popo-bot-integration) と [中国語版](/zh/popo-bot-integration) を参照してください。
 
-1. この Windows で dj01bot を動かし、`gateway.webhook.enabled` をオンにします（既定ポート `28792`）。
-2. Multica の **エージェント → 統合 → POPO に接続** で robot id を登録します。空欄は `default` です。Webhook URL はループバックのみです。
-3. 同じマシンで `multica popo gateway` を起動したままにします。
-4. POPO Open の `callbackUrl` を `http://127.0.0.1:18681/api/popo_open` に向け、dj01bot の AgentLoop との二重返信を避けます。
+1. Multica でワンタイムのペアリングコードを発行します（owner/admin）。
+2. Windows で `python -m nanobot.multica_bridge pair` と `run` を実行します。
+3. オンラインの Windows ブリッジと空いているロボットをエージェントに接続します。
 
-サーバー側の鍵は `MULTICA_POPO_SECRET_KEY` です。`openssl rand -base64 32` で生成します。
+サーバー側のスイッチは `MULTICA_POPO_ENABLED=true` です。`multica popo gateway` は削除されました。

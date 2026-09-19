@@ -81,15 +81,36 @@ func TestNormalizeRobotIDDefaultsEmpty(t *testing.T) {
 	}
 }
 
-func TestNormalizeWebhookURLLoopbackOnly(t *testing.T) {
-	got, err := normalizeWebhookURL("")
-	if err != nil || got != defaultWebhookURL {
-		t.Fatalf("default = %q %v", got, err)
+func TestInboundFromBridgeP2PTextOnly(t *testing.T) {
+	msg, ok := inboundFromBridge("default", BridgeInbound{
+		EventID:        "evt-1",
+		RobotID:        "default",
+		Sender:         BridgeSender{ID: "alice@corp.netease.com", Name: "Alice"},
+		Chat:           BridgeChat{ID: "alice@corp.netease.com", Type: "p2p"},
+		AddressedToBot: true,
+		Text:           "hello",
+		CommandText:    "hello",
+	})
+	if !ok || msg.Source.ChatType != channel.ChatTypeP2P || msg.Text != "hello" {
+		t.Fatalf("p2p = ok=%v msg=%+v", ok, msg)
 	}
-	if _, err := normalizeWebhookURL("https://open.popo.netease.com"); err != ErrWebhookNotLoopback {
-		t.Fatalf("public url err = %v", err)
+
+	if _, ok := inboundFromBridge("default", BridgeInbound{
+		EventID:        "evt-2",
+		Sender:         BridgeSender{ID: "alice@corp.netease.com"},
+		Chat:           BridgeChat{ID: "group-1", Type: "group"},
+		AddressedToBot: true,
+		Text:           "hello",
+	}); ok {
+		t.Fatal("group chat must be rejected in P1")
 	}
-	if _, err := normalizeWebhookURL("http://127.0.0.1:28792"); err != nil {
-		t.Fatalf("loopback: %v", err)
+	if _, ok := inboundFromBridge("default", BridgeInbound{
+		EventID:        "evt-3",
+		Sender:         BridgeSender{ID: "alice@corp.netease.com"},
+		Chat:           BridgeChat{ID: "alice@corp.netease.com", Type: "p2p"},
+		AddressedToBot: false,
+		Text:           "hello",
+	}); ok {
+		t.Fatal("unaddressed p2p must be rejected in P1")
 	}
 }

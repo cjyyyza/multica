@@ -20,6 +20,7 @@ type PopoInstallationResponse struct {
 	AgentID         string `json:"agent_id"`
 	RobotID         string `json:"robot_id"`
 	RobotName       string `json:"robot_name"`
+	BridgeID        string `json:"bridge_id"`
 	WebhookURL      string `json:"webhook_url"`
 	InstallerUserID string `json:"installer_user_id"`
 	Status          string `json:"status"`
@@ -36,6 +37,7 @@ func popoInstallationToResponse(row db.ChannelInstallation) PopoInstallationResp
 		AgentID:         uuidToString(row.AgentID),
 		RobotID:         info.RobotID,
 		RobotName:       info.RobotName,
+		BridgeID:        info.BridgeID,
 		WebhookURL:      info.WebhookURL,
 		InstallerUserID: uuidToString(row.InstallerUserID),
 		Status:          row.Status,
@@ -75,10 +77,9 @@ func (h *Handler) ListPopoInstallations(w http.ResponseWriter, r *http.Request) 
 }
 
 type RegisterPopoRequest struct {
-	RobotID      string `json:"robot_id"`
-	RobotName    string `json:"robot_name"`
-	WebhookURL   string `json:"webhook_url"`
-	WebhookToken string `json:"webhook_token"`
+	BridgeID  string `json:"bridge_id"`
+	RobotID   string `json:"robot_id"`
+	RobotName string `json:"robot_name"`
 }
 
 func (h *Handler) RegisterPopoBot(w http.ResponseWriter, r *http.Request) {
@@ -103,11 +104,15 @@ func (h *Handler) RegisterPopoBot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
+	agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
 		ID:          agentUUID,
 		WorkspaceID: wsUUID,
-	}); err != nil {
+	})
+	if err != nil {
 		writeError(w, http.StatusNotFound, "agent not found in this workspace")
+		return
+	}
+	if !h.canManageAgent(w, r, agent) {
 		return
 	}
 	initiatorUUID, ok := parseUUIDOrBadRequest(w, userID, "user id")
@@ -119,23 +124,30 @@ func (h *Handler) RegisterPopoBot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	bridgeUUID, ok := parseUUIDOrBadRequest(w, body.BridgeID, "bridge_id")
+	if !ok {
+		return
+	}
 	row, err := h.PopoInstall.Register(r.Context(), popo.RegisterParams{
-		WorkspaceID:  wsUUID,
-		AgentID:      agentUUID,
-		InitiatorID:  initiatorUUID,
-		RobotID:      body.RobotID,
-		RobotName:    body.RobotName,
-		WebhookURL:   body.WebhookURL,
-		WebhookToken: body.WebhookToken,
+		WorkspaceID: wsUUID,
+		AgentID:     agentUUID,
+		InitiatorID: initiatorUUID,
+		BridgeID:    bridgeUUID,
+		RobotID:     body.RobotID,
+		RobotName:   body.RobotName,
 	})
 	if err != nil {
 		switch {
-		case errors.Is(err, popo.ErrInvalidRobotID):
-			writeError(w, http.StatusBadRequest, "robot_id is required")
-		case errors.Is(err, popo.ErrInvalidWebhookURL):
-			writeError(w, http.StatusBadRequest, "webhook_url must be an http(s) URL")
-		case errors.Is(err, popo.ErrWebhookNotLoopback):
-			writeError(w, http.StatusBadRequest, "webhook_url must be a loopback address; the server never calls dj01bot")
+		case errors.Is(err, popo.ErrInvalidRobotID), errors.Is(err, popo.ErrInvalidBridgeID):
+			writeError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, popo.ErrBridgeNotFound):
+			writeError(w, http.StatusBadRequest, "bridge not found in this workspace")
+		case errors.Is(err, popo.ErrBridgeRevoked):
+			writeError(w, http.StatusBadRequest, "bridge has been revoked")
+		case errors.Is(err, popo.ErrRobotNotIdle):
+			writeError(w, http.StatusConflict, "this POPO robot is not idle on a recent heartbeat")
+		case errors.Is(err, popo.ErrRobotOccupied):
+			writeError(w, http.StatusConflict, "this POPO robot is occupied")
 		case errors.Is(err, popo.ErrBotOwnedBySameWorkspace):
 			writeError(w, http.StatusConflict, "this POPO robot is already connected to another agent in this workspace — disconnect it there first")
 		case errors.Is(err, popo.ErrBotOwnedByArchivedAgent):
@@ -170,12 +182,24 @@ func (h *Handler) RevokePopoInstallation(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	if _, err := h.PopoInstall.GetInWorkspace(r.Context(), instUUID, wsUUID); err != nil {
+	inst, err := h.PopoInstall.GetInWorkspace(r.Context(), instUUID, wsUUID)
+	if err != nil {
 		if errors.Is(err, popo.ErrInstallationNotFound) {
 			writeError(w, http.StatusNotFound, "popo installation not found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to load installation")
+		return
+	}
+	agent, agentErr := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
+		ID:          inst.AgentID,
+		WorkspaceID: wsUUID,
+	})
+	if agentErr != nil {
+		if _, ok := h.requireWorkspaceRole(w, r, uuidToString(wsUUID), "popo installation not found", "owner", "admin"); !ok {
+			return
+		}
+	} else if !h.canManageAgent(w, r, agent) {
 		return
 	}
 	if err := h.PopoInstall.Revoke(r.Context(), instUUID); err != nil {
@@ -233,115 +257,4 @@ func (h *Handler) RedeemPopoBindingToken(w http.ResponseWriter, r *http.Request)
 		"installation_id": uuidToString(redeemed.InstallationID),
 		"popo_user_id":    redeemed.PopoUserID,
 	})
-}
-
-type ingestPopoRequest struct {
-	RobotID string          `json:"robot_id"`
-	Event   json.RawMessage `json:"event"`
-}
-
-func (h *Handler) IngestPopoEvent(w http.ResponseWriter, r *http.Request) {
-	if h.PopoInstall == nil || h.ChannelRouter == nil {
-		writeFeatureDisabled(w, "popo_not_configured", "popo integration not configured")
-		return
-	}
-	wsUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "workspace id")
-	if !ok {
-		return
-	}
-	var body ingestPopoRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	robotID := strings.TrimSpace(body.RobotID)
-	if _, err := h.PopoInstall.ActiveInWorkspaceByRobot(r.Context(), wsUUID, robotID); err != nil {
-		if errors.Is(err, popo.ErrInstallationNotFound) {
-			writeError(w, http.StatusNotFound, "popo installation not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to load popo installations")
-		return
-	}
-	if robotID == "" {
-		robotID = "default"
-	}
-	msg, ok := popo.InboundFromOpenEvent(robotID, body.Event)
-	if !ok {
-		writeJSON(w, http.StatusOK, map[string]any{"accepted": false})
-		return
-	}
-	if err := h.ChannelRouter.Handle(r.Context(), msg); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to ingest popo event")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"accepted": true})
-}
-
-func (h *Handler) ListPopoOutbound(w http.ResponseWriter, r *http.Request) {
-	if h.PopoQueue == nil {
-		writeFeatureDisabled(w, "popo_not_configured", "popo integration not configured")
-		return
-	}
-	wsUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "workspace id")
-	if !ok {
-		return
-	}
-	rows, err := h.PopoQueue.ListPending(r.Context(), wsUUID, 50)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list popo outbound")
-		return
-	}
-	items := make([]map[string]string, 0, len(rows))
-	for _, row := range rows {
-		items = append(items, map[string]string{
-			"id":              uuidToString(row.ID),
-			"installation_id": uuidToString(row.InstallationID),
-			"chat_id":         row.ChatID,
-			"robot_id":        row.RobotID,
-			"content":         row.Content,
-		})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
-}
-
-type ackPopoOutboundRequest struct {
-	Results []struct {
-		ID    string `json:"id"`
-		Error string `json:"error"`
-	} `json:"results"`
-}
-
-func (h *Handler) AckPopoOutbound(w http.ResponseWriter, r *http.Request) {
-	if h.PopoQueue == nil {
-		writeFeatureDisabled(w, "popo_not_configured", "popo integration not configured")
-		return
-	}
-	wsUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "workspace id")
-	if !ok {
-		return
-	}
-	var body ackPopoOutboundRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	for _, result := range body.Results {
-		id, ok := parseUUIDOrBadRequest(w, result.ID, "id")
-		if !ok {
-			return
-		}
-		if strings.TrimSpace(result.Error) != "" {
-			if err := h.PopoQueue.Fail(r.Context(), id, wsUUID, result.Error); err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to record outbound error")
-				return
-			}
-			continue
-		}
-		if err := h.PopoQueue.Ack(r.Context(), id, wsUUID); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to ack outbound")
-			return
-		}
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
