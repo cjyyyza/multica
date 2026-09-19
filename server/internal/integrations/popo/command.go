@@ -68,6 +68,12 @@ func (s *BridgeService) Enqueue(ctx context.Context, item OutboundItem) error {
 		ChatType:         chatType,
 		Text:             content,
 		ReplyToMessageID: replyTo,
+		IssueID:          uuidString(item.IssueID),
+		CommentID:        uuidString(item.CommentID),
+		TaskID:           uuidString(item.TaskID),
+		BindingID:        uuidString(item.BindingID),
+		RouteRevision:    item.RouteRevision,
+		OutboundKind:     strings.TrimSpace(item.OutboundKind),
 	})
 	if err != nil {
 		return fmt.Errorf("encode send payload: %w", err)
@@ -171,7 +177,49 @@ func (s *BridgeService) RecordReceipt(ctx context.Context, commandID, bridgeID p
 	if err != nil {
 		return db.PopoBridgeCommand{}, err
 	}
+	if status == CommandStatusDelivered {
+		s.recordOutboundLedger(ctx, updated, remoteID)
+	}
 	return updated, nil
+}
+
+func (s *BridgeService) recordOutboundLedger(ctx context.Context, row db.PopoBridgeCommand, remoteID string) {
+	if s.q == nil || remoteID == "" || !row.InstallationID.Valid {
+		return
+	}
+	var payload SendPayload
+	if err := json.Unmarshal(row.Payload, &payload); err != nil {
+		return
+	}
+	kind := strings.TrimSpace(payload.OutboundKind)
+	if kind == "" {
+		kind = "send"
+	}
+	bindingID, _ := util.ParseUUID(payload.BindingID)
+	if !bindingID.Valid {
+		return
+	}
+	issueID, _ := util.ParseUUID(payload.IssueID)
+	commentID, _ := util.ParseUUID(payload.CommentID)
+	taskID, _ := util.ParseUUID(payload.TaskID)
+	_ = s.q.RecordChannelOutboundMessage(ctx, db.RecordChannelOutboundMessageParams{
+		OutboundInstallationID: row.InstallationID,
+		OutboundChannelType:    string(TypePopo),
+		OutboundMessageID:      remoteID,
+		OutboundBindingID:      bindingID,
+		OutboundRouteRevision:  payload.RouteRevision,
+		OutboundTaskID:         taskID,
+		OutboundKind:           kind,
+		OutboundIssueID:        issueID,
+		OutboundCommentID:      commentID,
+	})
+}
+
+func uuidString(id pgtype.UUID) string {
+	if !id.Valid {
+		return ""
+	}
+	return util.UUIDToString(id)
 }
 
 func receiptMatches(row db.PopoBridgeCommand, status, remoteID string) bool {

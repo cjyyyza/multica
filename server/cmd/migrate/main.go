@@ -326,6 +326,13 @@ var concurrentIndexCleanups = map[string]string{
 	"513_popo_bridge_command_workspace_index":                   "idx_popo_bridge_command_workspace",
 	"515_popo_inbound_event_unique_index":                       "idx_popo_inbound_event_install_event",
 	"516_popo_inbound_event_workspace_index":                    "idx_popo_inbound_event_workspace",
+	"518_channel_outbound_message_issue_index":                  "idx_channel_outbound_message_issue",
+	"519_channel_outbound_message_comment_index":                "idx_channel_outbound_message_comment",
+	"521_channel_issue_source_issue_index":                      "idx_channel_issue_source_issue",
+	"522_channel_issue_source_workspace_index":                  "idx_channel_issue_source_workspace",
+	"524_channel_inbound_write_unique":                          "idx_channel_inbound_write_message",
+	"525_channel_inbound_write_workspace_index":                 "idx_channel_inbound_write_workspace",
+	"526_channel_inbound_write_comment_index":                   "idx_channel_inbound_write_comment",
 }
 
 // concurrentDownIndexCleanups covers every migration whose down direction

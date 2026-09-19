@@ -26,6 +26,11 @@ type Outbound struct {
 type outboundQueries interface {
 	GetChannelTaskDelivery(ctx context.Context, taskID pgtype.UUID) (db.ChannelTaskDelivery, error)
 	GetChannelInstallation(ctx context.Context, arg db.GetChannelInstallationParams) (db.ChannelInstallation, error)
+	GetChannelIssueSourceByIssue(ctx context.Context, issueID pgtype.UUID) (db.ChannelIssueSource, error)
+	GetChannelInboundWriteByComment(ctx context.Context, commentID pgtype.UUID) (db.ChannelInboundWrite, error)
+	GetAgentTask(ctx context.Context, id pgtype.UUID) (db.AgentTaskQueue, error)
+	GetIssue(ctx context.Context, id pgtype.UUID) (db.Issue, error)
+	GetWorkspace(ctx context.Context, id pgtype.UUID) (db.Workspace, error)
 }
 
 func NewOutbound(q *db.Queries, queue Enqueuer, logger *slog.Logger) *Outbound {
@@ -37,6 +42,10 @@ func NewOutbound(q *db.Queries, queue Enqueuer, logger *slog.Logger) *Outbound {
 
 func (o *Outbound) Register(bus *events.Bus) {
 	bus.Subscribe(protocol.EventChatDone, o.handleChatDone)
+	bus.Subscribe(protocol.EventCommentCreated, o.handleCommentCreated)
+	bus.Subscribe(protocol.EventTaskFailed, o.handleTaskTerminal)
+	bus.Subscribe(protocol.EventTaskCancelled, o.handleTaskTerminal)
+	bus.Subscribe(protocol.EventIssueUpdated, o.handleIssueUpdated)
 }
 
 func (o *Outbound) handleChatDone(e events.Event) {
@@ -78,6 +87,7 @@ func (o *Outbound) handleChatDone(e events.Event) {
 	if parsed, err := util.ParseUUID(info.BridgeID); err == nil {
 		bridgeID = parsed
 	}
+	task, _ := o.q.GetAgentTask(ctx, taskID)
 	if err := o.queue.Enqueue(ctx, OutboundItem{
 		WorkspaceID:    inst.WorkspaceID,
 		InstallationID: inst.ID,
@@ -86,6 +96,11 @@ func (o *Outbound) handleChatDone(e events.Event) {
 		ChatType:       string(channel.ChatTypeP2P),
 		RobotID:        info.RobotID,
 		Content:        content,
+		IssueID:        task.IssueID,
+		TaskID:         taskID,
+		BindingID:      delivery.BindingID,
+		RouteRevision:  delivery.RouteRevision,
+		OutboundKind:   "task_reply",
 	}); err != nil {
 		o.logger.WarnContext(ctx, "popo outbound: enqueue failed",
 			"installation_id", util.UUIDToString(inst.ID), "error", err)

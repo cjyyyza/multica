@@ -386,6 +386,19 @@ type ChannelInboundMessageDedup struct {
 	ClaimToken     pgtype.UUID        `json:"claim_token"`
 }
 
+type ChannelInboundWrite struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	ChannelType    string             `json:"channel_type"`
+	MessageID      string             `json:"message_id"`
+	Kind           string             `json:"kind"`
+	IssueID        pgtype.UUID        `json:"issue_id"`
+	CommentID      pgtype.UUID        `json:"comment_id"`
+	TaskID         pgtype.UUID        `json:"task_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
 type ChannelInstallation struct {
 	ID               pgtype.UUID        `json:"id"`
 	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
@@ -399,6 +412,19 @@ type ChannelInstallation struct {
 	InstalledAt      pgtype.Timestamptz `json:"installed_at"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ChannelIssueSource struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	IssueID        pgtype.UUID        `json:"issue_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	ChannelType    string             `json:"channel_type"`
+	ChannelChatID  string             `json:"channel_chat_id"`
+	ChatType       string             `json:"chat_type"`
+	BindingID      pgtype.UUID        `json:"binding_id"`
+	RouteRevision  int64              `json:"route_revision"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
 type ChannelMediaPendingObject struct {
@@ -438,6 +464,8 @@ type ChannelOutboundMessage struct {
 	TaskID           pgtype.UUID        `json:"task_id"`
 	OutboundKind     string             `json:"outbound_kind"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	IssueID          pgtype.UUID        `json:"issue_id"`
+	CommentID        pgtype.UUID        `json:"comment_id"`
 }
 
 type ChannelTaskDelivery struct {

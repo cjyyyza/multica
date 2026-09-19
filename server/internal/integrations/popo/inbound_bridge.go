@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -40,6 +41,37 @@ type BridgeChat struct {
 
 type BridgeQuote struct {
 	MessageID string `json:"message_id"`
+}
+
+func (q *BridgeQuote) UnmarshalJSON(data []byte) error {
+	if q == nil {
+		return nil
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	q.MessageID = firstNonEmpty(
+		jsonString(raw["message_id"]),
+		jsonString(raw["msgId"]),
+		jsonString(raw["msg_id"]),
+		jsonString(raw["uuid"]),
+		jsonString(raw["messageId"]),
+	)
+	return nil
+}
+
+func jsonString(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(t)
+	case float64:
+		return strings.TrimSpace(strconv.FormatFloat(t, 'f', -1, 64))
+	default:
+		return ""
+	}
 }
 
 type InboundDecision struct {

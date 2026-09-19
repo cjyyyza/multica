@@ -418,6 +418,12 @@ deleted_channel_outbound_messages AS (
     DELETE FROM channel_outbound_message
     WHERE installation_id IN (SELECT id FROM ws_channel_installations)
 ),
+deleted_channel_issue_sources AS (
+    DELETE FROM channel_issue_source WHERE workspace_id = $1
+),
+deleted_channel_inbound_writes AS (
+    DELETE FROM channel_inbound_write WHERE workspace_id = $1
+),
 deleted_popo_outbound_queue AS (
     DELETE FROM popo_outbound_queue WHERE workspace_id = $1
 ),

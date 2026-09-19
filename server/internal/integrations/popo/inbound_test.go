@@ -114,3 +114,32 @@ func TestInboundFromBridgeP2PTextOnly(t *testing.T) {
 		t.Fatal("unaddressed p2p must be rejected in P1")
 	}
 }
+
+func TestInboundFromBridgeAcceptsPOPOQuoteShapes(t *testing.T) {
+	for _, raw := range []string{
+		`{"message_id":"mid-1"}`,
+		`{"msgId":"mid-1"}`,
+		`{"uuid":"mid-1"}`,
+		`{"messageId":"mid-1"}`,
+	} {
+		var quote BridgeQuote
+		if err := json.Unmarshal([]byte(raw), &quote); err != nil {
+			t.Fatalf("unmarshal %s: %v", raw, err)
+		}
+		if quote.MessageID != "mid-1" {
+			t.Fatalf("quote %s = %+v", raw, quote)
+		}
+	}
+	msg, ok := inboundFromBridge("default", BridgeInbound{
+		EventID:        "evt-q",
+		Sender:         BridgeSender{ID: "alice@corp.netease.com"},
+		Chat:           BridgeChat{ID: "alice@corp.netease.com", Type: "p2p"},
+		AddressedToBot: true,
+		Text:           "continue",
+		CommandText:    "continue",
+		Quote:          &BridgeQuote{MessageID: "mid-1"},
+	})
+	if !ok || msg.ReplyTo == nil || msg.ReplyTo.MessageID != "mid-1" {
+		t.Fatalf("quoted inbound = ok=%v reply=%+v", ok, msg.ReplyTo)
+	}
+}

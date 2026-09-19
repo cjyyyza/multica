@@ -16,6 +16,12 @@ type OutboundItem struct {
 	RobotID        string
 	Content        string
 	ReplyTo        string
+	IssueID        pgtype.UUID
+	CommentID      pgtype.UUID
+	TaskID         pgtype.UUID
+	BindingID      pgtype.UUID
+	RouteRevision  int64
+	OutboundKind   string
 }
 
 // Enqueuer stores a send command. The API never delivers it to POPO.

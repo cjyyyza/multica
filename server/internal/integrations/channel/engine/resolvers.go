@@ -29,6 +29,7 @@ const (
 	OutcomeFreshPending  Outcome = "fresh_pending"
 	OutcomeChatStarted   Outcome = "chat_started"
 	OutcomeIssueUsage    Outcome = "issue_usage"
+	OutcomeIssueFollow   Outcome = "issue_follow"
 	OutcomeAgentOffline  Outcome = "agent_offline"
 	OutcomeAgentArchived Outcome = "agent_archived"
 )
@@ -72,6 +73,12 @@ type Result struct {
 	// message also carried downloadable media. Repliers use it to tell the
 	// sender to include that media again with the corrected command.
 	IssueUsageHadMedia bool
+	// ReplyText is the user-visible follow-up ack for OutcomeIssueFollow
+	// (/reply, /status, /stop, quote-comment). Empty means silent.
+	ReplyText   string
+	CommentID   pgtype.UUID
+	IssueStatus string
+	RunStatus   string
 	// runScheduled reports whether this ingest scheduled a normal chat run.
 	// It is Router-internal state: repliers must continue to use Outcome.
 	runScheduled bool

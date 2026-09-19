@@ -45,6 +45,12 @@ type SendPayload struct {
 	ChatType         string  `json:"chat_type"`
 	Text             string  `json:"text"`
 	ReplyToMessageID *string `json:"reply_to_message_id"`
+	IssueID          string  `json:"issue_id,omitempty"`
+	CommentID        string  `json:"comment_id,omitempty"`
+	TaskID           string  `json:"task_id,omitempty"`
+	BindingID        string  `json:"binding_id,omitempty"`
+	RouteRevision    int64   `json:"route_revision,omitempty"`
+	OutboundKind     string  `json:"outbound_kind,omitempty"`
 }
 
 type BridgeService struct {

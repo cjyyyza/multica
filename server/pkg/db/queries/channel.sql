@@ -1000,12 +1000,13 @@ WHERE delivery.task_id = @parent_task_id;
 -- name: RecordChannelOutboundMessage :exec
 INSERT INTO channel_outbound_message (
     installation_id, channel_type, channel_message_id, binding_id,
-    route_revision, task_id, outbound_kind
+    route_revision, task_id, outbound_kind, issue_id, comment_id
 ) VALUES (
     sqlc.arg('outbound_installation_id'), sqlc.arg('outbound_channel_type'),
     sqlc.arg('outbound_message_id'), sqlc.arg('outbound_binding_id'),
     sqlc.arg('outbound_route_revision'), sqlc.narg('outbound_task_id'),
-    sqlc.arg('outbound_kind')
+    sqlc.arg('outbound_kind'), sqlc.narg('outbound_issue_id'),
+    sqlc.narg('outbound_comment_id')
 )
 ON CONFLICT (installation_id, channel_message_id) DO NOTHING;
 
@@ -1018,6 +1019,58 @@ ORDER BY outbound.created_at ASC;
 SELECT outbound.* FROM channel_outbound_message AS outbound
 WHERE outbound.installation_id = @installation_id
   AND outbound.channel_message_id = ANY(@channel_message_ids::text[]);
+
+-- name: GetChannelOutboundMessageForQuote :one
+SELECT outbound.installation_id, outbound.channel_type, outbound.channel_message_id,
+       outbound.binding_id, outbound.route_revision, outbound.task_id,
+       outbound.outbound_kind, outbound.issue_id, outbound.comment_id,
+       outbound.created_at, binding.channel_chat_id, binding.chat_type
+FROM channel_outbound_message AS outbound
+JOIN channel_chat_session_binding AS binding ON binding.id = outbound.binding_id
+WHERE outbound.installation_id = $1
+  AND outbound.channel_message_id = $2;
+
+-- =====================
+-- channel_issue_source
+-- =====================
+
+-- name: InsertChannelIssueSource :one
+INSERT INTO channel_issue_source (
+    workspace_id, issue_id, installation_id, channel_type,
+    channel_chat_id, chat_type, binding_id, route_revision
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8
+)
+RETURNING *;
+
+-- name: GetChannelIssueSourceByIssue :one
+SELECT * FROM channel_issue_source
+WHERE issue_id = $1;
+
+-- =====================
+-- channel_inbound_write
+-- =====================
+
+-- name: InsertChannelInboundWrite :one
+INSERT INTO channel_inbound_write (
+    workspace_id, installation_id, channel_type, message_id, kind,
+    issue_id, comment_id, task_id
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8
+)
+RETURNING *;
+
+-- name: GetChannelInboundWrite :one
+SELECT * FROM channel_inbound_write
+WHERE installation_id = $1
+  AND message_id = $2
+  AND kind = $3;
+
+-- name: GetChannelInboundWriteByComment :one
+SELECT * FROM channel_inbound_write
+WHERE comment_id = $1
+  AND kind = 'comment'
+LIMIT 1;
 
 -- =====================
 -- channel_inbound_message_dedup

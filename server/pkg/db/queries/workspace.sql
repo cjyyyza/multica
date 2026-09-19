@@ -120,6 +120,12 @@ cleared_channel_task_deliveries AS (
 cleared_channel_outbound_messages AS (
     DELETE FROM channel_outbound_message WHERE installation_id IN (SELECT id FROM ws_installations)
 ),
+cleared_channel_issue_sources AS (
+    DELETE FROM channel_issue_source WHERE workspace_id = $1
+),
+cleared_channel_inbound_writes AS (
+    DELETE FROM channel_inbound_write WHERE workspace_id = $1
+),
 cleared_chat_sessions AS (
     DELETE FROM channel_chat_session_binding WHERE installation_id IN (SELECT id FROM ws_installations)
     RETURNING chat_session_id

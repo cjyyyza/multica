@@ -89,11 +89,23 @@ func (r *OutboundReplier) Reply(ctx context.Context, inst engine.ResolvedInstall
 		_ = r.post(ctx, inst, msg, msgIssueUsage)
 	case engine.OutcomeIngested:
 		if res.IssueID.Valid {
-			text := issueCreatedText(res)
+			text := issueCreatedText(res, r.appURL)
 			if res.IssueDuplicate {
 				text = issueDuplicateText(res)
 			}
-			_ = r.post(ctx, inst, msg, text)
+			_ = r.postIssue(ctx, inst, msg, res, text, "issue_created")
+		}
+	case engine.OutcomeIssueFollow:
+		if strings.TrimSpace(res.ReplyText) != "" {
+			kind := "issue_ack"
+			if res.CommentID.Valid {
+				kind = "issue_comment_ack"
+			}
+			text := res.ReplyText
+			if link := channel.IssueWebLink(r.appURL, res.IssueWorkspaceSlug, res.IssueIdentifier); link != "" && !strings.Contains(text, link) {
+				text += "\n" + link
+			}
+			_ = r.postIssue(ctx, inst, msg, res, text, kind)
 		}
 	case engine.OutcomeDropped:
 		if text := droppedReplyText(res, msg); text != "" {
@@ -156,13 +168,50 @@ func (r *OutboundReplier) post(ctx context.Context, inst engine.ResolvedInstalla
 	})
 }
 
-func issueCreatedText(res engine.Result) string {
+func (r *OutboundReplier) postIssue(ctx context.Context, inst engine.ResolvedInstallation, msg channel.InboundMessage, res engine.Result, text, kind string) error {
+	if r.queue == nil {
+		return errors.New("popo outbound queue not configured")
+	}
+	robotID := ""
+	var bridgeID pgtype.UUID
+	if row, ok := inst.Platform.(db.ChannelInstallation); ok {
+		info := DecodePublicConfig(row.Config)
+		robotID = info.RobotID
+		if parsed, err := util.ParseUUID(info.BridgeID); err == nil {
+			bridgeID = parsed
+		}
+	}
+	chatType := string(msg.Source.ChatType)
+	if chatType == "" {
+		chatType = string(channel.ChatTypeP2P)
+	}
+	return r.queue.Enqueue(ctx, OutboundItem{
+		WorkspaceID:    inst.WorkspaceID,
+		InstallationID: inst.ID,
+		BridgeID:       bridgeID,
+		ChatID:         msg.Source.ChatID,
+		ChatType:       chatType,
+		RobotID:        robotID,
+		Content:        text,
+		IssueID:        res.IssueID,
+		CommentID:      res.CommentID,
+		BindingID:      res.ChannelBindingID,
+		RouteRevision:  res.ChannelRouteRevision,
+		OutboundKind:   kind,
+	})
+}
+
+func issueCreatedText(res engine.Result, appURL string) string {
 	id := issueResultIdentifier(res)
 	title := strings.TrimSpace(res.IssueTitle)
-	if title == "" {
-		return "✅ Created " + id
+	text := "✅ Created " + id
+	if title != "" {
+		text += " — " + title
 	}
-	return "✅ Created " + id + " — " + title
+	if link := channel.IssueWebLink(appURL, res.IssueWorkspaceSlug, id); link != "" {
+		text += "\n" + link
+	}
+	return text
 }
 
 func issueDuplicateText(res engine.Result) string {
