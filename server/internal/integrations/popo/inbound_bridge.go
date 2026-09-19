@@ -98,7 +98,9 @@ func (s *BridgeService) AcceptInbound(ctx context.Context, bridge db.PopoBridge,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
-			return InboundDecision{Accepted: true, Duplicate: true}, nil
+			// Bridge receipt is not engine processing. Replays still enter
+			// Handle; channel_inbound_message_dedup is the execution fence.
+			return InboundDecision{Accepted: true, Duplicate: true, Message: msg}, nil
 		}
 		return InboundDecision{}, err
 	}

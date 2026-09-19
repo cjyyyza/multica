@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -280,17 +279,17 @@ func (h *Handler) IngestPopoBridgeInbound(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusOK, map[string]any{"accepted": false})
 		return
 	}
-	if decision.Duplicate {
-		writeJSON(w, http.StatusOK, map[string]any{"accepted": true, "duplicate": true})
-		return
-	}
-	if h.ChannelRouter != nil {
+	if h.ChannelRouter != nil && decision.Message.EventID != "" {
 		if err := h.ChannelRouter.Handle(r.Context(), decision.Message); err != nil {
-			slog.WarnContext(r.Context(), "popo inbound: engine handle failed after persist",
-				"event_id", decision.Message.EventID, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to ingest popo event")
+			return
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"accepted": true})
+	out := map[string]any{"accepted": true}
+	if decision.Duplicate {
+		out["duplicate"] = true
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) ListPopoBridgeCommands(w http.ResponseWriter, r *http.Request) {
