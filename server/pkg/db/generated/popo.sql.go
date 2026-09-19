@@ -11,6 +11,29 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const cancelPopoBridgeOpenCommands = `-- name: CancelPopoBridgeOpenCommands :execrows
+UPDATE popo_bridge_command
+SET status = 'cancelled',
+    lease_expires_at = NULL,
+    updated_at = now()
+WHERE bridge_id = $1
+  AND workspace_id = $2
+  AND status IN ('pending', 'leased')
+`
+
+type CancelPopoBridgeOpenCommandsParams struct {
+	BridgeID    pgtype.UUID `json:"bridge_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) CancelPopoBridgeOpenCommands(ctx context.Context, arg CancelPopoBridgeOpenCommandsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelPopoBridgeOpenCommands, arg.BridgeID, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const consumePopoBridgePairing = `-- name: ConsumePopoBridgePairing :one
 UPDATE popo_bridge_pairing
 SET consumed_at = now(),
@@ -41,6 +64,79 @@ func (q *Queries) ConsumePopoBridgePairing(ctx context.Context, arg ConsumePopoB
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const countPendingPopoMediaStagingByBridge = `-- name: CountPendingPopoMediaStagingByBridge :many
+SELECT bridge_id, count(*)::bigint AS n
+FROM popo_media_staging
+WHERE workspace_id = $1
+  AND status = 'pending'
+  AND expires_at > now()
+GROUP BY bridge_id
+`
+
+type CountPendingPopoMediaStagingByBridgeRow struct {
+	BridgeID pgtype.UUID `json:"bridge_id"`
+	N        int64       `json:"n"`
+}
+
+// Inbound backlog is pending media uploads. Engine Handle is synchronous on
+// the inbound HTTP request, and popo_inbound_event has no processed column.
+func (q *Queries) CountPendingPopoMediaStagingByBridge(ctx context.Context, workspaceID pgtype.UUID) ([]CountPendingPopoMediaStagingByBridgeRow, error) {
+	rows, err := q.db.Query(ctx, countPendingPopoMediaStagingByBridge, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountPendingPopoMediaStagingByBridgeRow{}
+	for rows.Next() {
+		var i CountPendingPopoMediaStagingByBridgeRow
+		if err := rows.Scan(&i.BridgeID, &i.N); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countPopoBridgeCommandStatuses = `-- name: CountPopoBridgeCommandStatuses :many
+SELECT bridge_id, status, count(*)::bigint AS n
+FROM popo_bridge_command
+WHERE workspace_id = $1
+  AND (
+      (type = 'send' AND status IN ('pending', 'leased'))
+      OR status = 'unknown'
+  )
+GROUP BY bridge_id, status
+`
+
+type CountPopoBridgeCommandStatusesRow struct {
+	BridgeID pgtype.UUID `json:"bridge_id"`
+	Status   string      `json:"status"`
+	N        int64       `json:"n"`
+}
+
+func (q *Queries) CountPopoBridgeCommandStatuses(ctx context.Context, workspaceID pgtype.UUID) ([]CountPopoBridgeCommandStatusesRow, error) {
+	rows, err := q.db.Query(ctx, countPopoBridgeCommandStatuses, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountPopoBridgeCommandStatusesRow{}
+	for rows.Next() {
+		var i CountPopoBridgeCommandStatusesRow
+		if err := rows.Scan(&i.BridgeID, &i.Status, &i.N); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const createPopoBridgePairing = `-- name: CreatePopoBridgePairing :one
@@ -1011,6 +1107,30 @@ func (q *Queries) MarkPopoMediaStagingUploaded(ctx context.Context, arg MarkPopo
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const popoBoundAgentRuntimeOnline = `-- name: PopoBoundAgentRuntimeOnline :one
+SELECT EXISTS (
+    SELECT 1
+    FROM channel_installation ci
+    JOIN agent a ON a.id = ci.agent_id
+    JOIN agent_runtime r ON r.id = a.runtime_id
+    WHERE ci.workspace_id = $1
+      AND ci.channel_type = 'popo'
+      AND ci.status = 'active'
+      AND a.archived_at IS NULL
+      AND r.status = 'online'
+) AS online
+`
+
+// True when a live POPO install is bound to an unarchived agent whose
+// runtime row is currently online. Reuses agent_runtime.status, the same
+// presence signal the sweeper maintains.
+func (q *Queries) PopoBoundAgentRuntimeOnline(ctx context.Context, workspaceID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, popoBoundAgentRuntimeOnline, workspaceID)
+	var online bool
+	err := row.Scan(&online)
+	return online, err
 }
 
 const reclaimExpiredPopoBridgeCommandLeases = `-- name: ReclaimExpiredPopoBridgeCommandLeases :exec

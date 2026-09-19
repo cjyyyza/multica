@@ -7,6 +7,7 @@ export const popoKeys = {
   all: (wsId: string) => ["popo", wsId] as const,
   installations: (wsId: string) => [...popoKeys.all(wsId), "installations"] as const,
   bridges: (wsId: string) => [...popoKeys.all(wsId), "bridges"] as const,
+  status: (wsId: string) => [...popoKeys.all(wsId), "status"] as const,
 };
 
 export const popoInstallationsOptions = (wsId: string) =>
@@ -23,5 +24,13 @@ export const popoBridgesOptions = (wsId: string) =>
     enabled: !!wsId,
     // Heartbeat is 15s; 45s without one is offline. Refresh so the list
     // does not sit on a stale online flag until the next navigation.
+    refetchInterval: 15_000,
+  });
+
+export const popoStatusOptions = (wsId: string) =>
+  queryOptions({
+    queryKey: popoKeys.status(wsId),
+    queryFn: () => api.getPopoStatus(wsId),
+    enabled: !!wsId,
     refetchInterval: 15_000,
   });

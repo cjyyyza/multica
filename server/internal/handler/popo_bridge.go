@@ -145,6 +145,60 @@ func (h *Handler) ListPopoBridges(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type PopoStatusBridgeResponse struct {
+	ID                string             `json:"id"`
+	Hostname          string             `json:"hostname"`
+	Online            bool               `json:"online"`
+	LastHeartbeatAt   string             `json:"last_heartbeat_at"`
+	PopoConnected     bool               `json:"popo_connected"`
+	Robots            []popo.RobotReport `json:"robots"`
+	InboundBacklog    int64              `json:"inbound_backlog"`
+	OutboundBacklog   int64              `json:"outbound_backlog"`
+	UnknownDeliveries int64              `json:"unknown_deliveries"`
+}
+
+func (h *Handler) GetPopoStatus(w http.ResponseWriter, r *http.Request) {
+	if h.PopoBridge == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"configured":       false,
+			"protocol_version": popo.ProtocolVersion,
+			"bridges":          []PopoStatusBridgeResponse{},
+			"runtime_online":   false,
+		})
+		return
+	}
+	wsUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "workspace id")
+	if !ok {
+		return
+	}
+	status, err := h.PopoBridge.Status(r.Context(), wsUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load popo status")
+		return
+	}
+	out := make([]PopoStatusBridgeResponse, 0, len(status.Bridges))
+	for _, row := range status.Bridges {
+		robots := popo.DecodeRobots(row.Bridge.RobotsJson)
+		out = append(out, PopoStatusBridgeResponse{
+			ID:                uuidToString(row.Bridge.ID),
+			Hostname:          row.Bridge.Hostname,
+			Online:            row.Online,
+			LastHeartbeatAt:   formatPopoTime(row.Bridge.LastHeartbeatAt),
+			PopoConnected:     row.PopoConnected,
+			Robots:            robots,
+			InboundBacklog:    row.InboundBacklog,
+			OutboundBacklog:   row.OutboundBacklog,
+			UnknownDeliveries: row.UnknownDeliveries,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"configured":       true,
+		"protocol_version": popo.ProtocolVersion,
+		"bridges":          out,
+		"runtime_online":   status.RuntimeOnline,
+	})
+}
+
 func (h *Handler) RevokePopoBridge(w http.ResponseWriter, r *http.Request) {
 	if h.PopoBridge == nil {
 		writeFeatureDisabled(w, "popo_not_configured", "popo integration not configured")

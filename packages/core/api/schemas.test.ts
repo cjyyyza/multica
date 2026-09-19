@@ -18,12 +18,14 @@ import {
   RedeemPopoBindingTokenResponseSchema,
   PopoBridgeSchema,
   ListPopoBridgesResponseSchema,
+  PopoStatusResponseSchema,
   PopoBridgePairingSchema,
   PopoRegistrationSchema,
   EMPTY_POPO_INSTALLATION,
   EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE,
   EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE,
   EMPTY_LIST_POPO_BRIDGES_RESPONSE,
+  EMPTY_POPO_STATUS_RESPONSE,
   EMPTY_POPO_BRIDGE_PAIRING,
   EMPTY_POPO_REGISTRATION,
   AgentTaskListSchema,
@@ -2152,6 +2154,61 @@ describe("POPO bridge schemas", () => {
         endpoint: "POST /api/workspaces/:id/popo/bridge-pairings",
       }),
     ).toEqual(EMPTY_POPO_BRIDGE_PAIRING);
+  });
+});
+
+describe("POPO status schemas", () => {
+  it("parses independent counters and does not invent a health flag", () => {
+    const parsed = PopoStatusResponseSchema.parse({
+      configured: true,
+      protocol_version: 1,
+      runtime_online: false,
+      bridges: [
+        {
+          id: "b1",
+          hostname: "WIN-HOST",
+          online: true,
+          last_heartbeat_at: "2026-09-19T12:00:00Z",
+          popo_connected: true,
+          robots: [{ robot_id: "default", connected: true, occupied_by: null }],
+          inbound_backlog: 2,
+          outbound_backlog: 4,
+          unknown_deliveries: 1,
+        },
+      ],
+    });
+    expect(parsed.runtime_online).toBe(false);
+    expect(parsed.bridges[0]?.online).toBe(true);
+    expect(parsed.bridges[0]?.popo_connected).toBe(true);
+    expect(parsed.bridges[0]?.inbound_backlog).toBe(2);
+    expect(parsed.bridges[0]?.outbound_backlog).toBe(4);
+    expect(parsed.bridges[0]?.unknown_deliveries).toBe(1);
+    expect(parsed).not.toHaveProperty("healthy");
+  });
+
+  it("defaults missing counters to zero instead of collapsing to healthy", () => {
+    const parsed = PopoStatusResponseSchema.parse({
+      configured: true,
+      bridges: [{ id: "b1" }],
+    });
+    expect(parsed.protocol_version).toBe(1);
+    expect(parsed.runtime_online).toBe(false);
+    expect(parsed.bridges[0]?.online).toBe(false);
+    expect(parsed.bridges[0]?.popo_connected).toBe(false);
+    expect(parsed.bridges[0]?.inbound_backlog).toBe(0);
+    expect(parsed.bridges[0]?.outbound_backlog).toBe(0);
+    expect(parsed.bridges[0]?.unknown_deliveries).toBe(0);
+  });
+
+  it("falls back safely for a malformed status response", () => {
+    expect(
+      parseWithFallback(
+        { bridges: "not-an-array", configured: true, runtime_online: "yes" },
+        PopoStatusResponseSchema,
+        EMPTY_POPO_STATUS_RESPONSE,
+        { endpoint: "GET /api/workspaces/:id/popo/status" },
+      ),
+    ).toEqual(EMPTY_POPO_STATUS_RESPONSE);
   });
 });
 

@@ -13,6 +13,30 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
+func TestGetPopoStatusNotConfiguredReturnsEmpty(t *testing.T) {
+	h := &Handler{}
+	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/x/popo/status", nil)
+	w := httptest.NewRecorder()
+
+	h.GetPopoStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Configured      bool  `json:"configured"`
+		ProtocolVersion int   `json:"protocol_version"`
+		Bridges         []any `json:"bridges"`
+		RuntimeOnline   bool  `json:"runtime_online"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Configured || resp.RuntimeOnline || resp.ProtocolVersion != 1 || len(resp.Bridges) != 0 {
+		t.Fatalf("unexpected unconfigured status: %+v", resp)
+	}
+}
+
 func TestListPopoInstallationsNotConfiguredReturnsEmpty(t *testing.T) {
 	h := &Handler{}
 	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/x/popo/installations", nil)

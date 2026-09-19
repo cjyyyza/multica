@@ -1,1 +1,1 @@
-export { popoKeys, popoInstallationsOptions, popoBridgesOptions } from "./queries";
+export { popoKeys, popoInstallationsOptions, popoBridgesOptions, popoStatusOptions } from "./queries";

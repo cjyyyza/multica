@@ -74,6 +74,27 @@ export interface ListPopoBridgesResponse {
   configured: boolean;
 }
 
+/** Workspace diagnostics for a Windows bridge.
+ * `inbound_backlog` is pending (unexpired) media staging sessions. */
+export interface PopoStatusBridge {
+  id: string;
+  hostname: string;
+  online: boolean;
+  last_heartbeat_at: string;
+  popo_connected: boolean;
+  robots: PopoBridgeRobot[];
+  inbound_backlog: number;
+  outbound_backlog: number;
+  unknown_deliveries: number;
+}
+
+export interface PopoStatusResponse {
+  configured: boolean;
+  protocol_version: number;
+  bridges: PopoStatusBridge[];
+  runtime_online: boolean;
+}
+
 /** Pairing-code mint. `pairing_code` is returned once and must not be cached. */
 export interface PopoBridgePairing {
   id: string;

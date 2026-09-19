@@ -201,6 +201,7 @@ import type {
   RegisterPopoRequest,
   RedeemPopoBindingTokenResponse,
   ListPopoBridgesResponse,
+  PopoStatusResponse,
   PopoBridgePairing,
   CreatePopoBridgePairingRequest,
   CreatePopoRegistrationRequest,
@@ -381,12 +382,14 @@ import {
   ListPopoInstallationsResponseSchema,
   RedeemPopoBindingTokenResponseSchema,
   ListPopoBridgesResponseSchema,
+  PopoStatusResponseSchema,
   PopoBridgePairingSchema,
   PopoRegistrationSchema,
   EMPTY_POPO_INSTALLATION,
   EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE,
   EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE,
   EMPTY_LIST_POPO_BRIDGES_RESPONSE,
+  EMPTY_POPO_STATUS_RESPONSE,
   EMPTY_POPO_BRIDGE_PAIRING,
   EMPTY_POPO_REGISTRATION,
   EMPTY_BILLING_BALANCE,
@@ -4989,6 +4992,16 @@ export class ApiClient {
       ListPopoBridgesResponseSchema,
       EMPTY_LIST_POPO_BRIDGES_RESPONSE,
       { endpoint: "GET /api/workspaces/:id/popo/bridges" },
+    );
+  }
+
+  async getPopoStatus(workspaceId: string): Promise<PopoStatusResponse> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/popo/status`);
+    return parseWithFallback(
+      raw,
+      PopoStatusResponseSchema,
+      EMPTY_POPO_STATUS_RESPONSE,
+      { endpoint: "GET /api/workspaces/:id/popo/status" },
     );
   }
 

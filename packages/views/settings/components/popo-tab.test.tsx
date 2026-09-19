@@ -27,6 +27,23 @@ const bridgesRef = vi.hoisted(() => ({
     error: undefined as unknown,
   },
 }));
+const statusRef = vi.hoisted(() => ({
+  current: {
+    data: {
+      configured: true,
+      protocol_version: 1,
+      runtime_online: false,
+      bridges: [] as unknown[],
+    } as {
+      configured: boolean;
+      protocol_version: number;
+      runtime_online: boolean;
+      bridges: unknown[];
+    } | undefined,
+    isError: false,
+    error: undefined as unknown,
+  },
+}));
 const membersRef = vi.hoisted(() => ({
   current: [{ user_id: "user-1", role: "admin" as MemberRole }],
 }));
@@ -57,6 +74,14 @@ vi.mock("@tanstack/react-query", () => ({
     const key = JSON.stringify(opts.queryKey ?? []);
     if (key.includes("members")) {
       return { data: membersRef.current, isLoading: false, isError: false };
+    }
+    if (key.includes("status")) {
+      return {
+        data: statusRef.current.data,
+        isLoading: false,
+        isError: statusRef.current.isError,
+        error: statusRef.current.error,
+      };
     }
     if (key.includes("bridges")) {
       return {
@@ -95,6 +120,7 @@ vi.mock("@multica/core/popo", () => ({
     all: (wsId: string) => ["popo", wsId],
     installations: (wsId: string) => ["popo", wsId, "installations"],
     bridges: (wsId: string) => ["popo", wsId, "bridges"],
+    status: (wsId: string) => ["popo", wsId, "status"],
   },
   popoInstallationsOptions: (wsId: string) => ({
     queryKey: ["popo", wsId, "installations"],
@@ -102,6 +128,10 @@ vi.mock("@multica/core/popo", () => ({
   }),
   popoBridgesOptions: (wsId: string) => ({
     queryKey: ["popo", wsId, "bridges"],
+    queryFn: vi.fn(),
+  }),
+  popoStatusOptions: (wsId: string) => ({
+    queryKey: ["popo", wsId, "status"],
     queryFn: vi.fn(),
   }),
 }));
@@ -173,6 +203,16 @@ beforeEach(() => {
   };
   bridgesRef.current = {
     data: { bridges: [], configured: true },
+    isError: false,
+    error: undefined,
+  };
+  statusRef.current = {
+    data: {
+      configured: true,
+      protocol_version: 1,
+      runtime_online: false,
+      bridges: [],
+    },
     isError: false,
     error: undefined,
   };
@@ -254,6 +294,36 @@ describe("PopoTab", () => {
     expect(
       screen.getByText(/This host will stop sending and receiving POPO messages/i),
     ).toBeTruthy();
+  });
+
+  it("renders separate host, POPO, runtime, and backlog counters", () => {
+    bridgesRef.current.data.bridges = [idleOnlineBridge()];
+    statusRef.current.data = {
+      configured: true,
+      protocol_version: 1,
+      runtime_online: true,
+      bridges: [
+        {
+          id: "b1",
+          hostname: "WIN-1",
+          online: true,
+          last_heartbeat_at: "2026-09-19T12:00:00Z",
+          popo_connected: true,
+          robots: idleOnlineBridge().robots,
+          inbound_backlog: 2,
+          outbound_backlog: 3,
+          unknown_deliveries: 1,
+        },
+      ],
+    };
+    renderUI(<PopoTab />);
+    expect(screen.getByTestId("popo-diag-host").textContent).toMatch(/Online/i);
+    expect(screen.getByTestId("popo-diag-popo").textContent).toMatch(/POPO connected/i);
+    expect(screen.getByTestId("popo-diag-runtime").textContent).toMatch(/Runtime online/i);
+    expect(screen.getByTestId("popo-diag-inbound").textContent).toMatch(/Inbound backlog 2/);
+    expect(screen.getByTestId("popo-diag-outbound").textContent).toMatch(/Outbound backlog 3/);
+    expect(screen.getByTestId("popo-diag-unknown").textContent).toMatch(/Unknown deliveries 1/);
+    expect(screen.queryByText(/healthy/i)).toBeNull();
   });
 });
 

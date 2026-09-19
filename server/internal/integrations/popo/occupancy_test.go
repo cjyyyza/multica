@@ -62,4 +62,18 @@ func TestRobotIdleOnHeartbeat(t *testing.T) {
 	}
 }
 
+func TestBridgePopoConnected(t *testing.T) {
+	connected, _ := json.Marshal([]RobotReport{{RobotID: "a", Connected: true}})
+	disconnected, _ := json.Marshal([]RobotReport{{RobotID: "a", Connected: false}})
+	if !BridgePopoConnected(db.PopoBridge{RobotsJson: connected}) {
+		t.Fatal("expected popo_connected when any robot reports connected")
+	}
+	if BridgePopoConnected(db.PopoBridge{RobotsJson: disconnected}) {
+		t.Fatal("disconnected robots must not count as popo_connected")
+	}
+	if BridgePopoConnected(db.PopoBridge{}) {
+		t.Fatal("empty robots must not count as popo_connected")
+	}
+}
+
 func strPtr(s string) *string { return &s }

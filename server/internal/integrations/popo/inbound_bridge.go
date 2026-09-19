@@ -163,10 +163,12 @@ func (s *BridgeService) AcceptInbound(ctx context.Context, bridge db.PopoBridge,
 		if isUniqueViolation(err) {
 			// Bridge receipt is not engine processing. Replays still enter
 			// Handle; channel_inbound_message_dedup is the execution fence.
+			logTrace("popo inbound received", eventID, util.UUIDToString(inst.ID), chatID, "", "", "", "")
 			return InboundDecision{Accepted: true, Duplicate: true, Message: msg}, nil
 		}
 		return InboundDecision{}, err
 	}
+	logTrace("popo inbound received", eventID, util.UUIDToString(inst.ID), chatID, "", "", "", "")
 	return InboundDecision{Accepted: true, Message: msg}, nil
 }
 

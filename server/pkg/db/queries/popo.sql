@@ -112,6 +112,51 @@ SET status = $3,
 WHERE id = $1 AND bridge_id = $2
 RETURNING *;
 
+-- name: CancelPopoBridgeOpenCommands :execrows
+UPDATE popo_bridge_command
+SET status = 'cancelled',
+    lease_expires_at = NULL,
+    updated_at = now()
+WHERE bridge_id = $1
+  AND workspace_id = $2
+  AND status IN ('pending', 'leased');
+
+-- name: CountPopoBridgeCommandStatuses :many
+SELECT bridge_id, status, count(*)::bigint AS n
+FROM popo_bridge_command
+WHERE workspace_id = $1
+  AND (
+      (type = 'send' AND status IN ('pending', 'leased'))
+      OR status = 'unknown'
+  )
+GROUP BY bridge_id, status;
+
+-- name: CountPendingPopoMediaStagingByBridge :many
+-- Inbound backlog is pending media uploads. Engine Handle is synchronous on
+-- the inbound HTTP request, and popo_inbound_event has no processed column.
+SELECT bridge_id, count(*)::bigint AS n
+FROM popo_media_staging
+WHERE workspace_id = $1
+  AND status = 'pending'
+  AND expires_at > now()
+GROUP BY bridge_id;
+
+-- name: PopoBoundAgentRuntimeOnline :one
+-- True when a live POPO install is bound to an unarchived agent whose
+-- runtime row is currently online. Reuses agent_runtime.status, the same
+-- presence signal the sweeper maintains.
+SELECT EXISTS (
+    SELECT 1
+    FROM channel_installation ci
+    JOIN agent a ON a.id = ci.agent_id
+    JOIN agent_runtime r ON r.id = a.runtime_id
+    WHERE ci.workspace_id = $1
+      AND ci.channel_type = 'popo'
+      AND ci.status = 'active'
+      AND a.archived_at IS NULL
+      AND r.status = 'online'
+) AS online;
+
 -- name: InsertPopoInboundEvent :one
 INSERT INTO popo_inbound_event (
     workspace_id, bridge_id, installation_id, event_id, robot_id, accepted, duplicate

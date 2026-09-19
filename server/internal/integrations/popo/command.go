@@ -83,7 +83,7 @@ func (s *BridgeService) Enqueue(ctx context.Context, item OutboundItem) error {
 		return fmt.Errorf("encode send payload: %w", err)
 	}
 	if len(item.Attachments) == 0 {
-		_, err = s.q.EnqueuePopoBridgeCommand(ctx, db.EnqueuePopoBridgeCommandParams{
+		row, err := s.q.EnqueuePopoBridgeCommand(ctx, db.EnqueuePopoBridgeCommandParams{
 			WorkspaceID:    wsID,
 			BridgeID:       bridgeID,
 			InstallationID: item.InstallationID,
@@ -94,6 +94,15 @@ func (s *BridgeService) Enqueue(ctx context.Context, item OutboundItem) error {
 		if err != nil {
 			return fmt.Errorf("enqueue popo command: %w", err)
 		}
+		logTrace("popo command enqueued",
+			"",
+			uuidString(row.InstallationID),
+			chatID,
+			uuidString(item.IssueID),
+			uuidString(item.TaskID),
+			uuidString(row.DeliveryID),
+			"",
+		)
 		return nil
 	}
 	if s.tx == nil {
@@ -137,6 +146,15 @@ func (s *BridgeService) Enqueue(ctx context.Context, item OutboundItem) error {
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit outbound media: %w", err)
 	}
+	logTrace("popo command enqueued",
+		"",
+		uuidString(row.InstallationID),
+		chatID,
+		uuidString(item.IssueID),
+		uuidString(item.TaskID),
+		uuidString(row.DeliveryID),
+		"",
+	)
 	return nil
 }
 
@@ -228,6 +246,17 @@ func (s *BridgeService) RecordReceipt(ctx context.Context, commandID, bridgeID p
 	if status == CommandStatusDelivered {
 		s.recordOutboundLedger(ctx, updated, remoteID)
 	}
+	var payload SendPayload
+	_ = json.Unmarshal(updated.Payload, &payload)
+	logTrace("popo command receipt",
+		"",
+		uuidString(updated.InstallationID),
+		payload.ChatID,
+		payload.IssueID,
+		payload.TaskID,
+		uuidString(updated.DeliveryID),
+		remoteID,
+	)
 	return updated, nil
 }
 

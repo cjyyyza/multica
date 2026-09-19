@@ -48,6 +48,7 @@ import type {
   ListPopoInstallationsResponse,
   RedeemPopoBindingTokenResponse,
   ListPopoBridgesResponse,
+  PopoStatusResponse,
   PopoBridgePairing,
   PopoRegistration,
   GroupedIssuesResponse,
@@ -3363,6 +3364,32 @@ export const ListPopoBridgesResponseSchema = z.object({
 export const EMPTY_LIST_POPO_BRIDGES_RESPONSE: ListPopoBridgesResponse = {
   bridges: [],
   configured: false,
+};
+
+export const PopoStatusBridgeSchema = z.object({
+  id: z.string(),
+  hostname: z.string().default(""),
+  online: z.boolean().default(false),
+  last_heartbeat_at: z.string().default(""),
+  popo_connected: z.boolean().default(false),
+  robots: z.array(PopoBridgeRobotSchema).default([]),
+  inbound_backlog: z.number().default(0),
+  outbound_backlog: z.number().default(0),
+  unknown_deliveries: z.number().default(0),
+}).loose();
+
+export const PopoStatusResponseSchema = z.object({
+  configured: z.boolean().default(false),
+  protocol_version: z.number().default(1),
+  bridges: z.array(PopoStatusBridgeSchema).default([]),
+  runtime_online: z.boolean().default(false),
+}).loose();
+
+export const EMPTY_POPO_STATUS_RESPONSE: PopoStatusResponse = {
+  configured: false,
+  protocol_version: 1,
+  bridges: [],
+  runtime_online: false,
 };
 
 export const PopoBridgePairingSchema = z.object({

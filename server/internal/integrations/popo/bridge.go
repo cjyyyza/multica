@@ -257,16 +257,35 @@ func (s *BridgeService) GetInWorkspace(ctx context.Context, id, workspaceID pgty
 }
 
 func (s *BridgeService) Revoke(ctx context.Context, id, workspaceID, revokedBy pgtype.UUID) error {
-	_, err := s.q.RevokePopoBridge(ctx, db.RevokePopoBridgeParams{
+	if s.tx == nil {
+		return errors.New("popo: revoke requires a transaction")
+	}
+	tx, err := s.tx.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin revoke tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	qtx := s.q.WithTx(tx)
+	_, err = qtx.RevokePopoBridge(ctx, db.RevokePopoBridgeParams{
 		ID:          id,
 		WorkspaceID: workspaceID,
 		RevokedBy:   revokedBy,
 	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrBridgeNotFound
-		}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
+	}
+	revokedMiss := errors.Is(err, pgx.ErrNoRows)
+	if _, err := qtx.CancelPopoBridgeOpenCommands(ctx, db.CancelPopoBridgeOpenCommandsParams{
+		BridgeID:    id,
+		WorkspaceID: workspaceID,
+	}); err != nil {
+		return fmt.Errorf("cancel open popo commands: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit revoke: %w", err)
+	}
+	if revokedMiss {
+		return ErrBridgeNotFound
 	}
 	return nil
 }

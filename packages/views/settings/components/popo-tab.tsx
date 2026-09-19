@@ -40,6 +40,7 @@ import {
   popoBridgesOptions,
   popoInstallationsOptions,
   popoKeys,
+  popoStatusOptions,
 } from "@multica/core/popo";
 import {
   isIdlePopoRobot,
@@ -48,6 +49,7 @@ import {
   type PopoBridgeRobot,
   type PopoInstallation,
   type PopoRegistration,
+  type PopoStatusBridge,
 } from "@multica/core/types";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useLocale, useT, useTimeAgo } from "../../i18n";
@@ -120,13 +122,22 @@ export function PopoTab() {
     ...popoInstallationsOptions(wsId),
     enabled: !!wsId,
   });
+  const statusQuery = useQuery({
+    ...popoStatusOptions(wsId),
+    enabled: !!wsId,
+  });
 
   const bridges = bridgesQuery.data?.bridges ?? [];
   const installations = installsQuery.data?.installations ?? [];
+  const statusById = new Map(
+    (statusQuery.data?.bridges ?? []).map((row) => [row.id, row]),
+  );
   const notConfigured =
     isPopoNotConfiguredError(bridgesQuery.error) ||
     isPopoNotConfiguredError(installsQuery.error) ||
+    isPopoNotConfiguredError(statusQuery.error) ||
     bridgesQuery.data?.configured === false ||
+    statusQuery.data?.configured === false ||
     (bridgesQuery.data == null && installsQuery.data?.configured === false);
   const isLoading =
     (bridgesQuery.isLoading && bridgesQuery.data == null) ||
@@ -252,7 +263,19 @@ export function PopoTab() {
         <>
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-body font-semibold">{t(($) => $.popo.bridges_title)}</h2>
+              <div className="min-w-0 space-y-1">
+                <h2 className="text-body font-semibold">{t(($) => $.popo.bridges_title)}</h2>
+                {statusQuery.data ? (
+                  <p
+                    className="text-caption text-muted-foreground"
+                    data-testid="popo-diag-runtime"
+                  >
+                    {statusQuery.data.runtime_online
+                      ? t(($) => $.popo.runtime_online)
+                      : t(($) => $.popo.runtime_offline)}
+                  </p>
+                ) : null}
+              </div>
               {canManage && (
                 <Button
                   size="sm"
@@ -279,6 +302,7 @@ export function PopoTab() {
                     <BridgeRow
                       key={bridge.id}
                       bridge={bridge}
+                      diagnostics={statusById.get(bridge.id)}
                       canManage={canManage}
                       lastSeen={
                         bridge.last_heartbeat_at
@@ -448,11 +472,13 @@ export function PopoTab() {
 
 function BridgeRow({
   bridge,
+  diagnostics,
   canManage,
   lastSeen,
   onRevoke,
 }: {
   bridge: PopoBridge;
+  diagnostics?: PopoStatusBridge;
   canManage: boolean;
   lastSeen: string;
   onRevoke: () => void;
@@ -460,6 +486,8 @@ function BridgeRow({
   const { t } = useT("settings");
   const isRevoked = bridge.status === "revoked";
   const host = bridge.hostname || bridge.id;
+  const hostOnline = diagnostics?.online ?? bridge.online;
+  const popoConnected = diagnostics?.popo_connected === true;
   return (
     <div
       className="flex items-start justify-between gap-4 py-3 first:pt-0 last:pb-0"
@@ -471,19 +499,47 @@ function BridgeRow({
           <span
             className={cn(
               "ml-2 rounded-xs px-1.5 py-0.5 text-micro",
-              bridge.online && !isRevoked
+              hostOnline && !isRevoked
                 ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
                 : "bg-muted text-muted-foreground",
             )}
+            data-testid="popo-diag-host"
           >
             {isRevoked
               ? t(($) => $.popo.bridge_revoked)
-              : bridge.online
+              : hostOnline
                 ? t(($) => $.popo.bridge_online)
                 : t(($) => $.popo.bridge_offline)}
           </span>
         </p>
         <p className="text-micro text-muted-foreground">{lastSeen}</p>
+        {diagnostics ? (
+          <ul className="flex flex-wrap gap-x-3 gap-y-0.5 text-caption text-muted-foreground">
+            <li data-testid="popo-diag-popo">
+              {popoConnected
+                ? t(($) => $.popo.popo_connected)
+                : t(($) => $.popo.popo_disconnected)}
+            </li>
+            <li
+              data-testid="popo-diag-inbound"
+              title={t(($) => $.popo.inbound_backlog_hint)}
+            >
+              {t(($) => $.popo.inbound_backlog, {
+                count: diagnostics.inbound_backlog,
+              })}
+            </li>
+            <li data-testid="popo-diag-outbound">
+              {t(($) => $.popo.outbound_backlog, {
+                count: diagnostics.outbound_backlog,
+              })}
+            </li>
+            <li data-testid="popo-diag-unknown">
+              {t(($) => $.popo.unknown_deliveries, {
+                count: diagnostics.unknown_deliveries,
+              })}
+            </li>
+          </ul>
+        ) : null}
         {bridge.robots.length === 0 ? (
           <p className="text-caption text-muted-foreground">
             {t(($) => $.popo.bridge_robots_none)}

@@ -1830,6 +1830,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Use(middleware.RequireWorkspaceMemberFromURL(queries, "id"))
 					r.Get("/popo/installations", h.ListPopoInstallations)
 					r.Get("/popo/bridges", h.ListPopoBridges)
+					r.Get("/popo/status", h.GetPopoStatus)
 					r.Post("/popo/install", h.RegisterPopoBot)
 					r.Delete("/popo/installations/{installationId}", h.RevokePopoInstallation)
 					r.Post("/popo/registrations", h.CreatePopoRegistration)

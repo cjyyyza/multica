@@ -258,6 +258,8 @@ export type {
   PopoBridgeRobot,
   PopoBridge,
   ListPopoBridgesResponse,
+  PopoStatusBridge,
+  PopoStatusResponse,
   PopoBridgePairing,
   CreatePopoBridgePairingRequest,
   CreatePopoRegistrationRequest,

@@ -619,6 +619,17 @@ describe("ApiClient schema fallback", () => {
       });
     });
 
+    it("falls back to a safe empty status when the response is malformed", async () => {
+      stubFetchJson({ bridges: "not-an-array", configured: true, runtime_online: "yes" });
+      const client = new ApiClient("https://api.example.test");
+      await expect(client.getPopoStatus("ws-1")).resolves.toEqual({
+        configured: false,
+        protocol_version: 1,
+        bridges: [],
+        runtime_online: false,
+      });
+    });
+
     it("falls back safely when a pairing response is malformed", async () => {
       stubFetchJson({ id: 123, pairing_code: ["secret"] });
       const client = new ApiClient("https://api.example.test");
