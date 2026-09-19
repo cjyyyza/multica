@@ -93,13 +93,21 @@ func popoP2Setup(t *testing.T) popoP2Env {
 
 func (e popoP2Env) inbound(t *testing.T, eventID, text string, quote map[string]string) {
 	t.Helper()
+	accepted := e.inboundChat(t, eventID, text, e.sender, "p2p", true, quote)
+	if accepted["accepted"] != true {
+		t.Fatalf("inbound %s = %+v", eventID, accepted)
+	}
+}
+
+func (e popoP2Env) inboundChat(t *testing.T, eventID, text, chatID, chatType string, addressed bool, quote map[string]string) map[string]any {
+	t.Helper()
 	body := map[string]any{
 		"protocol_version": 1,
 		"event_id":         eventID,
 		"robot_id":         e.robotID,
 		"sender":           map[string]string{"id": e.sender, "name": "Alice"},
-		"chat":             map[string]string{"id": e.sender, "type": "p2p"},
-		"addressed_to_bot": true,
+		"chat":             map[string]string{"id": chatID, "type": chatType},
+		"addressed_to_bot": addressed,
 		"text":             text,
 		"command_text":     text,
 	}
@@ -107,14 +115,12 @@ func (e popoP2Env) inbound(t *testing.T, eventID, text string, quote map[string]
 		body["quote"] = quote
 	}
 	accepted := testutil.Call(t, testHandler.IngestPopoBridgeInbound, popoBearer(testutil.JSONRequest(http.MethodPost, "/api/popo/bridge/inbound", body), e.token)).Want(http.StatusOK).Map()
-	if accepted["accepted"] != true {
-		t.Fatalf("inbound %s = %+v", eventID, accepted)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if testHandler.ChannelRouter != nil {
 		_ = testHandler.ChannelRouter.Drain(ctx)
 	}
+	return accepted
 }
 
 func (e popoP2Env) commands(t *testing.T) []string {

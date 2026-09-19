@@ -176,6 +176,7 @@ func TestPopoRevokedBridgeToken401sInbound(t *testing.T) {
 }
 
 func TestPopoInboundDuplicateAndWorkspaceIsolation(t *testing.T) {
+	wirePopoEngine(t)
 	bridgeID, token := popoRegisterBridge(t, "WIN-INBOUND")
 	robotID := "inbound-bot-" + bridgeID[:8]
 	popoHeartbeat(t, token, popoIdleRobot(robotID))
@@ -185,7 +186,17 @@ func TestPopoInboundDuplicateAndWorkspaceIsolation(t *testing.T) {
 		"bridge_id": bridgeID,
 		"robot_id":  robotID,
 	}), "id", testWorkspaceID)
-	testutil.Call(t, testHandler.RegisterPopoBot, installReq).Want(http.StatusOK)
+	var installRow struct {
+		ID string `json:"id"`
+	}
+	testutil.Call(t, testHandler.RegisterPopoBot, installReq).Want(http.StatusOK).JSON(&installRow)
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel_inbound_write WHERE installation_id = $1`, installRow.ID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel_issue_source WHERE installation_id = $1`, installRow.ID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel_outbound_message WHERE installation_id = $1`, installRow.ID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel_inbound_message_dedup WHERE installation_id = $1`, installRow.ID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel_chat_session_binding WHERE installation_id = $1`, installRow.ID)
+	})
 
 	body := map[string]any{
 		"protocol_version": 1,
@@ -234,18 +245,41 @@ func TestPopoInboundDuplicateAndWorkspaceIsolation(t *testing.T) {
 	}), token)
 	testutil.Call(t, testHandler.IngestPopoBridgeInbound, spoof).Want(http.StatusNotFound)
 
-	group := popoBearer(testutil.JSONRequest(http.MethodPost, "/api/popo/bridge/inbound", map[string]any{
+	unaddressed := popoBearer(testutil.JSONRequest(http.MethodPost, "/api/popo/bridge/inbound", map[string]any{
 		"protocol_version": 1,
-		"event_id":         "evt-group",
+		"event_id":         "evt-group-plain",
+		"robot_id":         robotID,
+		"sender":           map[string]string{"id": "alice@corp.netease.com"},
+		"chat":             map[string]string{"id": "group-1", "type": "group"},
+		"addressed_to_bot": false,
+		"text":             "hello",
+	}), token)
+	dropped := testutil.Call(t, testHandler.IngestPopoBridgeInbound, unaddressed).Want(http.StatusOK).Map()
+	if dropped["accepted"] != false {
+		t.Fatalf("unaddressed group inbound = %+v", dropped)
+	}
+	if n := dbfx.Count(t, `SELECT count(*) FROM popo_inbound_event WHERE event_id = $1`, "evt-group-plain"); n != 0 {
+		t.Fatalf("unaddressed group persisted %d inbound rows", n)
+	}
+
+	addressed := popoBearer(testutil.JSONRequest(http.MethodPost, "/api/popo/bridge/inbound", map[string]any{
+		"protocol_version": 1,
+		"event_id":         "evt-group-at",
 		"robot_id":         robotID,
 		"sender":           map[string]string{"id": "alice@corp.netease.com"},
 		"chat":             map[string]string{"id": "group-1", "type": "group"},
 		"addressed_to_bot": true,
 		"text":             "hello",
 	}), token)
-	dropped := testutil.Call(t, testHandler.IngestPopoBridgeInbound, group).Want(http.StatusOK).Map()
-	if dropped["accepted"] != false {
-		t.Fatalf("group inbound = %+v", dropped)
+	acceptedGroup := testutil.Call(t, testHandler.IngestPopoBridgeInbound, addressed).Want(http.StatusOK).Map()
+	if acceptedGroup["accepted"] != true {
+		t.Fatalf("addressed group inbound = %+v", acceptedGroup)
+	}
+	if testHandler.ChannelRouter != nil {
+		_ = testHandler.ChannelRouter.Drain(context.Background())
+	}
+	if n := dbfx.Count(t, `SELECT count(*) FROM channel_inbound_message_dedup WHERE installation_id = $1 AND message_id = $2`, installRow.ID, "group-1:evt-group-at"); n != 1 {
+		t.Fatalf("engine Handle did not run for addressed group, dedup rows=%d", n)
 	}
 }
 

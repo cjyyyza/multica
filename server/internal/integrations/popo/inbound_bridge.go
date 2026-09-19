@@ -40,8 +40,13 @@ type BridgeChat struct {
 }
 
 type BridgeQuote struct {
-	MessageID string `json:"message_id"`
+	MessageID  string `json:"message_id"`
+	Text       string `json:"text"`
+	SenderID   string `json:"sender_id"`
+	SenderName string `json:"sender_name"`
 }
+
+const quotedContentUnavailable = "[quoted content unavailable]"
 
 func (q *BridgeQuote) UnmarshalJSON(data []byte) error {
 	if q == nil {
@@ -57,6 +62,21 @@ func (q *BridgeQuote) UnmarshalJSON(data []byte) error {
 		jsonString(raw["msg_id"]),
 		jsonString(raw["uuid"]),
 		jsonString(raw["messageId"]),
+	)
+	q.Text = firstNonEmpty(
+		jsonString(raw["text"]),
+		jsonString(raw["notify"]),
+	)
+	q.SenderID = firstNonEmpty(
+		jsonString(raw["sender_id"]),
+		jsonString(raw["from"]),
+		jsonString(raw["senderId"]),
+	)
+	q.SenderName = firstNonEmpty(
+		jsonString(raw["sender_name"]),
+		jsonString(raw["from_name"]),
+		jsonString(raw["fromUserName"]),
+		jsonString(raw["senderName"]),
 	)
 	return nil
 }
@@ -140,16 +160,26 @@ func (s *BridgeService) AcceptInbound(ctx context.Context, bridge db.PopoBridge,
 }
 
 func inboundFromBridge(robotID string, req BridgeInbound) (channel.InboundMessage, bool) {
-	chatType := strings.TrimSpace(strings.ToLower(req.Chat.Type))
+	chatType, ok := popoBridgeChatType(req.Chat.Type)
+	if !ok {
+		return channel.InboundMessage{}, false
+	}
+	// P2P inbound is always an interaction with the bot; groups only ingest
+	// an explicit @. Unaddressed group chatter is dropped with no persist.
+	if !req.AddressedToBot {
+		return channel.InboundMessage{}, false
+	}
 	text := strings.TrimSpace(req.Text)
 	commandText := strings.TrimSpace(req.CommandText)
 	if commandText == "" {
 		commandText = text
 	}
-	if chatType != string(channel.ChatTypeP2P) || !req.AddressedToBot || text == "" || len(req.Media) > 0 {
+	// Media is ignored this PR (no /api/popo/bridge/media). Media-only drops;
+	// text plus unused media still ingests the text.
+	if commandText == "" {
 		return channel.InboundMessage{}, false
 	}
-	cleaned := text
+	cleaned := commandText
 	forceFresh := false
 	if control, ok := engine.ParseControlCommand(commandText); ok {
 		cleaned = control.Body
@@ -158,9 +188,13 @@ func inboundFromBridge(robotID string, req BridgeInbound) (channel.InboundMessag
 	eventID := strings.TrimSpace(req.EventID)
 	chatID := strings.TrimSpace(req.Chat.ID)
 	sender := strings.TrimSpace(req.Sender.ID)
+	defaultEvent := eventP2P
+	if chatType == channel.ChatTypeGroup {
+		defaultEvent = eventGroupAt
+	}
 	rawMeta, _ := json.Marshal(popoRawEvent{
 		RobotID:    robotID,
-		EventType:  firstNonEmpty(openEventType(req.Raw), eventP2P),
+		EventType:  firstNonEmpty(openEventType(req.Raw), defaultEvent),
 		SenderName: firstNonEmpty(req.Sender.Name, sender),
 	})
 	msg := channel.InboundMessage{
@@ -174,16 +208,53 @@ func inboundFromBridge(robotID string, req BridgeInbound) (channel.InboundMessag
 		Source: channel.Source{
 			ChannelType:    TypePopo,
 			ChatID:         chatID,
-			ChatType:       channel.ChatTypeP2P,
+			ChatType:       chatType,
 			SenderID:       sender,
 			SenderStableID: sender,
 		},
 		Raw: rawMeta,
 	}
-	if req.Quote != nil && strings.TrimSpace(req.Quote.MessageID) != "" {
-		msg.ReplyTo = &channel.ReplyCtx{MessageID: strings.TrimSpace(req.Quote.MessageID)}
-	}
+	applyBridgeQuote(&msg, req.Quote, cleaned)
 	return msg, true
+}
+
+func popoBridgeChatType(raw string) (channel.ChatType, bool) {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case string(channel.ChatTypeP2P):
+		return channel.ChatTypeP2P, true
+	case string(channel.ChatTypeGroup):
+		return channel.ChatTypeGroup, true
+	default:
+		return "", false
+	}
+}
+
+func applyBridgeQuote(msg *channel.InboundMessage, quote *BridgeQuote, instruction string) {
+	if msg == nil || quote == nil {
+		return
+	}
+	messageID := strings.TrimSpace(quote.MessageID)
+	quoteText := strings.TrimSpace(quote.Text)
+	if messageID == "" && quoteText == "" {
+		return
+	}
+	if messageID != "" {
+		msg.ReplyTo = &channel.ReplyCtx{MessageID: messageID}
+	}
+	body := quoteText
+	if body == "" {
+		body = quotedContentUnavailable
+	}
+	block := channel.FormatQuotedMessage(quote.SenderName, body)
+	if block == "" {
+		return
+	}
+	msg.HasSelectedContext = true
+	if strings.TrimSpace(instruction) == "" {
+		msg.Text = block
+		return
+	}
+	msg.Text = block + "\n\n" + instruction
 }
 
 func openEventType(raw json.RawMessage) string {
