@@ -48,6 +48,7 @@ func TestRobotIdleOnHeartbeat(t *testing.T) {
 		{name: "missing robot", b: bridge([]byte(`[]`), now), want: ErrRobotNotIdle},
 		{name: "disconnected", b: bridge(disconnected, now), want: ErrRobotNotIdle},
 		{name: "dj01bot occupied", b: bridge(occupied, now), want: ErrRobotOccupied},
+		{name: "multica first bind", b: bridge(multica, now), want: nil},
 		{name: "multica reentry", b: bridge(multica, now), owner: agent, want: nil},
 		{name: "multica other agent", b: bridge(multica, now), owner: other, want: ErrRobotOccupied},
 	}

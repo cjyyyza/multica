@@ -86,7 +86,11 @@ export interface CreatePopoBridgePairingRequest {
   hostname?: string;
 }
 
-/** Idle = connected on a recent heartbeat and not held by dj01bot/sparse/another agent. */
+/** Bindable = connected and not held by the ordinary gateway or Sparse.
+ * `occupied_by=multica` means this Windows bridge holds the websocket, which
+ * is the first-bind state — not an agent occupancy. */
 export function isIdlePopoRobot(robot: Pick<PopoBridgeRobot, "connected" | "occupied_by">): boolean {
-  return robot.connected === true && !robot.occupied_by;
+  if (robot.connected !== true) return false;
+  const occupied = robot.occupied_by;
+  return !occupied || occupied === "multica";
 }

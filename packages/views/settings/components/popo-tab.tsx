@@ -80,8 +80,19 @@ function onlineActiveBridges(bridges: PopoBridge[]): PopoBridge[] {
   return bridges.filter((b) => b.online && b.status === "active");
 }
 
-function idleRobotsOn(bridge: PopoBridge | undefined): PopoBridgeRobot[] {
-  return (bridge?.robots ?? []).filter(isIdlePopoRobot);
+function idleRobotsOn(
+  bridge: PopoBridge | undefined,
+  agentId?: string,
+  installations: PopoInstallation[] = [],
+): PopoBridgeRobot[] {
+  const taken = new Set(
+    installations
+      .filter((inst) => inst.status === "active" && inst.agent_id !== agentId)
+      .map((inst) => inst.robot_id),
+  );
+  return (bridge?.robots ?? []).filter(
+    (robot) => isIdlePopoRobot(robot) && !taken.has(robot.robot_id),
+  );
 }
 
 export function PopoTab() {
@@ -480,7 +491,7 @@ function BridgeRow({
                 {robot.display_name || robot.robot_id} ·{" "}
                 {!robot.connected
                   ? t(($) => $.popo.bridge_robot_disconnected)
-                  : !robot.occupied_by
+                  : isIdlePopoRobot(robot)
                     ? t(($) => $.popo.bridge_robot_idle)
                     : t(($) => $.popo.bridge_robot_occupied, {
                         occupant: robot.occupied_by,
@@ -614,7 +625,7 @@ export function PopoAgentBindButton({
 
   const onlineBridges = onlineActiveBridges(bridgeListing?.bridges ?? []);
   const selectedBridge = onlineBridges.find((b) => b.id === bridgeId);
-  const idleRobots = idleRobotsOn(selectedBridge);
+  const idleRobots = idleRobotsOn(selectedBridge, agentId, listing?.installations ?? []);
 
   useEffect(() => {
     if (!dialogOpen) return;

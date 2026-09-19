@@ -9,10 +9,13 @@ describe("isIdlePopoRobot", () => {
     expect(isIdlePopoRobot({ connected: true, occupied_by: "" })).toBe(true);
   });
 
+  it("treats a robot held by this Multica bridge as bindable", () => {
+    expect(isIdlePopoRobot({ connected: true, occupied_by: "multica" })).toBe(true);
+  });
+
   it("rejects disconnected robots and those held by another runtime", () => {
     expect(isIdlePopoRobot({ connected: false, occupied_by: null })).toBe(false);
     expect(isIdlePopoRobot({ connected: true, occupied_by: "dj01bot" })).toBe(false);
     expect(isIdlePopoRobot({ connected: true, occupied_by: "sparse" })).toBe(false);
-    expect(isIdlePopoRobot({ connected: true, occupied_by: "multica" })).toBe(false);
   });
 });

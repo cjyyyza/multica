@@ -257,10 +257,12 @@ func robotIdleOnHeartbeat(bridge db.PopoBridge, robotID string, agentID pgtype.U
 			return ErrRobotNotIdle
 		}
 		occupied := strings.TrimSpace(occupiedByValue(robot.OccupiedBy))
-		if occupied == "" {
-			return nil
-		}
-		if occupied == OccupiedByMultica && uuidEqual(liveOwnerAgent, agentID) {
+		if occupied == "" || occupied == OccupiedByMultica {
+			// This Multica bridge holds the websocket. That is not an
+			// agent binding; uniqueness still rejects another live owner.
+			if occupied == OccupiedByMultica && liveOwnerAgent.Valid && !uuidEqual(liveOwnerAgent, agentID) {
+				return ErrRobotOccupied
+			}
 			return nil
 		}
 		return ErrRobotOccupied

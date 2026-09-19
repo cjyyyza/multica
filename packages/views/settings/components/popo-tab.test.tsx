@@ -143,6 +143,7 @@ function idleOnlineBridge() {
     created_at: "2026-09-19T11:00:00Z",
     robots: [
       { robot_id: "idle-1", display_name: "Idle Bot", connected: true, occupied_by: null },
+      { robot_id: "held-1", display_name: "Held Bot", connected: true, occupied_by: "multica" },
       { robot_id: "busy-1", display_name: "Busy Bot", connected: true, occupied_by: "dj01bot" },
       { robot_id: "down-1", display_name: "Down Bot", connected: false, occupied_by: null },
     ],
@@ -253,7 +254,7 @@ describe("PopoAgentBindButton", () => {
     const robotSelect = await screen.findByTestId("popo-robot-select") as HTMLSelectElement;
     await waitFor(() => expect(robotSelect.value).toBe("idle-1"));
     const values = [...robotSelect.options].map((option) => option.value);
-    expect(values).toEqual(["idle-1"]);
+    expect(values).toEqual(["idle-1", "held-1"]);
     await userEvent.click(screen.getByTestId("popo-connect-submit"));
     expect(registerPopoBot).toHaveBeenCalledWith("ws-1", "agent-1", {
       bridge_id: "b1",

@@ -369,7 +369,12 @@ func TestPopoInstallRejectsOccupiedAndDuplicateOwner(t *testing.T) {
 	occupied := withURLParam(newRequest(http.MethodPost, "/api/workspaces/"+testWorkspaceID+"/popo/install?agent_id="+agentA, installBody), "id", testWorkspaceID)
 	testutil.Call(t, testHandler.RegisterPopoBot, occupied).Want(http.StatusConflict)
 
-	popoHeartbeat(t, token, popoIdleRobot(robotID))
+	popoHeartbeat(t, token, []map[string]any{{
+		"robot_id":     robotID,
+		"display_name": "Held",
+		"connected":    true,
+		"occupied_by":  "multica",
+	}})
 	idleInstall := withURLParam(newRequest(http.MethodPost, "/api/workspaces/"+testWorkspaceID+"/popo/install?agent_id="+agentA, installBody), "id", testWorkspaceID)
 	testutil.Call(t, testHandler.RegisterPopoBot, idleInstall).Want(http.StatusOK)
 
