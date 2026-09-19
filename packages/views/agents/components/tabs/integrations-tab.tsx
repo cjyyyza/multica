@@ -103,7 +103,9 @@ export function IntegrationsTab({ agent }: { agent: Agent }) {
   const canManageSlack = isWorkspaceAdmin;
   const canManageWecom = isWorkspaceAdmin;
   const canManageTelegram = isWorkspaceAdmin;
-  const canManagePopo = isWorkspaceAdmin;
+  // POPO install/revoke uses canManageAgent (agent owner or workspace
+  // owner/admin), same as Lark and DingTalk.
+  const canManagePopo = isWorkspaceAdmin || isAgentOwner;
   const hasActiveInstall =
     listing?.installations.some(
       (inst) => inst.agent_id === agent.id && inst.status === "active",
@@ -484,7 +486,11 @@ export function IntegrationsTab({ agent }: { agent: Agent }) {
               </p>
             </div>
           ) : (
-            <PopoAgentBindButton agentId={agent.id} agentName={agent.name} />
+            <PopoAgentBindButton
+              agentId={agent.id}
+              agentName={agent.name}
+              agentOwnerId={agent.owner_id}
+            />
           )}
         </div>
       </section>

@@ -11,7 +11,10 @@ export interface PopoInstallation {
   /** dj01bot robot id (`websocketRobots[].id`, or `default` for the webhook robot). */
   robot_id: string;
   robot_name: string;
-  /** Loopback dj01bot webhook base URL. Display only; the API never dials it. */
+  /** Windows bridge this robot is bound through. Empty on older rows. */
+  bridge_id: string;
+  /** Loopback dj01bot webhook base URL. Display only; the API never dials it.
+   * New installs return `""`; kept so older desktop builds keep parsing. */
   webhook_url: string;
   installer_user_id: string;
   status: "active" | "revoked" | string;
@@ -22,23 +25,68 @@ export interface PopoInstallation {
 
 export interface ListPopoInstallationsResponse {
   installations: PopoInstallation[];
-  /** Whether the deployment has the at-rest secret key configured. */
+  /** Whether this deployment has POPO enabled (`MULTICA_POPO_ENABLED=true`). */
   configured: boolean;
   /** Whether the install path is available (true whenever POPO is configured).
    * Optional so an older desktop build that predates it treats it as off. */
   install_supported?: boolean;
 }
 
-/** Request body for a robot install. `robot_id` may be empty and becomes `default`. */
+/** Request body for binding an idle robot on a paired Windows bridge. */
 export interface RegisterPopoRequest {
+  bridge_id: string;
   robot_id: string;
   robot_name?: string;
-  webhook_url?: string;
-  webhook_token?: string;
 }
 
 export interface RedeemPopoBindingTokenResponse {
   workspace_id: string;
   installation_id: string;
   popo_user_id: string;
+}
+
+/** Heartbeat occupancy: `null`/empty is idle; otherwise dj01bot, sparse, or multica. */
+export type PopoRobotOccupant = "dj01bot" | "sparse" | "multica" | string;
+
+/** One robot reported on a Windows bridge heartbeat.
+ * Mirrors `popo.RobotReport` in `server/internal/integrations/popo/bridge.go`. */
+export interface PopoBridgeRobot {
+  robot_id: string;
+  display_name: string;
+  connected: boolean;
+  occupied_by: PopoRobotOccupant | null;
+}
+
+/** Workspace-visible Windows bridge.
+ * Mirrors `PopoBridgeResponse` in `server/internal/handler/popo_bridge.go`. */
+export interface PopoBridge {
+  id: string;
+  hostname: string;
+  status: "active" | "revoked" | string;
+  online: boolean;
+  last_heartbeat_at: string;
+  robots: PopoBridgeRobot[];
+  created_at: string;
+}
+
+export interface ListPopoBridgesResponse {
+  bridges: PopoBridge[];
+  configured: boolean;
+}
+
+/** Pairing-code mint. `pairing_code` is returned once and must not be cached. */
+export interface PopoBridgePairing {
+  id: string;
+  pairing_code: string;
+  expires_at: string;
+  ttl_seconds: number;
+}
+
+export interface CreatePopoBridgePairingRequest {
+  hostname?: string;
+}
+
+/** Idle = connected on a recent heartbeat and not held by dj01bot/sparse/another agent. */
+export function isIdlePopoRobot(robot: Pick<PopoBridgeRobot, "connected" | "occupied_by">): boolean {
+  return robot.connected === true && !robot.occupied_by;
 }

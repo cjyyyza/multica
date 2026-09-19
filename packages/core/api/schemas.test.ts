@@ -16,9 +16,14 @@ import {
   PopoInstallationSchema,
   ListPopoInstallationsResponseSchema,
   RedeemPopoBindingTokenResponseSchema,
+  PopoBridgeSchema,
+  ListPopoBridgesResponseSchema,
+  PopoBridgePairingSchema,
   EMPTY_POPO_INSTALLATION,
   EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE,
   EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE,
+  EMPTY_LIST_POPO_BRIDGES_RESPONSE,
+  EMPTY_POPO_BRIDGE_PAIRING,
   AgentTaskListSchema,
   TaskMessageListSchema,
   AutopilotQuotaUsageSchema,
@@ -2046,6 +2051,8 @@ describe("POPO installation schemas", () => {
     const parsed = PopoInstallationSchema.parse({ id: "i1" });
     expect(parsed.status).toBe("revoked");
     expect(parsed.robot_id).toBe("");
+    expect(parsed.bridge_id).toBe("");
+    expect(parsed.webhook_url).toBe("");
     const list = ListPopoInstallationsResponseSchema.parse({});
     expect(list).toEqual({ installations: [], configured: false });
   });
@@ -2072,6 +2079,77 @@ describe("POPO installation schemas", () => {
         { endpoint: "POST /api/popo/binding/redeem" },
       ),
     ).toEqual(EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE);
+  });
+});
+
+describe("POPO bridge schemas", () => {
+  it("parses a well-formed bridge list including idle and occupied robots", () => {
+    const parsed = ListPopoBridgesResponseSchema.parse({
+      configured: true,
+      bridges: [
+        {
+          id: "b1",
+          hostname: "WIN-HOST",
+          status: "active",
+          online: true,
+          last_heartbeat_at: "2026-09-19T12:00:00Z",
+          robots: [
+            {
+              robot_id: "default",
+              display_name: "Support Bot",
+              connected: true,
+              occupied_by: null,
+            },
+            {
+              robot_id: "busy",
+              connected: true,
+              occupied_by: "dj01bot",
+            },
+          ],
+          created_at: "2026-09-19T11:00:00Z",
+        },
+      ],
+    });
+    expect(parsed.configured).toBe(true);
+    expect(parsed.bridges[0]?.hostname).toBe("WIN-HOST");
+    expect(parsed.bridges[0]?.robots[0]?.occupied_by).toBeNull();
+    expect(parsed.bridges[0]?.robots[1]?.occupied_by).toBe("dj01bot");
+    expect(parsed.bridges[0]?.robots[1]?.display_name).toBe("");
+  });
+
+  it("keeps unknown occupancy and status strings", () => {
+    const parsed = PopoBridgeSchema.parse({
+      id: "b1",
+      status: "draining",
+      online: true,
+      robots: [{ robot_id: "r1", connected: true, occupied_by: "future-lock" }],
+    });
+    expect(parsed.status).toBe("draining");
+    expect(parsed.robots[0]?.occupied_by).toBe("future-lock");
+  });
+
+  it("defaults an incomplete bridge list to disconnected / not configured", () => {
+    const list = ListPopoBridgesResponseSchema.parse({});
+    expect(list).toEqual({ bridges: [], configured: false });
+    const pairing = PopoBridgePairingSchema.parse({ id: "p1" });
+    expect(pairing.pairing_code).toBe("");
+    expect(pairing.ttl_seconds).toBe(900);
+  });
+
+  it("falls back safely for malformed bridge list and pairing responses", () => {
+    expect(
+      parseWithFallback(
+        "not json",
+        ListPopoBridgesResponseSchema,
+        EMPTY_LIST_POPO_BRIDGES_RESPONSE,
+        { endpoint: "GET /api/workspaces/:id/popo/bridges" },
+      ),
+    ).toEqual(EMPTY_LIST_POPO_BRIDGES_RESPONSE);
+    expect(
+      parseWithFallback(42, PopoBridgePairingSchema, EMPTY_POPO_BRIDGE_PAIRING, {
+        endpoint: "POST /api/workspaces/:id/popo/bridge-pairings",
+      }),
+    ).toEqual(EMPTY_POPO_BRIDGE_PAIRING);
   });
 });
 

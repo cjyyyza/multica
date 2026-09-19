@@ -254,7 +254,14 @@ export type {
   ListPopoInstallationsResponse,
   RegisterPopoRequest,
   RedeemPopoBindingTokenResponse,
+  PopoRobotOccupant,
+  PopoBridgeRobot,
+  PopoBridge,
+  ListPopoBridgesResponse,
+  PopoBridgePairing,
+  CreatePopoBridgePairingRequest,
 } from "./popo";
+export { isIdlePopoRobot } from "./popo";
 export type {
   Autopilot,
   AutopilotStatus,

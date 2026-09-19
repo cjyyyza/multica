@@ -47,6 +47,8 @@ import type {
   PopoInstallation,
   ListPopoInstallationsResponse,
   RedeemPopoBindingTokenResponse,
+  ListPopoBridgesResponse,
+  PopoBridgePairing,
   GroupedIssuesResponse,
   GitHubConnectResponse,
   GitHubPullRequest,
@@ -3286,6 +3288,7 @@ export const PopoInstallationSchema = z.object({
   agent_id: z.string().default(""),
   robot_id: z.string().default(""),
   robot_name: z.string().default(""),
+  bridge_id: z.string().default(""),
   webhook_url: z.string().default(""),
   installer_user_id: z.string().default(""),
   status: z.string().default("revoked"),
@@ -3300,6 +3303,7 @@ export const EMPTY_POPO_INSTALLATION: PopoInstallation = {
   agent_id: "",
   robot_id: "",
   robot_name: "",
+  bridge_id: "",
   webhook_url: "",
   installer_user_id: "",
   status: "revoked",
@@ -3329,6 +3333,49 @@ export const EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE: RedeemPopoBindingTokenRes
   workspace_id: "",
   installation_id: "",
   popo_user_id: "",
+};
+
+// Windows-bridge list/pairing. Status and occupied_by stay `z.string()` so a
+// newer occupancy lock still parses on an older desktop build.
+export const PopoBridgeRobotSchema = z.object({
+  robot_id: z.string().default(""),
+  display_name: z.string().default(""),
+  connected: z.boolean().default(false),
+  occupied_by: z.string().nullable().optional().default(null),
+}).loose();
+
+export const PopoBridgeSchema = z.object({
+  id: z.string(),
+  hostname: z.string().default(""),
+  status: z.string().default("revoked"),
+  online: z.boolean().default(false),
+  last_heartbeat_at: z.string().default(""),
+  robots: z.array(PopoBridgeRobotSchema).default([]),
+  created_at: z.string().default(""),
+}).loose();
+
+export const ListPopoBridgesResponseSchema = z.object({
+  bridges: z.array(PopoBridgeSchema).default([]),
+  configured: z.boolean().default(false),
+}).loose();
+
+export const EMPTY_LIST_POPO_BRIDGES_RESPONSE: ListPopoBridgesResponse = {
+  bridges: [],
+  configured: false,
+};
+
+export const PopoBridgePairingSchema = z.object({
+  id: z.string(),
+  pairing_code: z.string().default(""),
+  expires_at: z.string().default(""),
+  ttl_seconds: z.number().default(900),
+}).loose();
+
+export const EMPTY_POPO_BRIDGE_PAIRING: PopoBridgePairing = {
+  id: "",
+  pairing_code: "",
+  expires_at: "",
+  ttl_seconds: 900,
 };
 
 // Skills. Introduced for `POST /api/skills/:id/refresh` (update a skill from

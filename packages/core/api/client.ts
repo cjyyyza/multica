@@ -200,6 +200,9 @@ import type {
   ListPopoInstallationsResponse,
   RegisterPopoRequest,
   RedeemPopoBindingTokenResponse,
+  ListPopoBridgesResponse,
+  PopoBridgePairing,
+  CreatePopoBridgePairingRequest,
   Squad,
   SquadMember,
   SquadMemberStatusListResponse,
@@ -375,9 +378,13 @@ import {
   PopoInstallationSchema,
   ListPopoInstallationsResponseSchema,
   RedeemPopoBindingTokenResponseSchema,
+  ListPopoBridgesResponseSchema,
+  PopoBridgePairingSchema,
   EMPTY_POPO_INSTALLATION,
   EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE,
   EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE,
+  EMPTY_LIST_POPO_BRIDGES_RESPONSE,
+  EMPTY_POPO_BRIDGE_PAIRING,
   EMPTY_BILLING_BALANCE,
   EMPTY_BILLING_TRANSACTIONS_PAGE,
   EMPTY_BILLING_BATCHES_PAGE,
@@ -4971,6 +4978,38 @@ export class ApiClient {
     );
   }
 
+  async listPopoBridges(workspaceId: string): Promise<ListPopoBridgesResponse> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/popo/bridges`);
+    return parseWithFallback(
+      raw,
+      ListPopoBridgesResponseSchema,
+      EMPTY_LIST_POPO_BRIDGES_RESPONSE,
+      { endpoint: "GET /api/workspaces/:id/popo/bridges" },
+    );
+  }
+
+  async createPopoBridgePairing(
+    workspaceId: string,
+    body?: CreatePopoBridgePairingRequest,
+  ): Promise<PopoBridgePairing> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/popo/bridge-pairings`,
+      {
+        method: "POST",
+        body: JSON.stringify(body ?? {}),
+      },
+    );
+    return parseWithFallback(raw, PopoBridgePairingSchema, EMPTY_POPO_BRIDGE_PAIRING, {
+      endpoint: "POST /api/workspaces/:id/popo/bridge-pairings",
+    });
+  }
+
+  async revokePopoBridge(workspaceId: string, bridgeId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/popo/bridges/${bridgeId}`, {
+      method: "DELETE",
+    });
+  }
+
   async registerPopoBot(
     workspaceId: string,
     agentId: string,
@@ -4981,7 +5020,11 @@ export class ApiClient {
       `/api/workspaces/${workspaceId}/popo/install?${search.toString()}`,
       {
         method: "POST",
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          bridge_id: body.bridge_id,
+          robot_id: body.robot_id,
+          robot_name: body.robot_name ?? "",
+        }),
       },
     );
     return parseWithFallback(raw, PopoInstallationSchema, EMPTY_POPO_INSTALLATION, {

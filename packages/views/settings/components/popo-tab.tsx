@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ChevronRight, Trash2 } from "lucide-react";
+import { Check, ChevronRight, Copy, Trash2 } from "lucide-react";
 import { PopoMark } from "./popo-mark";
 import { cn } from "@multica/ui/lib/utils";
+import { copyText } from "@multica/ui/lib/clipboard";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import {
@@ -27,18 +28,66 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@multica/ui/components/ui/alert-dialog";
+import { ApiError, api, errorCode } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { useActorName } from "@multica/core/workspace/hooks";
-import { popoInstallationsOptions, popoKeys } from "@multica/core/popo";
-import { api } from "@multica/core/api";
-import type { PopoInstallation } from "@multica/core/types";
+import {
+  popoBridgesOptions,
+  popoInstallationsOptions,
+  popoKeys,
+} from "@multica/core/popo";
+import {
+  isIdlePopoRobot,
+  type PopoBridge,
+  type PopoBridgePairing,
+  type PopoBridgeRobot,
+  type PopoInstallation,
+} from "@multica/core/types";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { useLocale, useT } from "../../i18n";
+import { useLocale, useT, useTimeAgo } from "../../i18n";
+
+const SELECT_CLASS =
+  "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-title-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 md:text-body dark:bg-input/30";
+
+function isPopoNotConfiguredError(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  return error.status === 503 || errorCode(error) === "popo_not_configured";
+}
+
+function popoServerOrigin(): string {
+  const base = typeof api.getBaseUrl === "function" ? api.getBaseUrl() : "";
+  const trimmed = base.replace(/\/$/, "");
+  if (trimmed) {
+    try {
+      return new URL(trimmed).origin;
+    } catch {
+      return trimmed;
+    }
+  }
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
+  }
+  return "";
+}
+
+export function popoPairCommand(origin: string, pairingCode: string): string {
+  return `python -m nanobot.multica_bridge pair --server ${origin} --pairing-code ${pairingCode}`;
+}
+
+function onlineActiveBridges(bridges: PopoBridge[]): PopoBridge[] {
+  return bridges.filter((b) => b.online && b.status === "active");
+}
+
+function idleRobotsOn(bridge: PopoBridge | undefined): PopoBridgeRobot[] {
+  return (bridge?.robots ?? []).filter(isIdlePopoRobot);
+}
 
 export function PopoTab() {
   const { t } = useT("settings");
+  const locale = useLocale();
+  const timeAgo = useTimeAgo();
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
   const user = useAuthStore((s) => s.user);
@@ -48,22 +97,93 @@ export function PopoTab() {
   const canManage =
     currentMember?.role === "owner" || currentMember?.role === "admin";
 
-  const { data, isLoading, isError } = useQuery({
+  const bridgesQuery = useQuery({
+    ...popoBridgesOptions(wsId),
+    enabled: !!wsId,
+  });
+  const installsQuery = useQuery({
     ...popoInstallationsOptions(wsId),
     enabled: !!wsId,
   });
-  const installations = data?.installations ?? [];
-  const configured = data?.configured === true;
 
+  const bridges = bridgesQuery.data?.bridges ?? [];
+  const installations = installsQuery.data?.installations ?? [];
+  const notConfigured =
+    isPopoNotConfiguredError(bridgesQuery.error) ||
+    isPopoNotConfiguredError(installsQuery.error) ||
+    bridgesQuery.data?.configured === false ||
+    (bridgesQuery.data == null && installsQuery.data?.configured === false);
+  const isLoading =
+    (bridgesQuery.isLoading && bridgesQuery.data == null) ||
+    (installsQuery.isLoading && installsQuery.data == null);
+  const loadFailed =
+    (bridgesQuery.isError && !isPopoNotConfiguredError(bridgesQuery.error)) ||
+    (installsQuery.isError && !isPopoNotConfiguredError(installsQuery.error));
+
+  const [pairing, setPairing] = useState<PopoBridgePairing | null>(null);
+  const [creatingPairing, setCreatingPairing] = useState(false);
+  const [pairingCopied, setPairingCopied] = useState(false);
+  const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState(false);
   const [disconnectTarget, setDisconnectTarget] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState(false);
+
+  function closePairingDialog() {
+    setPairing(null);
+    setPairingCopied(false);
+  }
+
+  async function handleCreatePairing() {
+    if (creatingPairing) return;
+    setCreatingPairing(true);
+    try {
+      const created = await api.createPopoBridgePairing(wsId);
+      if (!created.pairing_code) {
+        throw new Error(t(($) => $.popo.pairing_create_failed));
+      }
+      setPairingCopied(false);
+      setPairing(created);
+      await qc.invalidateQueries({ queryKey: popoKeys.all(wsId) });
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? e.message : t(($) => $.popo.pairing_create_failed),
+      );
+    } finally {
+      setCreatingPairing(false);
+    }
+  }
+
+  async function handleCopyPairCommand() {
+    if (!pairing?.pairing_code) return;
+    const command = popoPairCommand(popoServerOrigin(), pairing.pairing_code);
+    if (await copyText(command)) {
+      setPairingCopied(true);
+    }
+  }
+
+  async function handleRevoke() {
+    if (!revokeTarget || revoking) return;
+    setRevoking(true);
+    try {
+      await api.revokePopoBridge(wsId, revokeTarget);
+      await qc.invalidateQueries({ queryKey: popoKeys.all(wsId) });
+      toast.success(t(($) => $.popo.toast_bridge_revoked));
+      setRevokeTarget(null);
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? e.message : t(($) => $.popo.toast_bridge_revoke_failed),
+      );
+    } finally {
+      setRevoking(false);
+    }
+  }
 
   async function handleDisconnect() {
     if (!disconnectTarget || disconnecting) return;
     setDisconnecting(true);
     try {
       await api.deletePopoInstallation(wsId, disconnectTarget);
-      await qc.invalidateQueries({ queryKey: popoKeys.installations(wsId) });
+      await qc.invalidateQueries({ queryKey: popoKeys.all(wsId) });
       toast.success(t(($) => $.popo.toast_disconnected));
       setDisconnectTarget(null);
     } catch (e) {
@@ -75,9 +195,17 @@ export function PopoTab() {
     }
   }
 
+  const pairingCommand = pairing
+    ? popoPairCommand(popoServerOrigin(), pairing.pairing_code)
+    : "";
+  const pairingExpires =
+    pairing?.expires_at && !Number.isNaN(Date.parse(pairing.expires_at))
+      ? new Date(pairing.expires_at).toLocaleString(locale)
+      : "";
+
   return (
     <div className="space-y-8">
-      {isError ? (
+      {loadFailed && !notConfigured ? (
         <Card>
           <CardContent>
             <p className="text-body text-muted-foreground">
@@ -91,14 +219,14 @@ export function PopoTab() {
             <p className="text-body text-muted-foreground">{t(($) => $.popo.loading)}</p>
           </CardContent>
         </Card>
-      ) : !configured ? (
+      ) : notConfigured ? (
         <Card>
           <CardContent className="space-y-2">
             <p className="text-body font-medium">{t(($) => $.popo.not_enabled_title)}</p>
             <p className="text-caption text-muted-foreground">
               {t(($) => $.popo.not_enabled_description_prefix)}{" "}
               <code className="rounded-xs bg-muted px-1 py-0.5 text-micro">
-                MULTICA_POPO_SECRET_KEY
+                MULTICA_POPO_ENABLED=true
               </code>{" "}
               {t(($) => $.popo.not_enabled_description_suffix)}{" "}
               {t(($) => $.popo.not_enabled_self_host_hint)}
@@ -106,35 +234,171 @@ export function PopoTab() {
           </CardContent>
         </Card>
       ) : (
-        <section className="space-y-3">
-          <h2 className="text-body font-semibold">{t(($) => $.popo.connected_bots)}</h2>
-          {installations.length === 0 ? (
-            <Card>
-              <CardContent className="space-y-2">
-                <p className="text-body font-medium">{t(($) => $.popo.empty_title)}</p>
-                <p className="text-caption text-muted-foreground">
-                  {t(($) => $.popo.empty_description_prefix)}{" "}
-                  <strong>{t(($) => $.popo.empty_description_cta)}</strong>{" "}
-                  {t(($) => $.popo.empty_description_suffix)}
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
-            <Card>
-              <CardContent className="divide-y">
-                {installations.map((inst) => (
-                  <InstallationRow
-                    key={inst.id}
-                    installation={inst}
-                    canManage={canManage}
-                    onDisconnect={() => setDisconnectTarget(inst.id)}
-                  />
-                ))}
-              </CardContent>
-            </Card>
-          )}
-        </section>
+        <>
+          <section className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-body font-semibold">{t(($) => $.popo.bridges_title)}</h2>
+              {canManage && (
+                <Button
+                  size="sm"
+                  onClick={() => void handleCreatePairing()}
+                  disabled={creatingPairing}
+                  data-testid="popo-create-pairing"
+                >
+                  {creatingPairing
+                    ? t(($) => $.popo.pairing_creating)
+                    : t(($) => $.popo.create_pairing)}
+                </Button>
+              )}
+            </div>
+            {bridges.length === 0 ? (
+              <Card>
+                <CardContent>
+                  <p className="text-body font-medium">{t(($) => $.popo.bridges_empty)}</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardContent className="divide-y">
+                  {bridges.map((bridge) => (
+                    <BridgeRow
+                      key={bridge.id}
+                      bridge={bridge}
+                      canManage={canManage}
+                      lastSeen={
+                        bridge.last_heartbeat_at
+                          ? t(($) => $.popo.bridge_last_seen, {
+                              when: timeAgo(bridge.last_heartbeat_at),
+                            })
+                          : t(($) => $.popo.bridge_last_seen_never)
+                      }
+                      onRevoke={() => setRevokeTarget(bridge.id)}
+                    />
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+          </section>
+
+          <section className="space-y-3">
+            <h2 className="text-body font-semibold">{t(($) => $.popo.connected_bots)}</h2>
+            {installations.length === 0 ? (
+              <Card>
+                <CardContent className="space-y-2">
+                  <p className="text-body font-medium">{t(($) => $.popo.empty_title)}</p>
+                  <p className="text-caption text-muted-foreground">
+                    {t(($) => $.popo.empty_description_prefix)}{" "}
+                    <strong>{t(($) => $.popo.empty_description_cta)}</strong>{" "}
+                    {t(($) => $.popo.empty_description_suffix)}
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardContent className="divide-y">
+                  {installations.map((inst) => (
+                    <InstallationRow
+                      key={inst.id}
+                      installation={inst}
+                      canManage={canManage}
+                      onDisconnect={() => setDisconnectTarget(inst.id)}
+                    />
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+          </section>
+        </>
       )}
+
+      <Dialog
+        open={!!pairing}
+        onOpenChange={(open) => {
+          if (!open) closePairingDialog();
+        }}
+      >
+        <DialogContent className="sm:max-w-lg" data-testid="popo-pairing-dialog">
+          <DialogHeader>
+            <DialogTitle>{t(($) => $.popo.pairing_dialog_title)}</DialogTitle>
+          </DialogHeader>
+          {pairing ? (
+            <div className="space-y-3">
+              <code
+                className="block break-all rounded-md border bg-muted/50 px-3 py-2 text-body select-all"
+                data-testid="popo-pairing-code"
+              >
+                {pairing.pairing_code}
+              </code>
+              {pairingExpires ? (
+                <p className="text-caption text-muted-foreground">
+                  {t(($) => $.popo.pairing_expires, { when: pairingExpires })}
+                </p>
+              ) : null}
+              <p className="text-caption text-muted-foreground">
+                {t(($) => $.popo.pairing_command_hint)}
+              </p>
+              <code
+                className="block whitespace-pre-wrap break-all rounded-md border bg-muted/50 px-3 py-2 text-caption select-all"
+                data-testid="popo-pairing-command"
+              >
+                {pairingCommand}
+              </code>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void handleCopyPairCommand()}
+              data-testid="popo-pairing-copy"
+            >
+              {pairingCopied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+              {pairingCopied
+                ? t(($) => $.popo.pairing_copied)
+                : t(($) => $.popo.pairing_copy)}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={closePairingDialog}
+              data-testid="popo-pairing-close"
+            >
+              {t(($) => $.popo.pairing_done)}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={!!revokeTarget}
+        onOpenChange={(v) => {
+          if (!v && !revoking) setRevokeTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t(($) => $.popo.revoke_bridge_title)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(($) => $.popo.revoke_bridge_description)}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={revoking}>
+              {t(($) => $.popo.revoke_bridge_cancel)}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={handleRevoke}
+              disabled={revoking}
+            >
+              {revoking
+                ? t(($) => $.popo.revoking_bridge)
+                : t(($) => $.popo.revoke_bridge)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={!!disconnectTarget}
@@ -163,6 +427,80 @@ export function PopoTab() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+}
+
+function BridgeRow({
+  bridge,
+  canManage,
+  lastSeen,
+  onRevoke,
+}: {
+  bridge: PopoBridge;
+  canManage: boolean;
+  lastSeen: string;
+  onRevoke: () => void;
+}) {
+  const { t } = useT("settings");
+  const isRevoked = bridge.status === "revoked";
+  const host = bridge.hostname || bridge.id;
+  return (
+    <div
+      className="flex items-start justify-between gap-4 py-3 first:pt-0 last:pb-0"
+      data-testid="popo-bridge-row"
+    >
+      <div className="min-w-0 space-y-1">
+        <p className="text-body font-medium">
+          {host}
+          <span
+            className={cn(
+              "ml-2 rounded-xs px-1.5 py-0.5 text-micro",
+              bridge.online && !isRevoked
+                ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                : "bg-muted text-muted-foreground",
+            )}
+          >
+            {isRevoked
+              ? t(($) => $.popo.bridge_revoked)
+              : bridge.online
+                ? t(($) => $.popo.bridge_online)
+                : t(($) => $.popo.bridge_offline)}
+          </span>
+        </p>
+        <p className="text-micro text-muted-foreground">{lastSeen}</p>
+        {bridge.robots.length === 0 ? (
+          <p className="text-caption text-muted-foreground">
+            {t(($) => $.popo.bridge_robots_none)}
+          </p>
+        ) : (
+          <ul className="space-y-0.5 text-caption text-muted-foreground">
+            {bridge.robots.map((robot) => (
+              <li key={robot.robot_id || robot.display_name}>
+                {robot.display_name || robot.robot_id} ·{" "}
+                {!robot.connected
+                  ? t(($) => $.popo.bridge_robot_disconnected)
+                  : !robot.occupied_by
+                    ? t(($) => $.popo.bridge_robot_idle)
+                    : t(($) => $.popo.bridge_robot_occupied, {
+                        occupant: robot.occupied_by,
+                      })}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {canManage && !isRevoked && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onRevoke}
+          data-testid="popo-revoke-bridge"
+        >
+          <Trash2 className="h-3 w-3" />
+          {t(($) => $.popo.revoke_bridge)}
+        </Button>
+      )}
     </div>
   );
 }
@@ -227,11 +565,18 @@ function InstallationRow({
 export function PopoAgentBindButton({
   agentId,
   agentName,
+  agentOwnerId,
   className,
   onShowConnectedDetails,
 }: {
   agentId: string;
   agentName?: string;
+  /**
+   * The bound agent's owner (`agent.owner_id`). When it matches the
+   * current user, they can bind/disconnect even if they are not a
+   * workspace owner/admin — mirroring canManageAgent on the server.
+   */
+  agentOwnerId?: string | null;
   className?: string;
   onShowConnectedDetails?: () => void;
 }) {
@@ -241,13 +586,17 @@ export function PopoAgentBindButton({
   const user = useAuthStore((s) => s.user);
 
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [bridgeId, setBridgeId] = useState("");
   const [robotId, setRobotId] = useState("");
   const [robotName, setRobotName] = useState("");
-  const [webhookURL, setWebhookURL] = useState("http://127.0.0.1:28792");
   const [submitting, setSubmitting] = useState(false);
 
   const { data: listing } = useQuery({
     ...popoInstallationsOptions(wsId),
+    enabled: !!wsId,
+  });
+  const { data: bridgeListing } = useQuery({
+    ...popoBridgesOptions(wsId),
     enabled: !!wsId,
   });
   const installSupported = listing?.install_supported === true;
@@ -257,8 +606,29 @@ export function PopoAgentBindButton({
     enabled: !!wsId,
   });
   const currentMember = members.find((m) => m.user_id === user?.id) ?? null;
-  const canManage =
+  const isWorkspaceAdmin =
     currentMember?.role === "owner" || currentMember?.role === "admin";
+  const isAgentOwner =
+    !!user?.id && agentOwnerId != null && agentOwnerId === user.id;
+  const canManage = isWorkspaceAdmin || isAgentOwner;
+
+  const onlineBridges = onlineActiveBridges(bridgeListing?.bridges ?? []);
+  const selectedBridge = onlineBridges.find((b) => b.id === bridgeId);
+  const idleRobots = idleRobotsOn(selectedBridge);
+
+  useEffect(() => {
+    if (!dialogOpen) return;
+    if (!bridgeId || !onlineBridges.some((b) => b.id === bridgeId)) {
+      setBridgeId(onlineBridges[0]?.id ?? "");
+    }
+  }, [dialogOpen, onlineBridges, bridgeId]);
+
+  useEffect(() => {
+    if (!dialogOpen) return;
+    if (!robotId || !idleRobots.some((r) => r.robot_id === robotId)) {
+      setRobotId(idleRobots[0]?.robot_id ?? "");
+    }
+  }, [dialogOpen, idleRobots, robotId]);
 
   if (!canManage) return null;
 
@@ -281,29 +651,29 @@ export function PopoAgentBindButton({
   function closeDialog() {
     if (submitting) return;
     setDialogOpen(false);
+    setBridgeId("");
     setRobotId("");
     setRobotName("");
-    setWebhookURL("http://127.0.0.1:28792");
   }
 
   async function handleSubmit() {
-    if (submitting || !agentId) return;
+    if (submitting || !agentId || !bridgeId || !robotId) return;
     setSubmitting(true);
     try {
       const installation = await api.registerPopoBot(wsId, agentId, {
-        robot_id: robotId.trim(),
+        bridge_id: bridgeId,
+        robot_id: robotId,
         robot_name: robotName.trim(),
-        webhook_url: webhookURL.trim(),
       });
       if (!installation.id || installation.status !== "active") {
         throw new Error("POPO connection returned an invalid installation");
       }
-      await qc.invalidateQueries({ queryKey: popoKeys.installations(wsId) });
+      await qc.invalidateQueries({ queryKey: popoKeys.all(wsId) });
       toast.success(t(($) => $.popo.connect_success_toast));
       setDialogOpen(false);
+      setBridgeId("");
       setRobotId("");
       setRobotName("");
-      setWebhookURL("http://127.0.0.1:28792");
     } catch (e) {
       toast.error(
         e instanceof Error ? e.message : t(($) => $.popo.connect_failed_toast),
@@ -312,6 +682,8 @@ export function PopoAgentBindButton({
       setSubmitting(false);
     }
   }
+
+  const canSubmit = !!bridgeId && !!robotId && !submitting;
 
   return (
     <div
@@ -343,59 +715,76 @@ export function PopoAgentBindButton({
             <DialogTitle>{t(($) => $.popo.connect_dialog_title)}</DialogTitle>
           </DialogHeader>
 
-          <p className="text-caption text-muted-foreground">
-            {t(($) => $.popo.connect_dialog_description)}
-          </p>
+          {onlineBridges.length === 0 ? (
+            <p className="text-caption text-muted-foreground">
+              {t(($) => $.popo.no_online_bridge)}
+            </p>
+          ) : (
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="popo-bridge">{t(($) => $.popo.bridge_label)}</Label>
+                <select
+                  id="popo-bridge"
+                  data-testid="popo-bridge-select"
+                  className={SELECT_CLASS}
+                  value={bridgeId}
+                  onChange={(e) => setBridgeId(e.target.value)}
+                  disabled={submitting}
+                >
+                  {onlineBridges.map((bridge) => (
+                    <option key={bridge.id} value={bridge.id}>
+                      {bridge.hostname || bridge.id}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="popo-robot-id">
-              {t(($) => $.popo.robot_id_label)}
-            </Label>
-            <Input
-              id="popo-robot-id"
-              data-testid="popo-robot-id"
-              value={robotId}
-              onChange={(e) => setRobotId(e.target.value)}
-              placeholder="default"
-              autoComplete="off"
-              spellCheck={false}
-              disabled={submitting}
-            />
-          </div>
+              {idleRobots.length === 0 ? (
+                <p className="text-caption text-muted-foreground">
+                  {t(($) => $.popo.no_idle_robots)}
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  <Label htmlFor="popo-robot">{t(($) => $.popo.robot_label)}</Label>
+                  <select
+                    id="popo-robot"
+                    data-testid="popo-robot-select"
+                    className={SELECT_CLASS}
+                    value={robotId}
+                    onChange={(e) => setRobotId(e.target.value)}
+                    disabled={submitting}
+                  >
+                    {idleRobots.map((robot) => (
+                      <option key={robot.robot_id} value={robot.robot_id}>
+                        {robot.display_name
+                          ? `${robot.display_name} · ${robot.robot_id}`
+                          : robot.robot_id}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
-          <div className="space-y-1.5">
-            <Label htmlFor="popo-robot-name">
-              {t(($) => $.popo.robot_name_label)}
-            </Label>
-            <Input
-              id="popo-robot-name"
-              data-testid="popo-robot-name"
-              value={robotName}
-              onChange={(e) => setRobotName(e.target.value)}
-              autoComplete="off"
-              spellCheck={false}
-              disabled={submitting}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="popo-webhook-url">
-              {t(($) => $.popo.webhook_url_label)}
-            </Label>
-            <Input
-              id="popo-webhook-url"
-              data-testid="popo-webhook-url"
-              value={webhookURL}
-              onChange={(e) => setWebhookURL(e.target.value)}
-              placeholder="http://127.0.0.1:28792"
-              autoComplete="off"
-              spellCheck={false}
-              disabled={submitting}
-            />
-          </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="popo-robot-name">
+                  {t(($) => $.popo.robot_name_label)}
+                </Label>
+                <Input
+                  id="popo-robot-name"
+                  data-testid="popo-robot-name"
+                  value={robotName}
+                  onChange={(e) => setRobotName(e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={submitting}
+                />
+              </div>
+            </div>
+          )}
 
           <DialogFooter>
             <Button
+              type="button"
               variant="outline"
               size="sm"
               onClick={closeDialog}
@@ -404,9 +793,10 @@ export function PopoAgentBindButton({
               {t(($) => $.popo.connect_cancel)}
             </Button>
             <Button
+              type="button"
               size="sm"
               onClick={handleSubmit}
-              disabled={submitting}
+              disabled={!canSubmit}
               data-testid="popo-connect-submit"
             >
               {submitting
@@ -464,7 +854,7 @@ function PopoAgentBotConnectedBadge({
     setDisconnecting(true);
     try {
       await api.deletePopoInstallation(wsId, installation.id);
-      await qc.invalidateQueries({ queryKey: popoKeys.installations(wsId) });
+      await qc.invalidateQueries({ queryKey: popoKeys.all(wsId) });
       toast.success(t(($) => $.popo.toast_disconnected));
       setConfirmOpen(false);
     } catch (e) {
