@@ -1275,6 +1275,7 @@
     "depot_placeholder": "//depot/project",
     "stream_placeholder": "Stream (optional)",
     "description_placeholder": "Description (optional)",
+    "swarm_placeholder": "https://swarm.example.com",
     "add": "Add depot",
     "empty": "No Perforce depots yet.",
     "incomplete": "Port and depot are required.",

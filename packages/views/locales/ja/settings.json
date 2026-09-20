@@ -1272,6 +1272,7 @@
     "depot_placeholder": "//depot/project",
     "stream_placeholder": "Stream（任意）",
     "description_placeholder": "説明（任意）",
+    "swarm_placeholder": "https://swarm.example.com",
     "add": "depot を追加",
     "empty": "まだ Perforce depot がありません。",
     "incomplete": "port と depot は必須です。",

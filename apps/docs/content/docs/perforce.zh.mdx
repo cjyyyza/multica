@@ -23,6 +23,7 @@ Multica 不保存 Perforce 密码。守护进程使用本机 Helix 登录（`P4U
 | Depot | 是 | `//depot/project` |
 | Stream | 否 | `//depot/project/main` |
 | 描述 | 否 | 游戏客户端 |
+| Swarm URL | 否 | `https://swarm.example.com` |
 
 HTTP 形式的 Git URL 不能当作 port。也可以用 `multica p4 list`、`multica p4 add`、`multica p4 remove` 管理列表。
 
@@ -47,15 +48,54 @@ multica p4 sync --port perforce.example.com:1666 --depot //depot/project --strea
 multica p4 sync --port perforce.example.com:1666 --depot //depot/project --fresh
 ```
 
-守护进程会创建短的任务级 client（`mc` + 16 位十六进制），在 `workdir/p4/<client>` 里执行 `p4 sync`，并返回该路径。client 和目录同时区分服务器、depot、stream 和运行。`--fresh` 会先删除上次的同步目录，再强制下载文件，避免服务器仍保留 have list 时返回空目录。本机 `PATH` 里需要有 `p4`。
+守护进程会创建短的任务级 client（`mc` + 16 位十六进制），在任务根目录的 `p4/<client>` 里执行 `p4 sync`，并返回该路径。从子目录执行命令时，同步位置保持不变。client 和目录同时区分服务器、depot、stream 和运行。`--fresh` 会先删除上次的同步目录，再强制下载文件，避免服务器仍保留 have list 时返回空目录。本机 `PATH` 里需要有 `p4`。
 
-使用 `--output json` 读取 `path` 和 `client`。之后在该目录执行 Perforce 命令时，显式传入配置的 `-p <port>` 和返回的 `-c <client>`。普通 depot 的 view 会把所选项目直接映射到返回的目录。
+使用 `--output json` 读取 `path` 和 `client`。client 使用 `noallwrite`，文件在 `edit` 之前是只读的。不要用本机默认 client 去跑 `p4`。
+
+## 编辑、checkout 与提交
+
+同步之后，先进入返回的 checkout 路径，再使用相对文件路径。通过同一个守护进程 client 打开和提交文件：
+
+```bash
+multica p4 edit --port perforce.example.com:1666 --depot //depot/project -- Source/Foo.cpp
+multica p4 checkout --port perforce.example.com:1666 --depot //depot/project -- Source/Foo.cpp
+multica p4 add-files --port perforce.example.com:1666 --depot //depot/project -- Source/New.cpp
+multica p4 change --port perforce.example.com:1666 --depot //depot/project --description "Fix the crash"
+multica p4 shelve --port perforce.example.com:1666 --depot //depot/project --changelist 12345
+multica p4 submit --port perforce.example.com:1666 --depot //depot/project --changelist 12345
+```
+
+`checkout` 是 `edit` 的别名。`multica p4 add` 仍然是往工作区登记 depot；新增文件用 `add-files`（即 `p4 add`）。其他命令：`delete`、`revert`、`opened`、`reconcile`（`rec`）、`move --dest`、`reopen --changelist`、`unshelve`、`describe`。独占锁定（`+l`）的文件必须先 edit 才能写。
+
+## Helix Swarm
+
+在工作区 depot 上填写 Swarm 地址（`--swarm-url` 或设置页）。守护进程用本机 Helix ticket（`p4 login`）访问 Swarm；Multica 不保存 Swarm 密码。
+
+任务命令使用 depot 已配置的地址，显式传入的 `--swarm-url` 必须与其一致。Swarm 请求不跟随重定向，请配置最终服务地址。
+
+```bash
+multica p4 add --port perforce.example.com:1666 --depot //depot/project --swarm-url https://swarm.example.com
+multica p4 swarm create --port perforce.example.com:1666 --depot //depot/project --changelist 12345 --output json
+multica p4 swarm reviews --port perforce.example.com:1666 --depot //depot/project --output json
+multica p4 swarm show --port perforce.example.com:1666 --depot //depot/project --review 77 --output json
+multica p4 swarm comment --port perforce.example.com:1666 --depot //depot/project --review 77 --body "Looks good"
+```
+
+`swarm create` 会先 shelve 待提交 changelist，除非传入 `--no-shelve`。已提交的 changelist 会建成 post-commit review。
+
+在任务里创建或 `link` 的 review 会出现在任务侧栏的 **Pull Request** 区域，和 GitHub PR 并列。把任务编号（如 `DJ01-7`）写进 Swarm 说明，或在该任务的运行中执行 `multica p4 swarm create` / `multica p4 swarm link`。
+
+```bash
+multica p4 swarm link --port perforce.example.com:1666 --depot //depot/project --review 77
+```
+
+如果 review 创建成功但关联任务失败，CLI 会输出 review 回执并返回错误。使用该 review ID 重试 `swarm link`，无需重新创建 review。
 
 不会预先拉取 depot。Helix 树可能很大，只在智能体请求时同步。
 
 ## 本版未包含
 
-- Swarm / Helix review 镜像、webhook、CI 状态
+- Swarm webhook 接入、review 卡片上的 CI 状态
 - 任务上的 changelist 自动关联
 - 创建项目对话框里直接挂 P4（创建后再关联）
 - 移动端 Perforce 界面

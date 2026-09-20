@@ -217,6 +217,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
           ...(ref.user ? { user: ref.user } : {}),
           ...(ref.charset ? { charset: ref.charset } : {}),
           ...(ref.changelist ? { changelist: ref.changelist } : {}),
+          ...(ref.swarm_url ? { swarm_url: ref.swarm_url } : {}),
         },
       });
       toast.success(t(($) => $.resources.toast_p4_attached));

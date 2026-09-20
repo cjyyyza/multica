@@ -277,7 +277,8 @@ func writeAvailableCommands(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("- `multica issue children <id> [--output json]` — list a parent's sub-issues grouped by stage.\n")
 	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-file <path> | --content-stdin] [--parent <comment-id>] [--attachment <path>]` — post a comment. Agent-authored bodies MUST use `--content-file`; see `## Comment Formatting` for why. `multica issue comment add --help` for full flags.\n")
 	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>] [--fresh]` — repository checkout on a dedicated branch. Re-running it keeps an existing checkout that has uncommitted or unpushed work, or is already on this task's branch, and only fetches. `--fresh` discards uncommitted and untracked files and starts a new branch; commits stay on the old branch, but push any you still need first.\n")
-	b.WriteString("- `multica p4 sync --port <P4PORT> --depot <//depot/path> [--stream <stream>] [--changelist <n>] [--fresh]` — sync a configured Perforce depot into this task's working directory using the host's `p4` login. `--fresh` deletes the previous sync directory and runs a clean sync.\n\n")
+	b.WriteString("- `multica p4 sync --port <P4PORT> --depot <//depot/path> [--stream <stream>] [--changelist <n>] [--fresh]` — sync a configured Perforce depot into this task's working directory using the host's `p4` login. `--fresh` deletes the previous sync directory and runs a clean sync.\n")
+	b.WriteString("- `multica p4 edit --port <P4PORT> --depot <//depot/path> -- <files>` — checkout files for edit (`checkout` is an alias). Also: `add-files`, `delete`, `revert`, `opened`, `reconcile`, `change`, `submit`, `shelve`. Swarm: `multica p4 swarm create --changelist <n>`.\n\n")
 	b.WriteString("Git commits use the user's configured identity. Preserve it unless the user requests another identity. In a managed checkout, use `git config --worktree user.name` / `user.email` for an intentional task-local override; plain `git config` or `--local` can write into a shared cache and affect other tasks. Never change global Git identity for a task.\n\n")
 	// Squad maintenance is squad-leader surface: an agent that leads no squad
 	// has no squad to change roles in, so this shipped to every run as dead
@@ -440,7 +441,7 @@ func writeP4Depots(b *strings.Builder, ctx TaskContextForEnv) {
 	}
 	b.WriteString("## Perforce depots\n\n")
 	b.WriteString("Available to this task — `multica p4 sync --port <P4PORT> --depot <//depot/path> --output json` to fetch. Uses the host Helix login (`p4 login`); Multica does not store a Perforce password.\n\n")
-	b.WriteString("The response contains the checkout `path` and task-scoped `client`. Run subsequent Perforce commands with the configured `-p` port and returned `-c` client from that path. Record changelist and Unreal validation evidence in the task for human review.\n\n")
+	b.WriteString("The response contains the checkout `path` and task-scoped `client`. Do not call host `p4` against another client. Open files with `multica p4 edit` / `checkout` before editing; add new files with `multica p4 add-files`. Record changelist and Unreal validation evidence in the task for human review.\n\n")
 	for _, depot := range ctx.P4Depots {
 		line := fmt.Sprintf("- `%s` `%s`", depot.Port, depot.Depot)
 		if depot.Stream != "" {
@@ -448,6 +449,9 @@ func writeP4Depots(b *strings.Builder, ctx TaskContextForEnv) {
 		}
 		if depot.Changelist != "" {
 			line += fmt.Sprintf(" @%s", depot.Changelist)
+		}
+		if depot.SwarmURL != "" {
+			line += fmt.Sprintf(" swarm `%s`", depot.SwarmURL)
 		}
 		if depot.Description != "" {
 			line += " — " + depot.Description
@@ -481,7 +485,7 @@ func writeProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 		}
 		b.WriteString("\nResources are pointers — open them only when relevant to the task. ")
 		b.WriteString("For `github_repo` resources, use `multica repo checkout <url>` to fetch the code. Add `--ref <branch-or-sha>` when a task or handoff names an exact revision. ")
-		b.WriteString("For `perforce_depot` resources, use `multica p4 sync --port <P4PORT> --depot <//depot/path>`.\n\n")
+		b.WriteString("For `perforce_depot` resources, use `multica p4 sync --port <P4PORT> --depot <//depot/path>`, then `multica p4 edit` / `add-files` / `shelve` / `swarm create` as needed.\n\n")
 	} else {
 		b.WriteString("This project has no resources attached yet.\n\n")
 	}

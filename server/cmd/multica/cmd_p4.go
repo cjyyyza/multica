@@ -1,12 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"time"
 
@@ -77,6 +74,7 @@ func init() {
 	p4AddCmd.Flags().StringVar(&p4Charset, "charset", "", "Optional P4CHARSET")
 	p4AddCmd.Flags().StringVar(&p4Changelist, "changelist", "", "Optional baseline changelist")
 	p4AddCmd.Flags().StringVar(&p4Desc, "description", "", "Optional description")
+	p4AddCmd.Flags().StringVar(&p4SwarmURL, "swarm-url", "", "Optional Helix Swarm origin (https://swarm.example.com)")
 	p4AddCmd.Flags().String("output", "json", "Output format: table or json")
 
 	p4RemoveCmd.Flags().String("output", "json", "Output format: table or json")
@@ -85,11 +83,48 @@ func init() {
 	p4SyncCmd.Flags().StringVar(&p4Charset, "charset", "", "Optional P4CHARSET")
 	p4SyncCmd.Flags().StringVar(&p4Changelist, "changelist", "", "Optional changelist, label, or #head")
 	p4SyncCmd.Flags().BoolVar(&p4Fresh, "fresh", false, "delete the previous sync directory and run a clean sync")
+	p4SyncCmd.Flags().String("output", "text", "Output format: text or json")
+
+	mutateCmds := []*cobra.Command{
+		p4EditCmd, p4AddFilesCmd, p4DeleteCmd, p4RevertCmd, p4OpenedCmd,
+		p4ReconcileCmd, p4MoveCmd, p4ReopenCmd, p4ChangeCmd, p4SubmitCmd,
+		p4ShelveCmd, p4UnshelveCmd, p4DescribeCmd,
+	}
+	for _, cmd := range mutateCmds {
+		addP4TaskFlags(cmd, true)
+		cmd.Flags().StringVar(&p4SwarmURL, "swarm-url", "", "Helix Swarm URL (must match the configured depot)")
+	}
+	p4RevertCmd.Flags().BoolVar(&p4RevertUnchanged, "unchanged", false, "revert only unchanged files (`p4 revert -a`)")
+	p4MoveCmd.Flags().StringVar(&p4Dest, "dest", "", "Destination path")
+	_ = p4MoveCmd.MarkFlagRequired("dest")
+	p4ShelveCmd.Flags().BoolVar(&p4Force, "force", false, "overwrite an existing shelf (`p4 shelve -f`)")
+
+	swarmCmds := []*cobra.Command{p4SwarmReviewsCmd, p4SwarmCreateCmd, p4SwarmShowCmd, p4SwarmCommentCmd, p4SwarmLinkCmd}
+	for _, cmd := range swarmCmds {
+		addP4TaskFlags(cmd, true)
+		cmd.Flags().StringVar(&p4SwarmURL, "swarm-url", "", "Helix Swarm URL (must match the configured depot)")
+	}
+	p4SwarmCreateCmd.Flags().StringArrayVar(&p4Reviewers, "reviewer", nil, "Reviewer P4USER (repeatable)")
+	p4SwarmCreateCmd.Flags().BoolVar(&p4NoShelve, "no-shelve", false, "do not shelve the pending changelist before creating the review")
+	p4SwarmShowCmd.Flags().StringVar(&p4ReviewID, "review", "", "Swarm review id")
+	p4SwarmCommentCmd.Flags().StringVar(&p4ReviewID, "review", "", "Swarm review id")
+	p4SwarmCommentCmd.Flags().StringVar(&p4CommentBody, "body", "", "Comment body")
+	p4SwarmLinkCmd.Flags().StringVar(&p4ReviewID, "review", "", "Swarm review id")
+
+	p4SwarmCmd.AddCommand(p4SwarmReviewsCmd)
+	p4SwarmCmd.AddCommand(p4SwarmCreateCmd)
+	p4SwarmCmd.AddCommand(p4SwarmShowCmd)
+	p4SwarmCmd.AddCommand(p4SwarmCommentCmd)
+	p4SwarmCmd.AddCommand(p4SwarmLinkCmd)
 
 	p4Cmd.AddCommand(p4ListCmd)
 	p4Cmd.AddCommand(p4AddCmd)
 	p4Cmd.AddCommand(p4RemoveCmd)
 	p4Cmd.AddCommand(p4SyncCmd)
+	for _, cmd := range mutateCmds {
+		p4Cmd.AddCommand(cmd)
+	}
+	p4Cmd.AddCommand(p4SwarmCmd)
 }
 
 type p4WorkspaceResponse struct {
@@ -130,6 +165,7 @@ func requireP4PortDepot() (p4depot.Ref, error) {
 		Charset:     p4Charset,
 		Changelist:  p4Changelist,
 		Description: p4Desc,
+		SwarmURL:    p4SwarmURL,
 	})
 	if err != nil {
 		return p4depot.Ref{}, err
@@ -158,9 +194,9 @@ func runP4List(cmd *cobra.Command, _ []string) error {
 	}
 	rows := make([][]string, 0, len(ws.P4Depots))
 	for _, depot := range ws.P4Depots {
-		rows = append(rows, []string{depot.Port, depot.Depot, depot.Stream, depot.Description})
+		rows = append(rows, []string{depot.Port, depot.Depot, depot.Stream, depot.SwarmURL, depot.Description})
 	}
-	cli.PrintTable(os.Stdout, []string{"PORT", "DEPOT", "STREAM", "DESCRIPTION"}, rows)
+	cli.PrintTable(os.Stdout, []string{"PORT", "DEPOT", "STREAM", "SWARM", "DESCRIPTION"}, rows)
 	return nil
 }
 
@@ -248,68 +284,26 @@ func runP4Sync(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	daemonPort := os.Getenv("MULTICA_DAEMON_PORT")
-	if daemonPort == "" {
-		return fmt.Errorf("MULTICA_DAEMON_PORT not set (this command is intended to be run by an agent inside a daemon task)")
-	}
-	workspaceID := os.Getenv("MULTICA_WORKSPACE_ID")
-	taskID := os.Getenv("MULTICA_TASK_ID")
-	taskToken := os.Getenv("MULTICA_TOKEN")
-	if taskToken == "" {
-		return fmt.Errorf("MULTICA_TOKEN not set (p4 sync requires the active task credential)")
-	}
-	workDir, err := os.Getwd()
+	body, err := p4TaskEnv(ref)
 	if err != nil {
-		return fmt.Errorf("get working directory: %w", err)
+		return err
 	}
-
-	reqBody := map[string]any{
-		"port":         ref.Port,
-		"depot":        ref.Depot,
-		"stream":       ref.Stream,
-		"user":         ref.User,
-		"charset":      ref.Charset,
-		"changelist":   ref.Changelist,
-		"workspace_id": workspaceID,
-		"workdir":      workDir,
-		"task_id":      taskID,
-		"fresh":        p4Fresh,
-	}
-	data, err := json.Marshal(reqBody)
+	body["changelist"] = ref.Changelist
+	body["fresh"] = p4Fresh
+	payload, err := p4DaemonPost(cmd.Context(), "/p4/sync", body, 5*time.Minute)
 	if err != nil {
-		return fmt.Errorf("encode request: %w", err)
-	}
-
-	parentCtx := cmd.Context()
-	if parentCtx == nil {
-		parentCtx = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Minute)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("http://127.0.0.1:%s/p4/sync", daemonPort), bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("create daemon p4 sync request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+taskToken)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("connect to daemon: %w", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read daemon p4 sync response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("p4 sync failed: %s", string(body))
+		return fmt.Errorf("p4 sync failed: %w", err)
 	}
 	var result struct {
 		Path   string `json:"path"`
 		Client string `json:"client"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := json.Unmarshal(payload, &result); err != nil {
 		return fmt.Errorf("parse response: %w", err)
+	}
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		return cli.PrintJSON(os.Stdout, result)
 	}
 	fmt.Fprintln(os.Stdout, result.Path)
 	fmt.Fprintf(os.Stderr, "Synced %s %s → %s (client: %s)\n", ref.Port, ref.Depot, result.Path, result.Client)
@@ -325,4 +319,12 @@ func resetP4Flags() {
 	p4Changelist = ""
 	p4Desc = ""
 	p4Fresh = false
+	p4SwarmURL = ""
+	p4ReviewID = ""
+	p4CommentBody = ""
+	p4Dest = ""
+	p4RevertUnchanged = false
+	p4Force = false
+	p4NoShelve = false
+	p4Reviewers = nil
 }

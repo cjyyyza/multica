@@ -629,6 +629,8 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"multica runtime list --output json",
 				"multica repo checkout <url>",
 				"multica p4 sync --port <p4port> --depot <depot-path>",
+				"multica p4 edit --port <p4port> --depot <depot-path> -- <files>",
+				"multica p4 swarm create --port <p4port> --depot <depot-path> --changelist <n> --output json",
 				"MULTICA_DAEMON_PORT",
 				"resource_ref.ref",
 				"github_repo",
@@ -656,6 +658,7 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"github_repo.resource_ref.url",
 				"perforce_depot.resource_ref.port",
 				"resource_ref.ref",
+				"--swarm-url",
 			},
 		},
 		{

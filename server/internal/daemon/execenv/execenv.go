@@ -31,6 +31,7 @@ type P4DepotForEnv struct {
 	User        string
 	Changelist  string
 	Description string
+	SwarmURL    string
 }
 
 // ProjectResourceForEnv describes a single resource attached to the issue's

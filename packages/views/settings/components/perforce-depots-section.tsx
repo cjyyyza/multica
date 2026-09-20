@@ -39,7 +39,8 @@ function depotsEqual(left: WorkspaceP4Depot[], right: WorkspaceP4Depot[]) {
       (depot.user ?? "") === (other.user ?? "") &&
       (depot.charset ?? "") === (other.charset ?? "") &&
       (depot.changelist ?? "") === (other.changelist ?? "") &&
-      (depot.description ?? "") === (other.description ?? "")
+      (depot.description ?? "") === (other.description ?? "") &&
+      (depot.swarm_url ?? "") === (other.swarm_url ?? "")
     );
   });
 }
@@ -226,6 +227,21 @@ export function PerforceDepotsSection() {
                   placeholder={t(($) => $.perforce.description_placeholder)}
                 />
               </div>
+              <Input
+                type="url"
+                name={`p4-depot-${index}-swarm-url`}
+                autoComplete="off"
+                spellCheck={false}
+                aria-label={t(($) => $.perforce.swarm_placeholder)}
+                value={depot.swarm_url ?? ""}
+                onChange={(event) =>
+                  updateDepot(index, "swarm_url", event.target.value)
+                }
+                onBlur={autoSave.flush}
+                disabled={!canManageWorkspace}
+                placeholder={t(($) => $.perforce.swarm_placeholder)}
+                className="font-mono text-caption"
+              />
             </div>
           ))}
 

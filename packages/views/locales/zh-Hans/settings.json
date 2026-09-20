@@ -1272,6 +1272,7 @@
     "depot_placeholder": "//depot/project",
     "stream_placeholder": "Stream（可选）",
     "description_placeholder": "描述（可选）",
+    "swarm_placeholder": "https://swarm.example.com",
     "add": "添加 depot",
     "empty": "还没有 Perforce depot。",
     "incomplete": "需要填写 port 和 depot。",

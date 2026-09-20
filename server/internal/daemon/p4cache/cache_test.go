@@ -34,6 +34,13 @@ func main(){
    if err:=os.WriteFile(have,[]byte("have"),0600);err!=nil{panic(err)}
    return
  }
+ if strings.Contains(joined," login -s"){fmt.Println("... TicketExpiration 3600");fmt.Println("... User alice");return}
+ if strings.Contains(joined," tickets"){fmt.Println("p4:1666 (alice) TESTTICKET");return}
+ if strings.Contains(joined," change -i"){fmt.Println("Change 1001 created.");return}
+ if strings.Contains(joined," submit "){fmt.Println("Change 1001 submitted.");return}
+ if strings.Contains(joined," edit ")||strings.Contains(joined," add ")||strings.Contains(joined," delete ")||strings.Contains(joined," revert ")||strings.Contains(joined," opened ")||strings.Contains(joined," reconcile ")||strings.Contains(joined," shelve ")||strings.Contains(joined," unshelve ")||strings.Contains(joined," describe ")||strings.Contains(joined," reopen ")||strings.Contains(joined," move "){
+   fmt.Println("ok");return
+ }
  panic("unexpected p4 command")
 }`
 	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {

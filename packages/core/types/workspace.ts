@@ -13,6 +13,7 @@ export interface WorkspaceP4Depot {
   charset?: string;
   changelist?: string;
   description?: string;
+  swarm_url?: string;
 }
 
 export interface Workspace {

@@ -38,7 +38,7 @@ Common resource types:
   checkout `ref`, and optional prompt-only `default_branch_hint`;
 - `perforce_depot` — Helix depot the daemon syncs with host credentials, with
   `resource_ref.port`, `depot`, and optional `stream` / `user` / `charset` /
-  `changelist`;
+  `changelist` / `swarm_url`;
 - `local_directory` — daemon-local path context, with `resource_ref.local_path`,
   `daemon_id`, optional label, and optional `execution_mode` (`in_place`, the
   default, or `worktree`).
@@ -69,7 +69,7 @@ multica project resource remove <project-id> <resource-id> --output json
 For `github_repo`, non-JSON `--ref` sets `resource_ref.ref`, the default
 checkout branch/tag/SHA for future tasks in that project. For `perforce_depot`,
 `--port` and `--depot` are required shortcuts; `--stream`, `--user`,
-`--charset`, and `--changelist` are optional. JSON `--ref '<json>'`
+`--charset`, `--changelist`, and `--swarm-url` are optional. JSON `--ref '<json>'`
 remains the escape hatch for full payloads or resource types not covered by
 shortcuts. `project resource update` merges shortcut edits with the existing
 `resource_ref`, so a partial edit does not clobber required fields.

@@ -7,7 +7,7 @@ import (
 )
 
 func TestP4ProjectAuthorizationIsScopedToActiveTask(t *testing.T) {
-	d := &Daemon{workspaces: map[string]*workspaceState{"ws": {allowedP4Identities: map[string]struct{}{}}}}
+	d := &Daemon{workspaces: map[string]*workspaceState{"ws": {}}}
 	ref := p4depot.Ref{Port: "p4:1666", Depot: "//depot/UE"}
 	d.registerTaskP4Depots("ws", "first", []P4DepotData{P4DepotData(ref)})
 	if !d.workspaceP4Allowed("ws", "first", ref) {

@@ -370,8 +370,9 @@ LIMIT 1;
 -- but a future loader bypass or a new caller skipping the loader would be
 -- silently catastrophic without this guard. See incident #1661.
 --
--- issue_vcs_pull_request (migration 213) has no FK to issue, so the link rows
--- are not cascaded away. Sweep them here so they go atomically with the issue.
+-- issue_vcs_pull_request (migration 213) and issue_swarm_review have no FK to
+-- issue, so the link rows are not cascaded away. Sweep them here so they go
+-- atomically with the issue.
 -- The mirrored PR rows themselves belong to the connection, not the issue, so
 -- they persist (matching the GitHub link behaviour).
 --
@@ -394,6 +395,9 @@ cleared_yixiezuo_operations AS (
 ),
 cleared_yixiezuo_imports AS (
     DELETE FROM yixiezuo_import WHERE issue_id IN (SELECT target.id FROM target)
+),
+cleared_swarm_review_links AS (
+    DELETE FROM issue_swarm_review WHERE issue_id IN (SELECT target.id FROM target)
 )
 DELETE FROM issue WHERE issue.id IN (SELECT target.id FROM target);
 

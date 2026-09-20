@@ -603,6 +603,14 @@ const deleteWorkspacePullRequests = `-- name: DeleteWorkspacePullRequests :exec
 WITH deleted_github_prs AS (
     DELETE FROM github_pull_request
     WHERE github_pull_request.workspace_id = $1
+),
+deleted_swarm_links AS (
+    DELETE FROM issue_swarm_review
+    WHERE issue_swarm_review.workspace_id = $1
+),
+deleted_swarm_reviews AS (
+    DELETE FROM swarm_review
+    WHERE swarm_review.workspace_id = $1
 )
 DELETE FROM vcs_pull_request WHERE vcs_pull_request.workspace_id = $1
 `

@@ -353,4 +353,26 @@ describe("PullRequestList sidebar rows", () => {
     expect(screen.queryByText("PR-D")).not.toBeInTheDocument();
     expect(screen.getByText("Show 1 more")).toBeInTheDocument();
   });
+
+  it("renders a Helix Swarm review as Swarm #id", async () => {
+    mockPRs = [
+      makePR({
+        provider: "swarm",
+        repo_owner: "swarm",
+        repo_name: "swarm.example.com",
+        number: 77,
+        title: "Fix the crash",
+        html_url: "https://swarm.example.com/reviews/77",
+        author_login: "alice",
+      }),
+    ];
+    renderList();
+    await waitForRender();
+    expect(screen.getByText("Fix the crash")).toBeInTheDocument();
+    expect(screen.getByText(/Swarm #77/)).toBeInTheDocument();
+    expect(screen.getByRole("link")).toHaveAttribute(
+      "href",
+      "https://swarm.example.com/reviews/77",
+    );
+  });
 });

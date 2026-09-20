@@ -148,15 +148,19 @@ func formatProjectResource(r ProjectResourceForEnv) string {
 			Depot      string `json:"depot"`
 			Stream     string `json:"stream,omitempty"`
 			Changelist string `json:"changelist,omitempty"`
+			SwarmURL   string `json:"swarm_url,omitempty"`
 		}
 		_ = json.Unmarshal(r.ResourceRef, &payload)
 		out := fmt.Sprintf("**Perforce depot**: `%s` `%s`", payload.Port, payload.Depot)
-		details := make([]string, 0, 2)
+		details := make([]string, 0, 3)
 		if payload.Stream != "" {
 			details = append(details, fmt.Sprintf("stream: `%s`", payload.Stream))
 		}
 		if payload.Changelist != "" {
 			details = append(details, fmt.Sprintf("changelist: `%s`", payload.Changelist))
+		}
+		if payload.SwarmURL != "" {
+			details = append(details, fmt.Sprintf("swarm: `%s`", payload.SwarmURL))
 		}
 		if len(details) > 0 {
 			out += " (" + strings.Join(details, ", ") + ")"

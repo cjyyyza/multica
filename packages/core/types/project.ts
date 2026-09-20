@@ -65,7 +65,7 @@ export interface ListProjectsResponse {
 //   - local_directory: agent execution on a specific daemon,
 //     ref = { local_path, daemon_id, label?, execution_mode? }
 //   - perforce_depot: Helix depot the daemon syncs with host p4 credentials,
-//     ref = { port, depot, stream?, user?, charset?, changelist? }
+//     ref = { port, depot, stream?, user?, charset?, changelist?, swarm_url? }
 export type ProjectResourceType = "github_repo" | "local_directory" | "perforce_depot";
 
 export interface GithubRepoResourceRef {
@@ -81,6 +81,7 @@ export interface PerforceDepotResourceRef {
   user?: string;
   charset?: string;
   changelist?: string;
+  swarm_url?: string;
 }
 
 /**

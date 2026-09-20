@@ -51,6 +51,7 @@ type P4DepotData struct {
 	Charset     string `json:"charset,omitempty"`
 	Changelist  string `json:"changelist,omitempty"`
 	Description string `json:"description,omitempty"`
+	SwarmURL    string `json:"swarm_url,omitempty"`
 }
 
 // ProjectResourceData mirrors handler.ProjectResourceData — a single project

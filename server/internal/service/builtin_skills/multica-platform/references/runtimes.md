@@ -36,6 +36,10 @@ multica repo checkout <url> --ref <branch-or-sha>
 multica repo checkout <url> --fresh
 multica p4 sync --port <p4port> --depot <depot-path>
 multica p4 sync --port <p4port> --depot <depot-path> --fresh
+multica p4 edit --port <p4port> --depot <depot-path> -- <files>
+multica p4 add-files --port <p4port> --depot <depot-path> -- <files>
+multica p4 swarm create --port <p4port> --depot <depot-path> --changelist <n> --output json
+multica p4 swarm link --port <p4port> --depot <depot-path> --review <id>
 ```
 
 Runtime and repo commands affect active agent execution. Do not restart daemons,
@@ -113,6 +117,17 @@ password. The depot must be on the task allowlist (project `perforce_depot`
 resources, or workspace `p4_depots` when the project has none). `--fresh`
 deletes the previous sync directory first.
 
+The client is `noallwrite`. Open files with `multica p4 edit` (alias
+`checkout`) before modifying them; exclusive-lock files will fail otherwise.
+`multica p4 add` still registers a workspace depot — use `add-files` to
+`p4 add` new files. Submit and shelve through `multica p4 submit` /
+`multica p4 shelve`. Helix Swarm reviews go through `multica p4 swarm …`
+using the depot's `swarm_url` and the host Helix ticket. `swarm create` and
+`swarm link` attach the review to the current issue (`MULTICA_ISSUE_ID`) and
+to any issue identifier in the review description, so it shows in the issue
+sidebar next to GitHub pull requests. Do not point a host `p4` client at
+another UE workspace.
+
 ## Task CLI boundary
 
 The daemon injects a task-scoped `mat_` credential for Multica API commands and
@@ -188,9 +203,10 @@ determine whether the user asked for durable project context or just a task
 checkout.
 
 For Perforce work, request `multica p4 sync ... --output json`. The response's
-`path` is the checkout root and `client` is the isolated task client. Use the
-configured `p4 -p <port> -c <client>` for subsequent Perforce operations in that
-directory; the host's default client may belong to another UE workspace.
-Record the changelist and the actual editor/build validation in the task.
+`path` is the checkout root and `client` is the isolated task client. Open,
+add, submit, and shelve through `multica p4 edit` / `add-files` / `submit` /
+`shelve` / `swarm create`; the host's default client may belong to another
+UE workspace. Record the changelist, Swarm review id, and the actual
+editor/build validation in the task.
 An imported 易协作 issue remains unassigned until a member chooses its owner.
 Result publication is a separate member-confirmed source operation.

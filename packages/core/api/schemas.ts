@@ -3552,6 +3552,7 @@ export const WorkspaceP4DepotSchema = z.object({
   charset: z.string().optional().default(""),
   changelist: z.string().optional().default(""),
   description: z.string().optional().default(""),
+  swarm_url: z.string().optional().default(""),
 }).loose();
 
 export const WorkspaceSchema = z.object({

@@ -26,11 +26,13 @@ export function toP4DepotPayload(depot: WorkspaceP4Depot): WorkspaceP4Depot {
   const charset = depot.charset?.trim();
   const changelist = depot.changelist?.trim();
   const description = depot.description?.trim();
+  const swarmURL = depot.swarm_url?.trim();
   if (stream) payload.stream = stream;
   if (user) payload.user = user;
   if (charset) payload.charset = charset;
   if (changelist) payload.changelist = changelist;
   if (description) payload.description = description;
+  if (swarmURL) payload.swarm_url = swarmURL;
   return payload;
 }
 

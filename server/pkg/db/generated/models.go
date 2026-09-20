@@ -941,6 +941,14 @@ type IssueSubscriber struct {
 	OptOutScope    pgtype.Text        `json:"opt_out_scope"`
 }
 
+type IssueSwarmReview struct {
+	IssueID       pgtype.UUID        `json:"issue_id"`
+	SwarmReviewID pgtype.UUID        `json:"swarm_review_id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	CloseIntent   bool               `json:"close_intent"`
+	LinkedAt      pgtype.Timestamptz `json:"linked_at"`
+}
+
 type IssueToLabel struct {
 	IssueID pgtype.UUID `json:"issue_id"`
 	LabelID pgtype.UUID `json:"label_id"`
@@ -1467,6 +1475,21 @@ type SquadMember struct {
 	MemberID   pgtype.UUID        `json:"member_id"`
 	Role       string             `json:"role"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type SwarmReview struct {
+	ID           pgtype.UUID        `json:"id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	SwarmUrl     string             `json:"swarm_url"`
+	ReviewNumber int32              `json:"review_number"`
+	Changelist   string             `json:"changelist"`
+	Title        string             `json:"title"`
+	Description  string             `json:"description"`
+	Author       string             `json:"author"`
+	State        string             `json:"state"`
+	HtmlUrl      string             `json:"html_url"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type SysCronExecution struct {

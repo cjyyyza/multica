@@ -117,7 +117,10 @@ function PullRequestRow({ pr }: { pr: GitHubPullRequest }) {
           {pr.title}
         </p>
         <p className="text-micro text-muted-foreground truncate">
-          {pr.repo_owner}/{pr.repo_name}#{pr.number} · {stateLabel}
+          {pr.provider === "swarm"
+            ? `Swarm #${pr.number}`
+            : `${pr.repo_owner}/${pr.repo_name}#${pr.number}`}{" "}
+          · {stateLabel}
           {pr.author_login ? ` · @${pr.author_login}` : null}
         </p>
         <PullRequestRowDetails pr={pr} />

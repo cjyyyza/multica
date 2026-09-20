@@ -60,7 +60,7 @@ export interface GitHubInstallation {
 export interface GitHubPullRequest {
   id: string;
   /** Source provider. Older GitHub-only backends omit it. */
-  provider?: "github" | "forgejo" | "gitea" | "gitlab";
+  provider?: "github" | "forgejo" | "gitea" | "gitlab" | "swarm";
   workspace_id: string;
   repo_owner: string;
   repo_name: string;

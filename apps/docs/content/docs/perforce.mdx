@@ -23,6 +23,7 @@ Each entry needs:
 | Depot | Yes | `//depot/project` |
 | Stream | No | `//depot/project/main` |
 | Description | No | Game client |
+| Swarm URL | No | `https://swarm.example.com` |
 
 HTTP Git URLs are rejected as a port. You can also manage the list with `multica p4 list`, `multica p4 add`, and `multica p4 remove`.
 
@@ -47,15 +48,54 @@ multica p4 sync --port perforce.example.com:1666 --depot //depot/project --strea
 multica p4 sync --port perforce.example.com:1666 --depot //depot/project --fresh
 ```
 
-The daemon creates a short task-scoped client (`mc` + 16 hex characters), runs `p4 sync` into `workdir/p4/<client>`, and returns that path. Client and directory identities include the server, depot, stream and task. `--fresh` deletes the previous sync directory and forces a download even when the server still records those files in its have list. `p4` must be on the daemon host `PATH`.
+The daemon creates a short task-scoped client (`mc` + 16 hex characters), runs `p4 sync` into the task root's `p4/<client>` directory, and returns that path. This location stays fixed when commands run from a subdirectory. Client and directory identities include the server, depot, stream and task. `--fresh` deletes the previous sync directory and forces a download even when the server still records those files in its have list. `p4` must be on the daemon host `PATH`.
 
-Use `--output json` to read both `path` and `client`. For subsequent Perforce commands in that directory, pass the configured `-p <port>` and returned `-c <client>`. A classic depot view maps the selected project directly into the returned checkout root.
+Use `--output json` to read both `path` and `client`. The client spec uses `noallwrite`, so files are read-only until they are opened for edit. Do not call host `p4` against another workspace client.
+
+## Edit, checkout, and submit
+
+After sync, change into the returned checkout path to use relative file paths. Agents open and submit files through the same daemon client:
+
+```bash
+multica p4 edit --port perforce.example.com:1666 --depot //depot/project -- Source/Foo.cpp
+multica p4 checkout --port perforce.example.com:1666 --depot //depot/project -- Source/Foo.cpp
+multica p4 add-files --port perforce.example.com:1666 --depot //depot/project -- Source/New.cpp
+multica p4 change --port perforce.example.com:1666 --depot //depot/project --description "Fix the crash"
+multica p4 shelve --port perforce.example.com:1666 --depot //depot/project --changelist 12345
+multica p4 submit --port perforce.example.com:1666 --depot //depot/project --changelist 12345
+```
+
+`checkout` is an alias of `edit`. `multica p4 add` still adds a depot to the workspace registry; `add-files` is `p4 add`. Other verbs: `delete`, `revert`, `opened`, `reconcile` (`rec`), `move --dest`, `reopen --changelist`, `unshelve`, `describe`. Exclusive-lock (`+l`) files must be edited before they can be written.
+
+## Helix Swarm
+
+Set a Swarm origin on the workspace depot (`--swarm-url` or the settings field). The daemon authenticates with the host Helix ticket (`p4 login`); Multica does not store a Swarm password.
+
+Task commands use the configured depot URL. An explicit `--swarm-url` must match it. Swarm requests do not follow redirects; configure the final service URL.
+
+```bash
+multica p4 add --port perforce.example.com:1666 --depot //depot/project --swarm-url https://swarm.example.com
+multica p4 swarm create --port perforce.example.com:1666 --depot //depot/project --changelist 12345 --output json
+multica p4 swarm reviews --port perforce.example.com:1666 --depot //depot/project --output json
+multica p4 swarm show --port perforce.example.com:1666 --depot //depot/project --review 77 --output json
+multica p4 swarm comment --port perforce.example.com:1666 --depot //depot/project --review 77 --body "Looks good"
+```
+
+`swarm create` shelves the pending changelist first unless you pass `--no-shelve`. Submitted changelists become post-commit reviews.
+
+A review created (or linked) during an issue task appears in the issue sidebar **Pull requests** section, next to GitHub PRs. Put the issue identifier (`DJ01-7`) in the Swarm description, or run `multica p4 swarm create` / `multica p4 swarm link` from that issue's task.
+
+```bash
+multica p4 swarm link --port perforce.example.com:1666 --depot //depot/project --review 77
+```
+
+If review creation succeeds but linking to the issue fails, the CLI prints the review receipt and exits with an error. Retry `swarm link` with that review ID instead of creating another review.
 
 Depots are not prefetched. A Helix tree can be huge; sync happens when the agent asks for it.
 
 ## Not in this release
 
-- Swarm / Helix review mirroring, webhooks, and CI status
+- Swarm webhook ingestion and CI status on the review card
 - Changelist auto-link on issues
 - Create-project dialog P4 attach (attach after create)
 - Mobile Perforce UI

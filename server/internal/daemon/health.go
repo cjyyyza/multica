@@ -406,6 +406,8 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux.HandleFunc("/shutdown", d.shutdownHandler())
 	mux.HandleFunc("/repo/checkout", d.repoCheckoutHandler())
 	mux.HandleFunc("/p4/sync", d.p4SyncHandler())
+	mux.HandleFunc("/p4/run", d.p4RunHandler())
+	mux.HandleFunc("/p4/swarm", d.p4SwarmHandler())
 
 	srv := &http.Server{Handler: mux}
 
@@ -558,12 +560,6 @@ func (d *Daemon) p4SyncHandler() http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		activeTask, authResult := d.activeRepoCheckoutTask(r)
-		if authResult != repoCheckoutAuthOK {
-			d.writeRepoCheckoutAuthError(w, authResult)
-			return
-		}
-
 		var req p4SyncRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
@@ -581,21 +577,8 @@ func (d *Daemon) p4SyncHandler() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if req.WorkspaceID == "" {
-			http.Error(w, "workspace_id is required", http.StatusBadRequest)
-			return
-		}
-		if req.WorkDir == "" {
-			http.Error(w, "workdir is required", http.StatusBadRequest)
-			return
-		}
-		if req.WorkspaceID != activeTask.WorkspaceID || req.TaskID != activeTask.TaskID {
-			http.Error(w, "p4 sync task context does not match the active task", http.StatusForbidden)
-			return
-		}
-		authorizedWorkDir, authErr := authorizeRepoCheckoutWorkDir(activeTask.WorkDir, req.WorkDir)
-		if authErr != nil {
-			http.Error(w, "p4 sync workdir is not owned by the active task", http.StatusForbidden)
+		activeTask, _, ok := d.authorizeP4Call(w, r, req.WorkspaceID, req.TaskID, req.WorkDir, "p4 sync")
+		if !ok {
 			return
 		}
 
@@ -609,16 +592,7 @@ func (d *Daemon) p4SyncHandler() http.HandlerFunc {
 			return
 		}
 
-		stored := d.taskP4Default(req.WorkspaceID, activeTask.TaskID, ref)
-		if ref.User == "" {
-			ref.User = stored.User
-		}
-		if ref.Charset == "" {
-			ref.Charset = stored.Charset
-		}
-		if ref.Changelist == "" {
-			ref.Changelist = stored.Changelist
-		}
+		ref = d.overlayP4Ref(req.WorkspaceID, activeTask.TaskID, ref, true)
 
 		if d.p4Cache == nil {
 			http.Error(w, "perforce sync is not initialized", http.StatusInternalServerError)
@@ -627,7 +601,7 @@ func (d *Daemon) p4SyncHandler() http.HandlerFunc {
 		result, err := d.p4Cache.Sync(r.Context(), p4cache.SyncParams{
 			WorkspaceID: req.WorkspaceID,
 			TaskID:      activeTask.TaskID,
-			WorkDir:     authorizedWorkDir,
+			WorkDir:     activeTask.WorkDir,
 			Ref:         ref,
 			Fresh:       req.Fresh,
 		})

@@ -65,6 +65,10 @@ const (
 	// DaemonCapabilityPerforceSyncV1 advertises that the daemon implements
 	// `multica p4 sync` / POST /p4/sync for perforce_depot resources.
 	DaemonCapabilityPerforceSyncV1 = "perforce-sync-v1"
+	// DaemonCapabilityPerforceMutateV1 advertises task-scoped Perforce file
+	// operations (edit/checkout, add, submit, shelve) and Helix Swarm reviews
+	// via POST /p4/run and POST /p4/swarm.
+	DaemonCapabilityPerforceMutateV1 = "perforce-mutate-v1"
 
 	// AppCapabilityChatDraftRestoreV1 is advertised (X-Client-Capabilities) by
 	// app clients that understand the durable draft-restore recovery path:

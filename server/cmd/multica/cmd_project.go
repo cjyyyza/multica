@@ -156,6 +156,7 @@ func init() {
 	projectResourceAddCmd.Flags().String("user", "", "Shortcut: P4USER hint (only used when --type perforce_depot)")
 	projectResourceAddCmd.Flags().String("charset", "", "Shortcut: P4CHARSET (only used when --type perforce_depot)")
 	projectResourceAddCmd.Flags().String("changelist", "", "Shortcut: baseline changelist (only used when --type perforce_depot)")
+	projectResourceAddCmd.Flags().String("swarm-url", "", "Shortcut: Helix Swarm origin (only used when --type perforce_depot)")
 	projectResourceAddCmd.Flags().String("default-branch-hint", "", "Shortcut: optional default branch hint (only used when --type github_repo)")
 	projectResourceAddCmd.Flags().String("local-path", "", "Shortcut: absolute path to the working directory (only used when --type local_directory)")
 	projectResourceAddCmd.Flags().String("daemon-id", "", "Shortcut: id of the daemon that owns the local path (only used when --type local_directory)")
@@ -174,6 +175,7 @@ func init() {
 	projectResourceUpdateCmd.Flags().String("user", "", "Shortcut: new P4USER hint (perforce_depot)")
 	projectResourceUpdateCmd.Flags().String("charset", "", "Shortcut: new P4CHARSET (perforce_depot)")
 	projectResourceUpdateCmd.Flags().String("changelist", "", "Shortcut: new baseline changelist (perforce_depot)")
+	projectResourceUpdateCmd.Flags().String("swarm-url", "", "Shortcut: new Helix Swarm origin (perforce_depot)")
 	projectResourceUpdateCmd.Flags().String("default-branch-hint", "", "Shortcut: new default branch hint (github_repo)")
 	projectResourceUpdateCmd.Flags().String("local-path", "", "Shortcut: new absolute local path (local_directory)")
 	projectResourceUpdateCmd.Flags().String("daemon-id", "", "Shortcut: new daemon id (local_directory)")
@@ -936,12 +938,13 @@ func buildResourceRefFromFlags(cmd *cobra.Command, resourceType string, existing
 		userSet := cmd.Flags().Changed("user")
 		charsetSet := cmd.Flags().Changed("charset")
 		clSet := cmd.Flags().Changed("changelist")
-		if !portSet && !depotSet && !streamSet && !userSet && !charsetSet && !clSet {
+		swarmSet := cmd.Flags().Changed("swarm-url")
+		if !portSet && !depotSet && !streamSet && !userSet && !charsetSet && !clSet && !swarmSet {
 			return nil, false, nil
 		}
 		ref := map[string]any{}
 		if existingRef != nil {
-			for _, key := range []string{"port", "depot", "stream", "user", "charset", "changelist"} {
+			for _, key := range []string{"port", "depot", "stream", "user", "charset", "changelist", "swarm_url"} {
 				if v, ok := existingRef[key].(string); ok && strings.TrimSpace(v) != "" {
 					ref[key] = strings.TrimSpace(v)
 				}
@@ -977,6 +980,9 @@ func buildResourceRefFromFlags(cmd *cobra.Command, resourceType string, existing
 		if err := setOrClear("changelist", "changelist", clSet); err != nil {
 			return nil, false, err
 		}
+		if err := setOrClear("swarm-url", "swarm_url", swarmSet); err != nil {
+			return nil, false, err
+		}
 		if v, ok := ref["port"].(string); !ok || v == "" {
 			return nil, false, fmt.Errorf("perforce_depot: --port is required (no existing port to merge with)")
 		}
@@ -991,7 +997,8 @@ func buildResourceRefFromFlags(cmd *cobra.Command, resourceType string, existing
 			cmd.Flags().Changed("ref-label") || cmd.Flags().Changed("execution-mode") ||
 			cmd.Flags().Changed("port") || cmd.Flags().Changed("depot") ||
 			cmd.Flags().Changed("stream") || cmd.Flags().Changed("user") ||
-			cmd.Flags().Changed("charset") || cmd.Flags().Changed("changelist") {
+			cmd.Flags().Changed("charset") || cmd.Flags().Changed("changelist") ||
+			cmd.Flags().Changed("swarm-url") {
 			return nil, false, fmt.Errorf("no built-in shortcut for resource type %q; pass the full payload via --ref '<json>'", resourceType)
 		}
 		return nil, false, nil

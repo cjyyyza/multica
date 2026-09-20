@@ -1013,6 +1013,7 @@
     "depot_placeholder": "//depot/project",
     "stream_placeholder": "Stream(선택)",
     "description_placeholder": "설명(선택)",
+    "swarm_placeholder": "https://swarm.example.com",
     "add": "depot 추가",
     "empty": "아직 Perforce depot이 없습니다.",
     "incomplete": "port와 depot이 필요합니다.",

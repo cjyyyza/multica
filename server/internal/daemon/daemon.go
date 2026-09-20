@@ -174,7 +174,7 @@ func taskScopedAuthToken(task Task) (string, error) {
 }
 
 func taskMulticaEnvironment(task Task, agentName, token, configRoot, workspacesRoot, serverURL string, healthPort, slot int, tempDir string) map[string]string {
-	return map[string]string{
+	env := map[string]string{
 		"MULTICA_TOKEN":        token,
 		cli.TaskConfigRootEnv:  configRoot,
 		TaskWorkspacesRootEnv:  workspacesRoot,
@@ -189,6 +189,10 @@ func taskMulticaEnvironment(task Task, agentName, token, configRoot, workspacesR
 		"TMP":                  tempDir,
 		"TEMP":                 tempDir,
 	}
+	if issueID := strings.TrimSpace(task.IssueID); issueID != "" {
+		env["MULTICA_ISSUE_ID"] = issueID
+	}
+	return env
 }
 
 // taskRunner executes a single agent task and returns the result.
@@ -311,7 +315,7 @@ type workspaceState struct {
 	// allowedP4Identities is the workspace-level Perforce allowlist
 	// (port+depot+stream). taskP4Refs is the claim-time overlay so a
 	// project-only depot can be synced without also living on the workspace.
-	allowedP4Identities map[string]struct{}
+	allowedP4Identities map[string]P4DepotData
 	taskP4Refs          map[string]map[string]P4DepotData // taskID -> identity -> depot
 	settings            json.RawMessage                   // workspace settings (JSONB)
 	lastRepoSyncErr     string
@@ -3231,19 +3235,19 @@ func newWorkspaceState(workspaceID string, runtimeIDs []string, reposVersion str
 		runtimeIDs:          runtimeIDs,
 		reposVersion:        reposVersion,
 		allowedRepoURLs:     repoAllowlist(repos),
-		allowedP4Identities: map[string]struct{}{},
+		allowedP4Identities: map[string]P4DepotData{},
 		settings:            settings,
 	}
 }
 
-func p4Allowlist(depots []P4DepotData) map[string]struct{} {
-	allowed := make(map[string]struct{}, len(depots))
+func p4Allowlist(depots []P4DepotData) map[string]P4DepotData {
+	allowed := make(map[string]P4DepotData, len(depots))
 	for _, depot := range depots {
 		parsed, err := p4depot.Normalize(p4depot.Ref(depot))
 		if err != nil {
 			continue
 		}
-		allowed[p4depot.Identity(parsed)] = struct{}{}
+		allowed[p4depot.Identity(parsed)] = P4DepotData(parsed)
 	}
 	return allowed
 }
@@ -3547,13 +3551,13 @@ func (d *Daemon) taskP4Default(workspaceID, taskID string, ref p4depot.Ref) P4De
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	ws, ok := d.workspaces[workspaceID]
-	if !ok || ws.taskP4Refs == nil {
-		return P4DepotData(parsed)
+	if !ok {
+		return P4DepotData{}
 	}
 	if stored, exists := ws.taskP4Refs[taskID][id]; exists {
 		return stored
 	}
-	return P4DepotData(parsed)
+	return ws.allowedP4Identities[id]
 }
 
 // waitBackgroundSyncs blocks until every background sync started by
@@ -10096,6 +10100,7 @@ func convertP4DepotsForEnv(depots []P4DepotData) []execenv.P4DepotForEnv {
 			User:        d.User,
 			Changelist:  d.Changelist,
 			Description: d.Description,
+			SwarmURL:    d.SwarmURL,
 		}
 	}
 	return result

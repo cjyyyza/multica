@@ -30,11 +30,13 @@ describe("toP4DepotPayload", () => {
         depot: "  //depot/a  ",
         stream: "  ",
         description: "  main  ",
+        swarm_url: "  https://swarm.example.com/  ",
       }),
     ).toEqual({
       port: "p4:1666",
       depot: "//depot/a",
       description: "main",
+      swarm_url: "https://swarm.example.com/",
     });
   });
 });

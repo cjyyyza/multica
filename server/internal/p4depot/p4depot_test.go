@@ -19,6 +19,7 @@ func TestNormalizeAcceptsCommonPortsAndDepots(t *testing.T) {
 			Port: "  ssl:p4.example.com:1666  ", Depot: "  //depot/x  ",
 			Stream: "  //depot/x/main  ", User: "alice", Charset: "utf8",
 			Changelist: "12345", Description: "  game  ",
+			SwarmURL: " https://swarm.example.com/ ",
 		},
 	}
 	for _, in := range good {
@@ -46,6 +47,8 @@ func TestNormalizeRejectsInvalidValues(t *testing.T) {
 		{Port: "perforce:1666", Depot: "//depot/x", User: "bad user"},
 		{Port: "perforce:1666", Depot: "//depot/x", Changelist: "not a cl!"},
 		{Port: "perforce:1666", Depot: "//depot/x", Stream: "main"},
+		{Port: "perforce:1666", Depot: "//depot/x", SwarmURL: "ftp://swarm.example.com"},
+		{Port: "perforce:1666", Depot: "//depot/x", SwarmURL: "https://user:ticket@swarm.example.com"},
 	}
 	for _, in := range bad {
 		if _, err := Normalize(in); err == nil {
@@ -54,11 +57,25 @@ func TestNormalizeRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestNormalizeTrimsSwarmURL(t *testing.T) {
+	t.Parallel()
+	got, err := Normalize(Ref{
+		Port: "p4:1666", Depot: "//depot/x",
+		SwarmURL: " https://swarm.example.com/reviews/ ",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SwarmURL != "https://swarm.example.com/reviews" {
+		t.Fatalf("SwarmURL = %q", got.SwarmURL)
+	}
+}
+
 func TestIdentityIgnoresUserAndChangelist(t *testing.T) {
 	t.Parallel()
 
 	a := Ref{Port: "SSL:P4.EXAMPLE.COM:1666", Depot: "//depot/x", User: "a", Changelist: "1"}
-	b := Ref{Port: "ssl:p4.example.com:1666", Depot: "//depot/x", User: "b", Changelist: "2"}
+	b := Ref{Port: "ssl:p4.example.com:1666", Depot: "//depot/x", User: "b", Changelist: "2", SwarmURL: "https://swarm.example.com"}
 	if Identity(a) != Identity(b) {
 		t.Fatalf("Identity() = %q vs %q", Identity(a), Identity(b))
 	}

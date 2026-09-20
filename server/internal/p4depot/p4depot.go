@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -23,6 +24,9 @@ type Ref struct {
 	Charset     string `json:"charset,omitempty"`
 	Changelist  string `json:"changelist,omitempty"`
 	Description string `json:"description,omitempty"`
+	// SwarmURL is the Helix Swarm / P4 Code Review origin for this depot.
+	// It is not part of Identity; credentials stay on the daemon host.
+	SwarmURL string `json:"swarm_url,omitempty"`
 }
 
 var (
@@ -33,8 +37,8 @@ var (
 	changelist = regexp.MustCompile(`^(#head|[0-9]+|@?[A-Za-z0-9._-]+)$`)
 )
 
-// Identity is the allowlist key: port + depot + stream. User and changelist
-// are overlays, not part of which depot is configured.
+// Identity is the allowlist key: port + depot + stream. User, changelist,
+// and swarm_url are overlays, not part of which depot is configured.
 func Identity(r Ref) string {
 	return strings.ToLower(strings.TrimSpace(r.Port)) + "\n" +
 		strings.TrimSpace(r.Depot) + "\n" +
@@ -56,6 +60,7 @@ func Normalize(r Ref) (Ref, error) {
 	r.Charset = strings.TrimSpace(r.Charset)
 	r.Changelist = strings.TrimSpace(r.Changelist)
 	r.Description = strings.TrimSpace(r.Description)
+	r.SwarmURL = strings.TrimRight(strings.TrimSpace(r.SwarmURL), "/")
 
 	if r.Port == "" {
 		return Ref{}, fmt.Errorf("port is required")
@@ -80,6 +85,9 @@ func Normalize(r Ref) (Ref, error) {
 	}
 	if r.Changelist != "" && !ValidChangelist(r.Changelist) {
 		return Ref{}, fmt.Errorf("changelist must be a changelist number, label, or #head")
+	}
+	if r.SwarmURL != "" && !ValidSwarmURL(r.SwarmURL) {
+		return Ref{}, fmt.Errorf("swarm_url must be an http(s) Helix Swarm origin")
 	}
 	return r, nil
 }
@@ -114,6 +122,21 @@ func ValidDepot(s string) bool {
 // ValidChangelist accepts a number, #head, or a label (with or without @).
 func ValidChangelist(s string) bool {
 	return changelist.MatchString(s)
+}
+
+// ValidSwarmURL accepts an http(s) origin. Userinfo is rejected so a ticket
+// or password cannot be stored on the workspace depot.
+func ValidSwarmURL(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || u.User != nil {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+		return true
+	default:
+		return false
+	}
 }
 
 // ParseJSON decodes and normalizes a depot ref.

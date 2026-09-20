@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,8 +38,9 @@ type SyncResult struct {
 
 // Cache runs the p4 CLI. P4Path defaults to "p4" on PATH.
 type Cache struct {
-	P4Path string
-	Logger *slog.Logger
+	P4Path     string
+	Logger     *slog.Logger
+	HTTPClient *http.Client
 }
 
 func (c *Cache) p4bin() string {
@@ -68,15 +70,9 @@ func (c *Cache) Sync(ctx context.Context, params SyncParams) (*SyncResult, error
 		return nil, fmt.Errorf("task_id is required")
 	}
 
-	user := ref.User
-	if user == "" {
-		user = strings.TrimSpace(os.Getenv("P4USER"))
-	}
-	if user == "" {
-		user, err = c.whoami(ctx, ref)
-		if err != nil {
-			return nil, fmt.Errorf("P4USER is not set and p4 info did not report a user (run `p4 login` on this machine): %w", err)
-		}
+	user, err := c.resolveUser(ctx, ref)
+	if err != nil {
+		return nil, err
 	}
 
 	client := p4depot.ClientName(params.WorkspaceID, params.TaskID, ref)
@@ -137,6 +133,36 @@ func buildClientSpec(client, user, root string, ref p4depot.Ref) string {
 	return b.String()
 }
 
+func (c *Cache) httpClient() *http.Client {
+	client := http.DefaultClient
+	if c != nil && c.HTTPClient != nil {
+		client = c.HTTPClient
+	}
+	// Never follow a redirect with the host ticket, even to a subdomain.
+	copy := *client
+	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &copy
+}
+
+func (c *Cache) resolveUser(ctx context.Context, ref p4depot.Ref) (string, error) {
+	user := ref.User
+	if user == "" {
+		user = strings.TrimSpace(os.Getenv("P4USER"))
+	}
+	if user != "" {
+		return user, nil
+	}
+	user, err := c.whoami(ctx, ref)
+	if err != nil {
+		return "", fmt.Errorf("P4USER is not set and p4 info did not report a user (run `p4 login` on this machine): %w", err)
+	}
+	return user, nil
+}
+
+func ClientRoot(workDir, workspaceID, taskID string, ref p4depot.Ref) string {
+	return filepath.Join(workDir, "p4", p4depot.ClientName(workspaceID, taskID, ref))
+}
+
 func (c *Cache) whoami(ctx context.Context, ref p4depot.Ref) (string, error) {
 	out, err := c.output(ctx, ref, "", "", "info")
 	if err != nil {
@@ -187,8 +213,12 @@ func (c *Cache) run(ctx context.Context, ref p4depot.Ref, user, client string, a
 }
 
 func (c *Cache) output(ctx context.Context, ref p4depot.Ref, user, client string, args ...string) ([]byte, error) {
+	return c.outputAt(ctx, "", ref, user, client, args...)
+}
+
+func (c *Cache) outputAt(ctx context.Context, dir string, ref p4depot.Ref, user, client string, args ...string) ([]byte, error) {
 	full := append(c.baseArgs(ref, user, client), args...)
-	cmd, cancel, err := c.command(ctx, full...)
+	cmd, cancel, err := c.commandAt(ctx, dir, full...)
 	if err != nil {
 		return nil, err
 	}
@@ -217,6 +247,10 @@ func (c *Cache) baseArgs(ref p4depot.Ref, user, client string) []string {
 }
 
 func (c *Cache) command(ctx context.Context, args ...string) (*exec.Cmd, context.CancelFunc, error) {
+	return c.commandAt(ctx, "", args...)
+}
+
+func (c *Cache) commandAt(ctx context.Context, dir string, args ...string) (*exec.Cmd, context.CancelFunc, error) {
 	bin := c.p4bin()
 	if filepath.IsAbs(bin) {
 		if _, err := os.Stat(bin); err != nil {
@@ -227,7 +261,11 @@ func (c *Cache) command(ctx context.Context, args ...string) (*exec.Cmd, context
 	}
 	runCtx, cancel := context.WithTimeout(ctx, p4Timeout)
 	cmd := exec.CommandContext(runCtx, c.p4bin(), args...)
-	cmd.Dir = filepath.VolumeName(os.TempDir()) + string(os.PathSeparator)
+	if strings.TrimSpace(dir) != "" {
+		cmd.Dir = dir
+	} else {
+		cmd.Dir = filepath.VolumeName(os.TempDir()) + string(os.PathSeparator)
+	}
 	cmd.Env = os.Environ()
 	c.logger().Debug("p4 command", "args", args)
 	return cmd, cancel, nil

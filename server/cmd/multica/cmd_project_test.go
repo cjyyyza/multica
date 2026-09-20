@@ -39,6 +39,7 @@ func newProjectResourceUpdateTestCmd() *cobra.Command {
 	c.Flags().String("user", "", "")
 	c.Flags().String("charset", "", "")
 	c.Flags().String("changelist", "", "")
+	c.Flags().String("swarm-url", "", "")
 	c.Flags().String("local-path", "", "")
 	c.Flags().String("daemon-id", "", "")
 	c.Flags().String("ref-label", "", "")
@@ -421,6 +422,28 @@ func TestBuildResourceRefFromFlagsPerforceDepot(t *testing.T) {
 		}
 		if ref["stream"] != "//depot/main" {
 			t.Fatalf("stream = %v", ref["stream"])
+		}
+	})
+
+	t.Run("swarm-url edit preserves port and depot", func(t *testing.T) {
+		cmd := newProjectResourceUpdateTestCmd()
+		_ = cmd.Flags().Set("swarm-url", "https://swarm.example.com")
+		existing := map[string]any{
+			"port":  "ssl:p4.example.com:1666",
+			"depot": "//depot/game",
+		}
+		ref, has, err := buildResourceRefFromFlags(cmd, "perforce_depot", existing)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !has {
+			t.Fatal("expected has=true")
+		}
+		if ref["swarm_url"] != "https://swarm.example.com" {
+			t.Fatalf("swarm_url = %v", ref["swarm_url"])
+		}
+		if ref["port"] != "ssl:p4.example.com:1666" || ref["depot"] != "//depot/game" {
+			t.Fatalf("lost required fields: %+v", ref)
 		}
 	})
 }
