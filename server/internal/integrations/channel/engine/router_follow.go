@@ -21,6 +21,7 @@ const (
 	msgFollowStopUsage     = "Please include an issue key, or quote a specific run message. Use:\n\n/stop ISSUE-123"
 	msgFollowStopNone      = "There is no cancellable run on that issue."
 	msgFollowStopAmbiguous = "I couldn't tell which run to cancel. Quote a specific run message, or use /stop ISSUE-123."
+	msgFollowStopConflict  = "The issue key and quoted run refer to different tasks. Send /stop with the intended issue key without that quote."
 	msgFollowQuoteUnknown  = "I couldn't match that quoted message to an issue in this chat."
 	msgFollowIssueMissing  = "I couldn't find that issue in this workspace."
 	msgFollowCommentAck    = "✅ Commented on %s"
@@ -189,9 +190,19 @@ func (r *Router) followStop(ctx context.Context, inst ResolvedInstallation, iden
 
 	var issue FollowIssue
 	var taskID pgtype.UUID
-	if hasQuote && quoted.TaskID.Valid && (cmd.Identifier == "" || quoted.IssueID.Valid) {
+	if cmd.Identifier != "" {
+		resolved, err := r.follow.ResolveIssue(ctx, inst.WorkspaceID, cmd.Identifier)
+		if err != nil {
+			return r.followResult(inst, msg, msgFollowIssueMissing), nil
+		}
+		issue = resolved
+		if hasQuote && (quoted.IssueID.Valid || quoted.TaskID.Valid) && quoted.IssueID != issue.Issue.ID {
+			return r.followResult(inst, msg, msgFollowStopConflict), nil
+		}
+	}
+	if hasQuote && quoted.TaskID.Valid {
 		taskID = quoted.TaskID
-		if quoted.IssueID.Valid {
+		if quoted.IssueID.Valid && !issue.Issue.ID.Valid {
 			resolved, err := r.resolveQuotedIssue(ctx, inst, quoted.IssueID)
 			if err != nil {
 				return r.followResult(inst, msg, msgFollowStopAmbiguous), nil
@@ -203,11 +214,6 @@ func (r *Router) followStop(ctx context.Context, inst ResolvedInstallation, iden
 		if cmd.Identifier == "" {
 			return r.followResult(inst, msg, msgFollowStopUsage), nil
 		}
-		resolved, err := r.follow.ResolveIssue(ctx, inst.WorkspaceID, cmd.Identifier)
-		if err != nil {
-			return r.followResult(inst, msg, msgFollowIssueMissing), nil
-		}
-		issue = resolved
 		if blocked, text := r.followOwnership(ctx, inst, issue.Issue); blocked {
 			return r.followIssueResult(inst, msg, issue, text), nil
 		}
@@ -218,7 +224,7 @@ func (r *Router) followStop(ctx context.Context, inst ResolvedInstallation, iden
 		if len(runs) == 0 {
 			return r.followIssueResult(inst, msg, issue, msgFollowStopNone), nil
 		}
-		if len(runs) > 1 && !hasQuote {
+		if len(runs) > 1 {
 			return r.followIssueResult(inst, msg, issue, msgFollowStopAmbiguous), nil
 		}
 		taskID = runs[0].Task.ID
