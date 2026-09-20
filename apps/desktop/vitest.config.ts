@@ -1,6 +1,7 @@
 import { resolve } from "path";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { platformTestOptions } from "../../scripts/vitest-platform.mjs";
 
 export default defineConfig({
   plugins: [react()],
@@ -10,6 +11,7 @@ export default defineConfig({
     },
   },
   test: {
+    ...platformTestOptions,
     globals: true,
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.mjs"],
     environment: "jsdom",

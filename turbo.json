@@ -4,7 +4,7 @@
   // Without it in the global hash, bumping that version would replay cached
   // typecheck/test results produced by the old runtime and hide an
   // incompatibility behind a green check.
-  "globalDependencies": [".github/workflows/ci.yml"],
+  "globalDependencies": [".github/workflows/ci.yml", "scripts/vitest-platform.mjs", "scripts/vitest-platform.d.mts"],
   "globalEnv": [
     "DATABASE_URL",
     "PORT",

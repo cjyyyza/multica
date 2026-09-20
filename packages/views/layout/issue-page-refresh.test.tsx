@@ -29,6 +29,9 @@ vi.mock("../issues/surface/issue-surface", () => ({
 vi.mock("../issues/components/issues-header", () => ({
   IssuesHeader: () => <div>Issue controls</div>,
 }));
+vi.mock("../issues/components/yixiezuo-import", () => ({
+  YixiezuoImportDialog: () => null,
+}));
 vi.mock("../my-issues/components/my-issues-header", () => ({
   MyIssuesHeader: () => <div>My issue controls</div>,
 }));
