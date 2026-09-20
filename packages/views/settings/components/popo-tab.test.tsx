@@ -374,7 +374,7 @@ describe("PopoAgentBindButton", () => {
       error_reason: "",
       poll_interval_seconds: 0.05,
     });
-    getPopoRegistration.mockResolvedValue({
+    const completedRegistration = {
       id: "reg-1",
       status: "success",
       qr_url: "https://popo.example/qr",
@@ -382,7 +382,11 @@ describe("PopoAgentBindButton", () => {
       installation_id: "inst-9",
       error_reason: "",
       poll_interval_seconds: 0.05,
-    });
+    };
+    let completeRegistration!: (value: typeof completedRegistration) => void;
+    getPopoRegistration.mockReturnValue(new Promise((resolve) => {
+      completeRegistration = resolve;
+    }));
     renderUI(<PopoAgentBindButton agentId="agent-1" />);
     await userEvent.click(screen.getByTestId("popo-agent-connect"));
     expect(screen.getByTestId("popo-connect-submit")).toBeEnabled();
@@ -396,6 +400,7 @@ describe("PopoAgentBindButton", () => {
       "https://popo.example/qr",
     );
     await waitFor(() => expect(getPopoRegistration).toHaveBeenCalledWith("ws-1", "reg-1"));
+    completeRegistration(completedRegistration);
     await waitFor(() => expect(screen.getByText("Robot created.")).toBeTruthy());
     await waitFor(
       () => expect(screen.queryByTestId("popo-connect-dialog")).toBeNull(),
