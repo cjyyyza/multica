@@ -10,7 +10,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"net/http"
-	"strings"
 )
 
 func (h *Handler) yixiezuoWorkspace(w http.ResponseWriter, r *http.Request) (pgtype.UUID, db.Member, bool) {
@@ -65,20 +64,13 @@ func (h *Handler) PreviewYixiezuoIssue(w http.ResponseWriter, r *http.Request) {
 	if !decodeYixiezuoBody(w, r, &req) {
 		return
 	}
-	source, err := yixiezuo.ParseSource(req.URL)
+	row, err := h.previewYixiezuo(r.Context(), ws, member.UserID, req.URL, "", nil)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	payload, _ := json.Marshal(yixiezuo.OperationPayload{Source: source})
-	row, err := h.Queries.CreateYixiezuoOperation(r.Context(), db.CreateYixiezuoOperationParams{WorkspaceID: ws, RequestedBy: member.UserID, Kind: "preview", Payload: payload})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to queue source preview")
+		writeSourceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, operationResponse(row, false))
 }
-
 func (h *Handler) GetYixiezuoOperation(w http.ResponseWriter, r *http.Request) {
 	ws, member, ok := h.yixiezuoWorkspace(w, r)
 	if !ok {
@@ -223,16 +215,6 @@ func (h *Handler) ImportYixiezuoIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	row, err := h.Queries.GetYixiezuoOperation(r.Context(), db.GetYixiezuoOperationParams{WorkspaceID: ws, RequestedBy: member.UserID, ID: opID})
-	if err != nil || row.Kind != "preview" || row.State != "succeeded" {
-		writeError(w, http.StatusConflict, "read and review a source issue before importing")
-		return
-	}
-	var snapshot yixiezuo.Snapshot
-	if json.Unmarshal(row.Result, &snapshot) != nil {
-		writeError(w, http.StatusInternalServerError, "invalid source snapshot")
-		return
-	}
 	project := pgtype.UUID{}
 	if req.ProjectID != nil && *req.ProjectID != "" {
 		project, ok = parseUUIDOrBadRequest(w, *req.ProjectID, "project_id")
@@ -240,27 +222,15 @@ func (h *Handler) ImportYixiezuoIssue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	res, err := h.IssueService.Create(r.Context(), service.IssueCreateParams{WorkspaceID: ws, Title: snapshot.Title, Description: pgtype.Text{String: snapshot.Markdown(), Valid: true}, Status: "todo", Priority: yixiezuo.MapIncomingPriority(snapshot.Priority, "medium"), CreatorType: "member", CreatorID: member.UserID, ProjectID: project, AllowDuplicate: true, Yixiezuo: &snapshot}, service.IssueCreateOpts{ActorID: uuidToString(member.UserID), Platform: "yixiezuo", BroadcastPayload: func(issue db.Issue, _ []db.Attachment, _ []db.IssueLabel) map[string]any {
-		resp := issueToResponse(issue, h.getIssuePrefix(r.Context(), ws))
-		h.fillStatusCategory(r.Context(), ws, &resp)
-		return map[string]any{"issue": resp}
-	}})
-	existing := errors.Is(err, service.ErrYixiezuoAlreadyImported)
-	if existing {
-		res.Issue = *res.DuplicateIssue
-	} else if err != nil {
-		if errors.Is(err, service.ErrProjectNotFound) {
-			writeError(w, http.StatusBadRequest, "project not found in this workspace")
-		} else {
-			writeError(w, http.StatusInternalServerError, "failed to import source issue")
-		}
+	issue, existing, err := h.importYixiezuo(r.Context(), ws, member.UserID, opID, project, service.IssueCreateOpts{})
+	if err != nil {
+		writeSourceError(w, err)
 		return
 	}
-	resp := issueToResponse(res.Issue, h.getIssuePrefix(r.Context(), ws))
+	resp := issueToResponse(issue, h.getIssuePrefix(r.Context(), ws))
 	h.fillStatusCategory(r.Context(), ws, &resp)
 	writeJSON(w, http.StatusOK, map[string]any{"issue": resp, "existing": existing})
 }
-
 func (h *Handler) GetYixiezuoImport(w http.ResponseWriter, r *http.Request) {
 	ws, _, ok := h.yixiezuoWorkspace(w, r)
 	if !ok {
@@ -341,89 +311,13 @@ func (h *Handler) queueYixiezuoIssueOperation(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	var req struct {
-		Summary      string `json:"summary"`
-		StatusName   string `json:"status_name"`
-		Revision     int64  `json:"revision"`
-		Confirmed    bool   `json:"confirmed"`
-		SourceDigest string `json:"source_digest"`
-	}
+	var req yixiezuoIssueRequest
 	if !decodeYixiezuoBody(w, r, &req) {
 		return
 	}
-	tx, err := h.TxStarter.Begin(r.Context())
+	row, err := h.enqueueYixiezuo(r.Context(), ws, member.UserID, id, kind, req, "", nil)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to begin operation")
-		return
-	}
-	defer tx.Rollback(r.Context())
-	q := h.Queries.WithTx(tx)
-	if err := q.ExpireYixiezuoOperations(r.Context(), ws); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to expire stale operations")
-		return
-	}
-	// Serialize publications and refreshes across members and browser tabs.
-	if err = q.LockYixiezuoImportSource(r.Context(), uuidToString(ws)+"/issue/"+uuidToString(id)); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to lock import")
-		return
-	}
-	link, err := q.GetYixiezuoImportByIssue(r.Context(), db.GetYixiezuoImportByIssueParams{WorkspaceID: ws, IssueID: id})
-	if err != nil {
-		writeError(w, http.StatusNotFound, "issue is not imported from 易协作")
-		return
-	}
-	issue, err := q.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{WorkspaceID: ws, ID: id})
-	if err != nil {
-		writeError(w, http.StatusNotFound, "issue not found")
-		return
-	}
-	var snapshot yixiezuo.Snapshot
-	_ = json.Unmarshal(link.Snapshot, &snapshot)
-	if latest, err := q.LatestYixiezuoOperation(r.Context(), db.LatestYixiezuoOperationParams{WorkspaceID: ws, IssueID: id}); err == nil {
-		if latest.State == "pending" || latest.State == "running" {
-			writeError(w, http.StatusConflict, "an operation is already pending for this issue")
-			return
-		}
-		if kind == "publish" && (latest.State == "unknown" || latest.State == "conflict") {
-			writeError(w, http.StatusConflict, "refresh and review the remote source before publishing again")
-			return
-		}
-	}
-	if kind == "publish" {
-		if req.SourceDigest != snapshot.Digest || req.SourceDigest == "" {
-			writeError(w, http.StatusConflict, "the source preview changed; review it before publishing")
-			return
-		}
-		if !req.Confirmed || strings.TrimSpace(req.Summary) == "" || len(req.Summary) > 20000 {
-			writeError(w, http.StatusBadRequest, "review and confirm a result summary before publishing")
-			return
-		}
-		if req.Revision != issue.Revision {
-			writeError(w, http.StatusConflict, "the Multica issue changed; review its latest revision before publishing")
-			return
-		}
-		if req.StatusName != "" {
-			found := false
-			for _, status := range snapshot.Statuses {
-				if status.Name == req.StatusName {
-					found = true
-					break
-				}
-			}
-			if !found {
-				writeError(w, http.StatusBadRequest, "select a status from the source workflow")
-				return
-			}
-		}
-	}
-	payload, _ := json.Marshal(yixiezuo.OperationPayload{Source: snapshot.Source, ExpectedDigest: snapshot.Digest, Revision: issue.Revision, StatusName: req.StatusName, Summary: strings.TrimSpace(req.Summary)})
-	row, err := q.CreateYixiezuoOperation(r.Context(), db.CreateYixiezuoOperationParams{WorkspaceID: ws, RequestedBy: member.UserID, Kind: kind, IssueID: id, Payload: payload})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to queue operation")
-		return
-	}
-	if err = tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to commit operation")
+		writeSourceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, operationResponse(row, false))

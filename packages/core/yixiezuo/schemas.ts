@@ -19,7 +19,7 @@ export const YixiezuoSnapshotSchema = z.object({
 
 export const YixiezuoOperationSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(["preview", "refresh", "publish"]).catch("preview"),
+  kind: z.enum(["preview", "refresh", "publish", "review"]).catch("preview"),
   state: z.enum(["pending", "running", "succeeded", "failed", "conflict", "unknown"]).catch("unknown"),
   snapshot: YixiezuoSnapshotSchema.nullable().optional().default(null),
   error: z.string().default(""),

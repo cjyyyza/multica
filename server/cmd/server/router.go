@@ -1154,7 +1154,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			AppURL:  appURLFromEnv(),
 			Logger:  slog.Default(),
 		})
-		channelRouter.Register(popo.TypePopo, popo.NewPopoResolverSet(queries, pool, popoReplier, popoMedia))
+		popoResolvers := popo.NewPopoResolverSet(queries, pool, popoReplier, popoMedia)
+		popoResolvers.Commands = h
+		channelRouter.Register(popo.TypePopo, popoResolvers)
 		popoOutbound := popo.NewOutbound(queries, popoBridge, slog.Default()).WithDelivery(store, appURLFromEnv())
 		popoOutbound.Register(bus)
 		h.PopoOutbound = popoOutbound

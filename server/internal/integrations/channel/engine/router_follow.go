@@ -299,17 +299,30 @@ func (r *Router) followIssueResult(inst ResolvedInstallation, msg channel.Inboun
 }
 
 func (r *Router) recoverDuplicateCommand(ctx context.Context, set ResolverSet, inst ResolvedInstallation, msg channel.InboundMessage) (Result, bool) {
-	if r.follow == nil || strings.TrimSpace(msg.MessageID) == "" {
+	if strings.TrimSpace(msg.MessageID) == "" || (r.follow == nil && set.Commands == nil) {
 		return Result{}, false
 	}
-	for _, kind := range []string{InboundWriteKindIssue, InboundWriteKindComment, InboundWriteKindCancel} {
-		if _, err := r.follow.LoadInboundWrite(ctx, inst.ID, msg.MessageID, kind); err == nil {
-			return r.drop(ctx, set, msg, inst.ID, DropReasonDuplicate), true
+	if r.follow != nil {
+		for _, kind := range []string{InboundWriteKindIssue, InboundWriteKindComment, InboundWriteKindCancel} {
+			if _, err := r.follow.LoadInboundWrite(ctx, inst.ID, msg.MessageID, kind); err == nil {
+				return r.drop(ctx, set, msg, inst.ID, DropReasonDuplicate), true
+			}
 		}
 	}
 
 	identity, err := set.Identity.ResolveSender(ctx, inst, msg)
 	if err != nil {
+		return Result{}, false
+	}
+	if msg.Source.ChatType == channel.ChatTypeGroup && !msg.AddressedToBot {
+		return Result{}, false
+	}
+	if set.Commands != nil {
+		if result, handled, err := set.Commands.HandleMemberCommand(ctx, inst, identity, msg); handled {
+			return result, err == nil
+		}
+	}
+	if r.follow == nil {
 		return Result{}, false
 	}
 

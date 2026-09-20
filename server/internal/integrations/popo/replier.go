@@ -185,7 +185,7 @@ func (r *OutboundReplier) postIssue(ctx context.Context, inst engine.ResolvedIns
 	if chatType == "" {
 		chatType = string(channel.ChatTypeP2P)
 	}
-	sourceKey, issueStatus := "", ""
+	sourceKey, issueStatus := res.ReplyKey, ""
 	if kind == "issue_created" && !res.IssueDuplicate {
 		sourceKey, issueStatus = "issue_created:"+uuidString(res.IssueID), "todo"
 	}

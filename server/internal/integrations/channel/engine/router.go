@@ -381,6 +381,14 @@ func (r *Router) processClaimed(ctx context.Context, set ResolverSet, msg channe
 	}
 
 	if !startChat {
+		if set.Commands != nil {
+			if result, handled, err := set.Commands.HandleMemberCommand(ctx, inst, identity, msg); handled {
+				if err != nil {
+					return Result{}, finalizeRelease, err
+				}
+				return result, finalizeMark, nil
+			}
+		}
 		if followRes, handled, followErr := r.handleFollow(ctx, set, inst, identity, msg); handled {
 			if followErr != nil {
 				return Result{}, finalizeRelease, followErr

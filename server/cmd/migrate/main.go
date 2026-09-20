@@ -140,6 +140,7 @@ var pgBigmOperatorClass = extensionOperatorClass{
 // they are still pending: a fresh self-hosted install, which is exactly where an
 // interrupted build would otherwise leave a permanently unusable index.
 var concurrentIndexCleanups = map[string]string{
+	"539_yixiezuo_operation_request_index":                      "idx_yixiezuo_operation_request",
 	"495_issue_to_label_label_id_index":                         "issue_to_label_label_idx",
 	"496_chat_session_agent_id_index":                           "idx_chat_session_agent_id",
 	"497_agent_task_queue_delegated_failure_evidence_index":     "idx_agent_task_queue_delegated_failure_evidence",
@@ -401,6 +402,9 @@ var preRollbackHooks = func() map[string]preMigrationHook {
 		hooks[version] = ensureSourceContextRollbackSafe
 	}
 	hooks["430_channel_outbound_message_binding_index"] = refuseChannelChatRouteHistoryRollback
+	// Preserve the request index when retained reviews prevent a downgrade.
+	hooks["538_yixiezuo_channel_review"] = ensureYixiezuoReviewRollbackSafe
+	hooks["539_yixiezuo_operation_request_index"] = ensureYixiezuoReviewRollbackSafe
 	return hooks
 }()
 
@@ -501,6 +505,17 @@ func ensureSourceContextRollbackSafe(ctx context.Context, pool *pgxpool.Pool) er
 	}
 	if dataExists {
 		return errors.New("cannot roll back issue source context while captured data or stored objects still exist; remove source-context captures and their stored objects through application cleanup, then retry")
+	}
+	return nil
+}
+
+func ensureYixiezuoReviewRollbackSafe(ctx context.Context, pool *pgxpool.Pool) error {
+	var retained bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM yixiezuo_operation WHERE kind='review')`).Scan(&retained); err != nil {
+		return fmt.Errorf("inspect source review rollback: %w", err)
+	}
+	if retained {
+		return errors.New("cannot roll back source review support while review records exist; keep the current schema and resolve retained reviews before retrying")
 	}
 	return nil
 }

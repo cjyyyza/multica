@@ -101,6 +101,8 @@ function idleRobotsOn(
   );
 }
 
+const POPO_ENABLE_SETTING = "MULTICA_POPO_ENABLED=true";
+
 export function PopoTab() {
   const { t } = useT("settings");
   const locale = useLocale();
@@ -252,7 +254,7 @@ export function PopoTab() {
             <p className="text-caption text-muted-foreground">
               {t(($) => $.popo.not_enabled_description_prefix)}{" "}
               <code className="rounded-xs bg-muted px-1 py-0.5 text-micro">
-                MULTICA_POPO_ENABLED=true
+                {POPO_ENABLE_SETTING}
               </code>{" "}
               {t(($) => $.popo.not_enabled_description_suffix)}{" "}
               {t(($) => $.popo.not_enabled_self_host_hint)}

@@ -18,7 +18,7 @@ WITH next AS (
     ORDER BY candidate.created_at, candidate.id FOR UPDATE SKIP LOCKED LIMIT 1
 )
 UPDATE yixiezuo_operation op SET state = 'running', lease_token = gen_random_uuid(), started_at = now()
-FROM next WHERE op.id = next.id RETURNING op.id, op.workspace_id, op.requested_by, op.kind, op.issue_id, op.payload, op.state, op.result, op.error, op.lease_token, op.started_at, op.created_at, op.completed_at
+FROM next WHERE op.id = next.id RETURNING op.id, op.workspace_id, op.requested_by, op.kind, op.issue_id, op.payload, op.state, op.result, op.error, op.lease_token, op.started_at, op.created_at, op.completed_at, op.request_key
 `
 
 type ClaimYixiezuoOperationParams struct {
@@ -43,6 +43,7 @@ func (q *Queries) ClaimYixiezuoOperation(ctx context.Context, arg ClaimYixiezuoO
 		&i.StartedAt,
 		&i.CreatedAt,
 		&i.CompletedAt,
+		&i.RequestKey,
 	)
 	return i, err
 }
@@ -51,7 +52,7 @@ const completeYixiezuoOperation = `-- name: CompleteYixiezuoOperation :one
 UPDATE yixiezuo_operation SET state = $5, result = $6, error = $7, completed_at = now()
 WHERE workspace_id = $1 AND requested_by = $2 AND id = $3 AND lease_token = $4
   AND state = 'running' AND started_at >= now() - interval '3 minutes'
-RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at
+RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key
 `
 
 type CompleteYixiezuoOperationParams struct {
@@ -89,6 +90,7 @@ func (q *Queries) CompleteYixiezuoOperation(ctx context.Context, arg CompleteYix
 		&i.StartedAt,
 		&i.CreatedAt,
 		&i.CompletedAt,
+		&i.RequestKey,
 	)
 	return i, err
 }
@@ -136,8 +138,10 @@ func (q *Queries) CreateYixiezuoImport(ctx context.Context, arg CreateYixiezuoIm
 }
 
 const createYixiezuoOperation = `-- name: CreateYixiezuoOperation :one
-INSERT INTO yixiezuo_operation (workspace_id, requested_by, kind, issue_id, payload)
-VALUES ($1, $2, $3, $5, $4) RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at
+INSERT INTO yixiezuo_operation (workspace_id, requested_by, kind, issue_id, payload, request_key)
+VALUES ($1, $2, $3, $5, $4, $6)
+ON CONFLICT (workspace_id, requested_by, request_key) WHERE request_key IS NOT NULL
+DO UPDATE SET request_key = EXCLUDED.request_key RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key
 `
 
 type CreateYixiezuoOperationParams struct {
@@ -146,6 +150,7 @@ type CreateYixiezuoOperationParams struct {
 	Kind        string      `json:"kind"`
 	Payload     []byte      `json:"payload"`
 	IssueID     pgtype.UUID `json:"issue_id"`
+	RequestKey  pgtype.Text `json:"request_key"`
 }
 
 func (q *Queries) CreateYixiezuoOperation(ctx context.Context, arg CreateYixiezuoOperationParams) (YixiezuoOperation, error) {
@@ -155,6 +160,7 @@ func (q *Queries) CreateYixiezuoOperation(ctx context.Context, arg CreateYixiezu
 		arg.Kind,
 		arg.Payload,
 		arg.IssueID,
+		arg.RequestKey,
 	)
 	var i YixiezuoOperation
 	err := row.Scan(
@@ -171,6 +177,52 @@ func (q *Queries) CreateYixiezuoOperation(ctx context.Context, arg CreateYixiezu
 		&i.StartedAt,
 		&i.CreatedAt,
 		&i.CompletedAt,
+		&i.RequestKey,
+	)
+	return i, err
+}
+
+const createYixiezuoReview = `-- name: CreateYixiezuoReview :one
+INSERT INTO yixiezuo_operation (workspace_id, requested_by, kind, issue_id, payload, result, state, request_key)
+VALUES ($1, $2, 'review', $3, $4, $5, 'succeeded', $6)
+ON CONFLICT (workspace_id, requested_by, request_key) WHERE request_key IS NOT NULL
+DO UPDATE SET request_key = EXCLUDED.request_key RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key
+`
+
+type CreateYixiezuoReviewParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RequestedBy pgtype.UUID `json:"requested_by"`
+	IssueID     pgtype.UUID `json:"issue_id"`
+	Payload     []byte      `json:"payload"`
+	Result      []byte      `json:"result"`
+	RequestKey  pgtype.Text `json:"request_key"`
+}
+
+func (q *Queries) CreateYixiezuoReview(ctx context.Context, arg CreateYixiezuoReviewParams) (YixiezuoOperation, error) {
+	row := q.db.QueryRow(ctx, createYixiezuoReview,
+		arg.WorkspaceID,
+		arg.RequestedBy,
+		arg.IssueID,
+		arg.Payload,
+		arg.Result,
+		arg.RequestKey,
+	)
+	var i YixiezuoOperation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.RequestedBy,
+		&i.Kind,
+		&i.IssueID,
+		&i.Payload,
+		&i.State,
+		&i.Result,
+		&i.Error,
+		&i.LeaseToken,
+		&i.StartedAt,
+		&i.CreatedAt,
+		&i.CompletedAt,
+		&i.RequestKey,
 	)
 	return i, err
 }
@@ -248,7 +300,7 @@ func (q *Queries) GetYixiezuoImportBySource(ctx context.Context, arg GetYixiezuo
 }
 
 const getYixiezuoOperation = `-- name: GetYixiezuoOperation :one
-SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at FROM yixiezuo_operation WHERE workspace_id = $1 AND requested_by = $2 AND id = $3
+SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key FROM yixiezuo_operation WHERE workspace_id = $1 AND requested_by = $2 AND id = $3
 `
 
 type GetYixiezuoOperationParams struct {
@@ -274,12 +326,45 @@ func (q *Queries) GetYixiezuoOperation(ctx context.Context, arg GetYixiezuoOpera
 		&i.StartedAt,
 		&i.CreatedAt,
 		&i.CompletedAt,
+		&i.RequestKey,
+	)
+	return i, err
+}
+
+const getYixiezuoOperationByRequestKey = `-- name: GetYixiezuoOperationByRequestKey :one
+SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key FROM yixiezuo_operation WHERE workspace_id = $1 AND requested_by = $2 AND request_key = $3
+`
+
+type GetYixiezuoOperationByRequestKeyParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RequestedBy pgtype.UUID `json:"requested_by"`
+	RequestKey  pgtype.Text `json:"request_key"`
+}
+
+func (q *Queries) GetYixiezuoOperationByRequestKey(ctx context.Context, arg GetYixiezuoOperationByRequestKeyParams) (YixiezuoOperation, error) {
+	row := q.db.QueryRow(ctx, getYixiezuoOperationByRequestKey, arg.WorkspaceID, arg.RequestedBy, arg.RequestKey)
+	var i YixiezuoOperation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.RequestedBy,
+		&i.Kind,
+		&i.IssueID,
+		&i.Payload,
+		&i.State,
+		&i.Result,
+		&i.Error,
+		&i.LeaseToken,
+		&i.StartedAt,
+		&i.CreatedAt,
+		&i.CompletedAt,
+		&i.RequestKey,
 	)
 	return i, err
 }
 
 const latestYixiezuoOperation = `-- name: LatestYixiezuoOperation :one
-SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at FROM yixiezuo_operation WHERE workspace_id = $1 AND issue_id = $2
+SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key FROM yixiezuo_operation WHERE workspace_id = $1 AND issue_id = $2 AND kind <> 'review'
 ORDER BY created_at DESC, id DESC LIMIT 1
 `
 
@@ -305,6 +390,7 @@ func (q *Queries) LatestYixiezuoOperation(ctx context.Context, arg LatestYixiezu
 		&i.StartedAt,
 		&i.CreatedAt,
 		&i.CompletedAt,
+		&i.RequestKey,
 	)
 	return i, err
 }
@@ -320,7 +406,7 @@ FROM yixiezuo_import link
 JOIN issue i ON i.id = link.issue_id AND i.workspace_id = link.workspace_id
 LEFT JOIN LATERAL (
     SELECT op.state FROM yixiezuo_operation op
-    WHERE op.workspace_id = link.workspace_id AND op.issue_id = link.issue_id
+    WHERE op.workspace_id = link.workspace_id AND op.issue_id = link.issue_id AND op.kind <> 'review'
     ORDER BY op.created_at DESC, op.id DESC LIMIT 1
 ) latest ON true
 WHERE link.workspace_id = $1

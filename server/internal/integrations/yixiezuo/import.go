@@ -61,12 +61,20 @@ type Snapshot struct {
 }
 
 type OperationPayload struct {
-	Source         Source `json:"source"`
-	ExpectedDigest string `json:"expected_digest,omitempty"`
-	Revision       int64  `json:"revision,omitempty"`
-	StatusName     string `json:"status_name,omitempty"`
-	Summary        string `json:"summary,omitempty"`
-	IssueURL       string `json:"issue_url,omitempty"`
+	Source         Source        `json:"source"`
+	ExpectedDigest string        `json:"expected_digest,omitempty"`
+	Revision       int64         `json:"revision,omitempty"`
+	StatusName     string        `json:"status_name,omitempty"`
+	Summary        string        `json:"summary,omitempty"`
+	IssueURL       string        `json:"issue_url,omitempty"`
+	Channel        *ChannelScope `json:"channel,omitempty"`
+}
+
+// ChannelScope binds a review to the authenticated member's originating chat.
+type ChannelScope struct {
+	InstallationID string `json:"installation_id"`
+	ChatID         string `json:"chat_id"`
+	ChatType       string `json:"chat_type"`
 }
 
 type Operation struct {

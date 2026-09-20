@@ -18,7 +18,7 @@ FROM yixiezuo_import link
 JOIN issue i ON i.id = link.issue_id AND i.workspace_id = link.workspace_id
 LEFT JOIN LATERAL (
     SELECT op.state FROM yixiezuo_operation op
-    WHERE op.workspace_id = link.workspace_id AND op.issue_id = link.issue_id
+    WHERE op.workspace_id = link.workspace_id AND op.issue_id = link.issue_id AND op.kind <> 'review'
     ORDER BY op.created_at DESC, op.id DESC LIMIT 1
 ) latest ON true
 WHERE link.workspace_id = $1;
@@ -35,14 +35,25 @@ UPDATE yixiezuo_import SET snapshot = $3, published_revision = $4, published_at 
 WHERE workspace_id = $1 AND issue_id = $2;
 
 -- name: CreateYixiezuoOperation :one
-INSERT INTO yixiezuo_operation (workspace_id, requested_by, kind, issue_id, payload)
-VALUES ($1, $2, $3, sqlc.narg('issue_id'), $4) RETURNING *;
+INSERT INTO yixiezuo_operation (workspace_id, requested_by, kind, issue_id, payload, request_key)
+VALUES ($1, $2, $3, sqlc.narg('issue_id'), $4, sqlc.narg('request_key'))
+ON CONFLICT (workspace_id, requested_by, request_key) WHERE request_key IS NOT NULL
+DO UPDATE SET request_key = EXCLUDED.request_key RETURNING *;
+
+-- name: CreateYixiezuoReview :one
+INSERT INTO yixiezuo_operation (workspace_id, requested_by, kind, issue_id, payload, result, state, request_key)
+VALUES ($1, $2, 'review', $3, $4, $5, 'succeeded', $6)
+ON CONFLICT (workspace_id, requested_by, request_key) WHERE request_key IS NOT NULL
+DO UPDATE SET request_key = EXCLUDED.request_key RETURNING *;
+
+-- name: GetYixiezuoOperationByRequestKey :one
+SELECT * FROM yixiezuo_operation WHERE workspace_id = $1 AND requested_by = $2 AND request_key = $3;
 
 -- name: GetYixiezuoOperation :one
 SELECT * FROM yixiezuo_operation WHERE workspace_id = $1 AND requested_by = $2 AND id = $3;
 
 -- name: LatestYixiezuoOperation :one
-SELECT * FROM yixiezuo_operation WHERE workspace_id = $1 AND issue_id = $2
+SELECT * FROM yixiezuo_operation WHERE workspace_id = $1 AND issue_id = $2 AND kind <> 'review'
 ORDER BY created_at DESC, id DESC LIMIT 1;
 
 -- name: ExpireYixiezuoOperations :exec

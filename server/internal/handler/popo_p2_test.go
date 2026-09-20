@@ -45,7 +45,9 @@ func wirePopoEngine(t *testing.T) {
 	if testHandler.Storage != nil {
 		media = popo.NewMediaResolver(testHandler.Queries, engine.NewDBMediaIntentLedger(testHandler.Queries), slog.Default())
 	}
-	router.Register(popo.TypePopo, popo.NewPopoResolverSet(testHandler.Queries, testPool, replier, media))
+	resolvers := popo.NewPopoResolverSet(testHandler.Queries, testPool, replier, media)
+	resolvers.Commands = testHandler
+	router.Register(popo.TypePopo, resolvers)
 	prev := testHandler.ChannelRouter
 	testHandler.ChannelRouter = router
 	popoOutboundOnce.Do(func() {

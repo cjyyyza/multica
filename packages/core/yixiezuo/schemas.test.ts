@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import { YixiezuoOperationSchema, YixiezuoImportEnvelopeSchema } from "./schemas";
 
 describe("manual 易协作 API boundaries", () => {
+  it("preserves a prepared review as distinct from an external publication", () => {
+    expect(YixiezuoOperationSchema.parse({ id: "review", kind: "review", state: "succeeded" }).kind).toBe("review");
+  });
   it("degrades unknown operation states without reporting success", () => {
     expect(YixiezuoOperationSchema.parse({ id: "op", kind: "preview", state: "new_state" }).state).toBe("unknown");
   });

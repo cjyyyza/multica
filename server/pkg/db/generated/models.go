@@ -1814,4 +1814,5 @@ type YixiezuoOperation struct {
 	StartedAt   pgtype.Timestamptz `json:"started_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+	RequestKey  pgtype.Text        `json:"request_key"`
 }

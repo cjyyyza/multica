@@ -75,7 +75,9 @@ type Result struct {
 	IssueUsageHadMedia bool
 	// ReplyText is the user-visible follow-up ack for OutcomeIssueFollow
 	// (/reply, /status, /stop, quote-comment). Empty means silent.
-	ReplyText   string
+	ReplyText string
+	// ReplyKey identifies a durable member-command acknowledgment across replay.
+	ReplyKey    string
 	CommentID   pgtype.UUID
 	IssueStatus string
 	RunStatus   string
@@ -411,7 +413,14 @@ type ResolverSet struct {
 	Audit        Auditor
 	Replier      OutboundReplier
 	Typing       TypingNotifier
+	Commands     MemberCommandHandler
 	OriginType   string
+}
+
+// MemberCommandHandler runs authenticated, explicit controls before the chat
+// pipeline. Implementations must persist mutation idempotency before returning.
+type MemberCommandHandler interface {
+	HandleMemberCommand(context.Context, ResolvedInstallation, ResolvedIdentity, channel.InboundMessage) (Result, bool, error)
 }
 
 // IssueCreator is the narrow subset of service.IssueService the Router needs
