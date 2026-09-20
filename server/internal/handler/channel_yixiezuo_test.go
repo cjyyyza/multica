@@ -60,6 +60,71 @@ func sourceReviewID(t *testing.T, issue db.Issue) string {
 	return id
 }
 
+func TestPopoYixiezuoDirectURLImportReportsSuccessAndFailure(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	t.Run("success", func(t *testing.T) {
+		e := popoP2Setup(t)
+		externalID := "880301"
+		t.Cleanup(func() {
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM yixiezuo_operation WHERE workspace_id=$1 AND payload->'source'->>'id'=$2`, testWorkspaceID, externalID)
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM yixiezuo_import WHERE workspace_id=$1 AND external_id=$2`, testWorkspaceID, externalID)
+		})
+		e.inbound(t, "direct-import", "/yixiezuo import https://dj01.pm.netease.com/issues/"+externalID, nil)
+		if got := dbfx.Count(t, `SELECT count(*) FROM yixiezuo_import WHERE external_id=$1 AND workspace_id=$2`, externalID, testWorkspaceID); got != 0 {
+			t.Fatal("direct import created a task before the bridge finished")
+		}
+		var id string
+		dbfx.QueryRow(t, `SELECT id FROM yixiezuo_operation WHERE workspace_id=$1 AND kind='preview' AND payload->>'auto_import'='true' AND payload->'source'->>'id'=$2`, testWorkspaceID, externalID).Scan(&id)
+		if id == "" {
+			t.Fatal("direct import did not queue a preview")
+		}
+		source, _ := yixiezuo.ParseSource("https://dj01.pm.netease.com/issues/" + externalID)
+		lock := int64(4)
+		snapshot := yixiezuo.Snapshot{Source: source, Title: "Direct import " + externalID, Description: "Fixture reproduction steps", Status: "Ready", LockVersion: &lock, Attachments: []yixiezuo.Attachment{}, Comments: []yixiezuo.Comment{}, Fields: []yixiezuo.SourceField{}, Statuses: []yixiezuo.Status{{ID: 7, Name: "QA"}}, Warnings: []string{}}
+		completeChannelSource(t, id, "succeeded", &snapshot)
+		issue := importedChannelIssue(t, externalID)
+		if issue.AssigneeID.Valid {
+			t.Fatal("direct import assigned an agent")
+		}
+		if got := dbfx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE issue_id=$1`, issue.ID); got != 0 {
+			t.Fatal("direct import started execution")
+		}
+		ident := fmt.Sprintf("HAN-%d", issue.Number)
+		replies := strings.Join(e.commands(t), "\n")
+		if !strings.Contains(replies, "Queued a direct import") || !strings.Contains(replies, "Imported as "+ident) {
+			t.Fatalf("missing queued/success replies: %s", replies)
+		}
+	})
+	t.Run("failure", func(t *testing.T) {
+		e := popoP2Setup(t)
+		externalID := "880302"
+		t.Cleanup(func() {
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM yixiezuo_operation WHERE workspace_id=$1 AND payload->'source'->>'id'=$2`, testWorkspaceID, externalID)
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM yixiezuo_import WHERE workspace_id=$1 AND external_id=$2`, testWorkspaceID, externalID)
+		})
+		e.inbound(t, "direct-import-fail", "/yixiezuo import https://dj01.pm.netease.com/issues/"+externalID, nil)
+		var id string
+		dbfx.QueryRow(t, `SELECT id FROM yixiezuo_operation WHERE workspace_id=$1 AND kind='preview' AND payload->>'auto_import'='true' AND payload->'source'->>'id'=$2`, testWorkspaceID, externalID).Scan(&id)
+		if id == "" {
+			t.Fatal("direct import did not queue a preview")
+		}
+		var claim struct {
+			Operation yixiezuo.Operation `json:"operation"`
+		}
+		testutil.Call(t, testHandler.ClaimYixiezuoOperation, yixiezuoRequest("POST", "/claim", map[string]any{})).Want(200).JSON(&claim)
+		testutil.Call(t, testHandler.CompleteYixiezuoOperation, manualOperationRequest("POST", id, yixiezuo.Completion{LeaseToken: claim.Operation.LeaseToken, State: "failed", Error: "local popo-cli is not on PATH"})).Want(200)
+		if got := dbfx.Count(t, `SELECT count(*) FROM yixiezuo_import WHERE external_id=$1 AND workspace_id=$2`, externalID, testWorkspaceID); got != 0 {
+			t.Fatal("failed direct import created a task")
+		}
+		replies := strings.Join(e.commands(t), "\n")
+		if !strings.Contains(replies, "Import failed") || !strings.Contains(replies, "local popo-cli is not on PATH") {
+			t.Fatalf("missing failure reply: %s", replies)
+		}
+	})
+}
+
 func TestPopoYixiezuoImportKeepsP4ProjectAndNativeTaskControls(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

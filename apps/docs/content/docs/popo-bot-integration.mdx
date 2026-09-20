@@ -60,7 +60,8 @@ Mention the robot in a group to send it a request. Quoting a known task reply ca
 - `/reply ISSUE-123 <comment>`, `/status ISSUE-123` and `/stop ISSUE-123` operate on an existing task. Stopping a run keeps task status separate.
 - `/yixiezuo preview <issue-url>` queues a single-source preview. Keep `multica yixiezuo bridge --workspace-id <workspace-uuid>` running under the same Multica member account that is bound to the sender.
 - `/yixiezuo show <operation-id>` displays source material or the operation result.
-- `/yixiezuo import <preview-id> --confirm --project <project-uuid>` imports an unassigned native task and associates its notifications with this chat. Repeated import preserves the existing task and any existing notification route.
+- `/yixiezuo import <issue-url> [--project <project-uuid>]` imports one source issue directly. The local bridge reads it, then the bot reports success or failure in this chat. The task stays unassigned and no agent run starts. Repeated import preserves the existing task and any existing notification route.
+- `/yixiezuo import <preview-id> --confirm --project <project-uuid>` imports after an explicit preview.
 - `/yixiezuo refresh ISSUE-123` updates the source snapshot while preserving local task fields.
 - `/yixiezuo publish ISSUE-123 [--status <source-status>]`, followed by a result summary on the next line, prepares a review. `/yixiezuo confirm <review-id>` queues the reviewed write. Confirmation expires after 15 minutes and is bound to the same member, robot, chat, task revision and source snapshot.
 

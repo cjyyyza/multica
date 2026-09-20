@@ -60,7 +60,8 @@ python -m nanobot.multica_bridge run --server https://your-multica.example
 - `/reply 任务编号 <评论>`、`/status 任务编号` 和 `/stop 任务编号` 操作已有任务。停止运行与任务状态分别记录。
 - `/yixiezuo preview <工单链接>` 读取单张易协作工单。在本机以发送者绑定的同一个 Multica 成员账号运行 `multica yixiezuo bridge --workspace-id <工作区 UUID>`。
 - `/yixiezuo show <操作 ID>` 查看来源材料或处理结果。
-- `/yixiezuo import <预览 ID> --confirm --project <项目 UUID>` 创建未分配任务，将通知关联到当前聊天。重复导入保留已有任务和已建立的通知路由。
+- `/yixiezuo import <工单链接> [--project <项目 UUID>]` 直接导入一张易协作工单。本机桥读完后机器人会回报成功或失败；任务保持未分配，不会自动开跑智能体。重复导入保留已有任务和已建立的通知路由。
+- `/yixiezuo import <预览 ID> --confirm --project <项目 UUID>` 在预览确认后再导入。
 - `/yixiezuo refresh 任务编号` 刷新来源快照，保留本地任务字段。
 - `/yixiezuo publish 任务编号 [--status <来源状态>]` 的下一行填写结果与验证证据，先生成待复核内容；再发送 `/yixiezuo confirm <复核 ID>` 排队回写。确认在 15 分钟内有效，绑定同一成员、机器人、聊天、任务版本和来源快照。
 

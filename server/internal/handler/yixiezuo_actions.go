@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/integrations/popo"
 	"github.com/multica-ai/multica/server/internal/integrations/yixiezuo"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -62,20 +65,121 @@ func sourceScopeMatches(a, b *yixiezuo.ChannelScope) bool {
 // These actor-explicit actions are shared by HTTP and authenticated channel
 // commands. Neither transport simulates HTTP requests for the other.
 func (h *Handler) previewYixiezuo(ctx context.Context, ws, actor pgtype.UUID, rawURL, key string, scope *yixiezuo.ChannelScope) (db.YixiezuoOperation, error) {
+	return h.queueYixiezuoPreview(ctx, ws, actor, rawURL, key, scope, yixiezuo.OperationPayload{})
+}
+
+func (h *Handler) queueYixiezuoPreview(ctx context.Context, ws, actor pgtype.UUID, rawURL, key string, scope *yixiezuo.ChannelScope, extra yixiezuo.OperationPayload) (db.YixiezuoOperation, error) {
 	source, err := yixiezuo.ParseSource(rawURL)
 	if err != nil {
 		return db.YixiezuoOperation{}, sourceError(400, err.Error())
 	}
-	payload, _ := json.Marshal(yixiezuo.OperationPayload{Source: source, Channel: scope})
+	extra.Source = source
+	extra.Channel = scope
+	payload, _ := json.Marshal(extra)
 	row, err := h.Queries.CreateYixiezuoOperation(ctx, db.CreateYixiezuoOperationParams{WorkspaceID: ws, RequestedBy: actor, Kind: "preview", Payload: payload, RequestKey: sourceRequestKey(key)})
 	if err != nil {
 		return row, err
 	}
 	var saved yixiezuo.OperationPayload
-	if json.Unmarshal(row.Payload, &saved) != nil || row.Kind != "preview" || saved.Source != source || !sourceScopeMatches(saved.Channel, scope) {
+	if json.Unmarshal(row.Payload, &saved) != nil || row.Kind != "preview" || saved.Source != source || !sourceScopeMatches(saved.Channel, scope) || saved.AutoImport != extra.AutoImport || saved.ProjectID != extra.ProjectID {
 		return row, sourceError(409, "this message already identifies a different source operation")
 	}
 	return row, nil
+}
+
+func (h *Handler) expireYixiezuoOperations(ctx context.Context, ws pgtype.UUID) error {
+	rows, err := h.Queries.ExpireYixiezuoOperations(ctx, ws)
+	if err != nil {
+		return err
+	}
+	h.settleExpiredYixiezuoAutoImports(ctx, rows)
+	return nil
+}
+
+func (h *Handler) settleExpiredYixiezuoAutoImports(ctx context.Context, rows []db.YixiezuoOperation) {
+	for _, row := range rows {
+		h.settleYixiezuoAutoImport(ctx, row)
+	}
+}
+
+func (h *Handler) settleYixiezuoAutoImport(ctx context.Context, row db.YixiezuoOperation) string {
+	var payload yixiezuo.OperationPayload
+	if json.Unmarshal(row.Payload, &payload) != nil || !payload.AutoImport {
+		return ""
+	}
+	text := h.autoImportResultText(ctx, row, payload)
+	h.notifyYixiezuoAutoImport(ctx, row, payload, text)
+	return text
+}
+
+func (h *Handler) autoImportResultText(ctx context.Context, row db.YixiezuoOperation, payload yixiezuo.OperationPayload) string {
+	if row.State != "succeeded" {
+		errText := strings.TrimSpace(row.Error)
+		if errText == "" {
+			errText = "the source could not be imported"
+		}
+		return fmt.Sprintf("Import failed for %s.\n%s", payload.Source.URL, errText)
+	}
+	project := pgtype.UUID{}
+	if payload.ProjectID != "" {
+		parsed, err := util.ParseUUID(payload.ProjectID)
+		if err != nil || !parsed.Valid {
+			return fmt.Sprintf("Import failed for %s.\nInvalid project ID.", payload.Source.URL)
+		}
+		project = parsed
+	}
+	opts := service.IssueCreateOpts{}
+	if payload.Channel != nil {
+		if install, err := util.ParseUUID(payload.Channel.InstallationID); err == nil && install.Valid {
+			opts.ChannelSource = &service.ChannelIssueSource{
+				InstallationID: install,
+				ChannelType:    "popo",
+				ChatID:         payload.Channel.ChatID,
+				ChatType:       payload.Channel.ChatType,
+			}
+			opts.ChannelIdempotency = &service.ChannelIdempotencyKey{
+				InstallationID: install,
+				ChannelType:    "popo",
+				MessageID:      "yixiezuo-auto-import:" + uuidToString(row.ID),
+				Kind:           "source_import",
+			}
+		}
+	}
+	issue, existing, err := h.importYixiezuo(ctx, row.WorkspaceID, row.RequestedBy, row.ID, project, opts)
+	if err != nil {
+		return fmt.Sprintf("Import failed for %s.\n%s", payload.Source.URL, err.Error())
+	}
+	ident := uuidToString(issue.ID)
+	if ws, wsErr := h.Queries.GetWorkspace(ctx, issue.WorkspaceID); wsErr == nil {
+		ident = service.IssueIdentifier(issuePrefixForWorkspace(ws), issue.Number)
+	}
+	if existing {
+		return "Already imported as " + ident + ". Existing edits, assignment and notification route are preserved.\n/status " + ident + "\n/reply " + ident + " <comment>"
+	}
+	return "Imported as " + ident + ". The task is unassigned; assign it in Multica when ready.\n/status " + ident + "\n/reply " + ident + " <comment>"
+}
+
+func (h *Handler) notifyYixiezuoAutoImport(ctx context.Context, row db.YixiezuoOperation, payload yixiezuo.OperationPayload, text string) {
+	if h.PopoBridge == nil || payload.Channel == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	install, err := util.ParseUUID(payload.Channel.InstallationID)
+	if err != nil || !install.Valid {
+		return
+	}
+	chatType := strings.TrimSpace(payload.Channel.ChatType)
+	if chatType == "" {
+		chatType = "p2p"
+	}
+	_ = h.PopoBridge.Enqueue(ctx, popo.OutboundItem{
+		WorkspaceID:    row.WorkspaceID,
+		InstallationID: install,
+		ChatID:         payload.Channel.ChatID,
+		ChatType:       chatType,
+		Content:        text,
+		SourceKey:      "yixiezuo-auto-import:" + uuidToString(row.ID),
+		OutboundKind:   "issue_ack",
+	})
 }
 
 func (h *Handler) importYixiezuo(ctx context.Context, ws, actor, previewID, project pgtype.UUID, opts service.IssueCreateOpts) (db.Issue, bool, error) {
@@ -150,7 +254,8 @@ func (h *Handler) enqueueYixiezuo(ctx context.Context, ws, actor, id pgtype.UUID
 		}
 		return prior, nil
 	}
-	if err = q.ExpireYixiezuoOperations(ctx, ws); err != nil {
+	expired, err := q.ExpireYixiezuoOperations(ctx, ws)
+	if err != nil {
 		return db.YixiezuoOperation{}, err
 	}
 	link, err := q.GetYixiezuoImportByIssue(ctx, db.GetYixiezuoImportByIssueParams{WorkspaceID: ws, IssueID: id})
@@ -215,5 +320,9 @@ func (h *Handler) enqueueYixiezuo(ctx context.Context, ws, actor, id pgtype.UUID
 	if err != nil {
 		return row, err
 	}
-	return row, tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return row, err
+	}
+	h.settleExpiredYixiezuoAutoImports(ctx, expired)
+	return row, nil
 }

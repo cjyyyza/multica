@@ -308,7 +308,7 @@ The tables below cover every current top-level command, grouped the way the CLI 
 | `config` | `show`, `set <key> <value>` | View or edit the current profile's local configuration | Precedence: command-line flags > environment variables > `config.json` > built-in defaults; set an empty string to clear a value |
 | `update` | — | Update the CLI to the latest version | |
 | `version` | — | Print version information | `--output` (`text` or `json`) |
-| `yixiezuo` | `preview` / `import` / `bridge` | Read one issue, import it explicitly, or run the local bridge for user-requested previews and result publication. | `<issue-url>`, `import --confirm --project-id`, `bridge --once` |
+| `yixiezuo` | `preview` / `import` / `bridge` | Read one issue, import it explicitly, or run the local bridge for user-requested previews, direct URL imports, and result publication. POPO `/yixiezuo import <issue-url>` reports success or failure after the bridge finishes. | `<issue-url>`, `import --confirm --project-id`, `bridge --once` |
 
 ## Driving Multica from another coding agent
 

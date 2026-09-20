@@ -300,7 +300,7 @@ CLI 配置文件包含可代表你访问 Multica 的令牌。不要提交到仓�
 | `config` | `show`、`set <key> <value>` | 查看或修改当前 profile 的本地配置 | 优先级：命令行 flag > 环境变量 > `config.json` > 内置默认；设为空串可清除 |
 | `update` | — | 更新 CLI 到最新版本 | |
 | `version` | — | 查看版本信息 | `--output`（`text` 或 `json`） |
-| `yixiezuo` | `preview` / `import` / `bridge` | 读取一张工单，确认后导入；本机桥接只处理用户明确发起的预览和结果回写。 | `<issue-url>`, `import --confirm --project-id`, `bridge --once` |
+| `yixiezuo` | `preview` / `import` / `bridge` | 读取一张工单，确认后导入；POPO `/yixiezuo import <工单链接>` 可直接导入并回报成败。本机桥接只处理用户明确发起的预览、直接导入和结果回写。 | `<issue-url>`, `import --confirm --project-id`, `bridge --once` |
 
 ## 在其他编码智能体里操作 Multica
 

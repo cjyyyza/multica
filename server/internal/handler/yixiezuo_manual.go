@@ -80,7 +80,7 @@ func (h *Handler) GetYixiezuoOperation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.Queries.ExpireYixiezuoOperations(r.Context(), ws); err != nil {
+	if err := h.expireYixiezuoOperations(r.Context(), ws); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check operation expiry")
 		return
 	}
@@ -97,7 +97,7 @@ func (h *Handler) ClaimYixiezuoOperation(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	if err := h.Queries.ExpireYixiezuoOperations(r.Context(), ws); err != nil {
+	if err := h.expireYixiezuoOperations(r.Context(), ws); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check operation expiry")
 		return
 	}
@@ -146,6 +146,7 @@ func (h *Handler) CompleteYixiezuoOperation(w http.ResponseWriter, r *http.Reque
 	// Receipt retries never repeat the remote mutation or change its outcome.
 	if row.State != "running" {
 		if row.State == req.State {
+			h.settleYixiezuoAutoImport(r.Context(), row)
 			writeJSON(w, http.StatusOK, operationResponse(row, false))
 			return
 		}
@@ -196,6 +197,7 @@ func (h *Handler) CompleteYixiezuoOperation(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "failed to commit receipt")
 		return
 	}
+	h.settleYixiezuoAutoImport(r.Context(), updated)
 	writeJSON(w, http.StatusOK, operationResponse(updated, false))
 }
 
@@ -240,7 +242,7 @@ func (h *Handler) GetYixiezuoImport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.Queries.ExpireYixiezuoOperations(r.Context(), ws); err != nil {
+	if err := h.expireYixiezuoOperations(r.Context(), ws); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check operation expiry")
 		return
 	}
@@ -283,7 +285,7 @@ func (h *Handler) ListYixiezuoImportStates(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	if err := h.Queries.ExpireYixiezuoOperations(r.Context(), ws); err != nil {
+	if err := h.expireYixiezuoOperations(r.Context(), ws); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check operation expiry")
 		return
 	}

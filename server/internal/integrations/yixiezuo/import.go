@@ -68,6 +68,8 @@ type OperationPayload struct {
 	Summary        string        `json:"summary,omitempty"`
 	IssueURL       string        `json:"issue_url,omitempty"`
 	Channel        *ChannelScope `json:"channel,omitempty"`
+	AutoImport     bool          `json:"auto_import,omitempty"`
+	ProjectID      string        `json:"project_id,omitempty"`
 }
 
 // ChannelScope binds a review to the authenticated member's originating chat.

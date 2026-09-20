@@ -56,14 +56,15 @@ SELECT * FROM yixiezuo_operation WHERE workspace_id = $1 AND requested_by = $2 A
 SELECT * FROM yixiezuo_operation WHERE workspace_id = $1 AND issue_id = $2 AND kind <> 'review'
 ORDER BY created_at DESC, id DESC LIMIT 1;
 
--- name: ExpireYixiezuoOperations :exec
+-- name: ExpireYixiezuoOperations :many
 UPDATE yixiezuo_operation SET
     state = CASE WHEN kind = 'publish' AND state = 'running' THEN 'unknown' ELSE 'failed' END,
     error = CASE WHEN state = 'running' THEN 'The local bridge stopped before reporting a result. Refresh the source before retrying.' ELSE 'The local bridge did not pick up this request. Start multica yixiezuo bridge, then retry.' END,
     completed_at = now()
 WHERE workspace_id = $1 AND
     ((state = 'pending' AND created_at < now() - interval '5 minutes') OR
-     (state = 'running' AND started_at < now() - interval '3 minutes'));
+     (state = 'running' AND started_at < now() - interval '3 minutes'))
+RETURNING *;
 
 -- name: ClaimYixiezuoOperation :one
 WITH next AS (

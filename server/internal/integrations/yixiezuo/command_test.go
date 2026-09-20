@@ -8,6 +8,8 @@ func TestParseCommandPreservesExplicitConfirmationBoundary(t *testing.T) {
 		confirmed, recognized, valid bool
 	}{
 		{"/yixiezuo preview https://dj01.pm.netease.com/issues/7", "preview", false, true, true},
+		{"/yixiezuo import https://dj01.pm.netease.com/issues/7", "import", false, true, true},
+		{"/yixiezuo import https://dj01.pm.netease.com/v6/kanban?project_id=dj01-bug&issue_id=7 --project project", "import", false, true, true},
 		{"/yixiezuo import op --project project --confirm", "import", true, true, true},
 		{"/yixiezuo import op", "import", false, true, true},
 		{"/yixiezuo publish MUL-7 --status Ready for QA\nVerified in the editor.", "publish", false, true, true},

@@ -227,7 +227,7 @@ func (q *Queries) CreateYixiezuoReview(ctx context.Context, arg CreateYixiezuoRe
 	return i, err
 }
 
-const expireYixiezuoOperations = `-- name: ExpireYixiezuoOperations :exec
+const expireYixiezuoOperations = `-- name: ExpireYixiezuoOperations :many
 UPDATE yixiezuo_operation SET
     state = CASE WHEN kind = 'publish' AND state = 'running' THEN 'unknown' ELSE 'failed' END,
     error = CASE WHEN state = 'running' THEN 'The local bridge stopped before reporting a result. Refresh the source before retrying.' ELSE 'The local bridge did not pick up this request. Start multica yixiezuo bridge, then retry.' END,
@@ -235,11 +235,42 @@ UPDATE yixiezuo_operation SET
 WHERE workspace_id = $1 AND
     ((state = 'pending' AND created_at < now() - interval '5 minutes') OR
      (state = 'running' AND started_at < now() - interval '3 minutes'))
+RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key
 `
 
-func (q *Queries) ExpireYixiezuoOperations(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, expireYixiezuoOperations, workspaceID)
-	return err
+func (q *Queries) ExpireYixiezuoOperations(ctx context.Context, workspaceID pgtype.UUID) ([]YixiezuoOperation, error) {
+	rows, err := q.db.Query(ctx, expireYixiezuoOperations, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []YixiezuoOperation{}
+	for rows.Next() {
+		var i YixiezuoOperation
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.RequestedBy,
+			&i.Kind,
+			&i.IssueID,
+			&i.Payload,
+			&i.State,
+			&i.Result,
+			&i.Error,
+			&i.LeaseToken,
+			&i.StartedAt,
+			&i.CreatedAt,
+			&i.CompletedAt,
+			&i.RequestKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getYixiezuoImportByIssue = `-- name: GetYixiezuoImportByIssue :one

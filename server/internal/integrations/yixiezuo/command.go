@@ -7,6 +7,7 @@ import (
 
 const CommandHelp = `/yixiezuo preview <issue-url>
 /yixiezuo show <operation-id>
+/yixiezuo import <issue-url> [--project <project-uuid>]
 /yixiezuo import <preview-id> --confirm [--project <project-uuid>]
 /yixiezuo refresh <Multica-issue-key>
 /yixiezuo publish <Multica-issue-key> [--status <source-status>]

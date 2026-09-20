@@ -69,7 +69,7 @@ func (h *Handler) sourceChatOperation(ctx context.Context, ws, actor pgtype.UUID
 	if err != nil {
 		return db.YixiezuoOperation{}, yixiezuo.OperationPayload{}, err
 	}
-	if err = h.Queries.ExpireYixiezuoOperations(ctx, ws); err != nil {
+	if err = h.expireYixiezuoOperations(ctx, ws); err != nil {
 		return db.YixiezuoOperation{}, yixiezuo.OperationPayload{}, err
 	}
 	row, err := h.Queries.GetYixiezuoOperation(ctx, db.GetYixiezuoOperationParams{WorkspaceID: ws, RequestedBy: actor, ID: id})
@@ -158,6 +158,9 @@ func (h *Handler) runSourceCommand(ctx context.Context, inst engine.ResolvedInst
 		}
 		return err
 	case "import":
+		if _, err := yixiezuo.ParseSource(command.Target); err == nil {
+			return h.runDirectYixiezuoImport(ctx, inst, actor, scope, key, command, result)
+		}
 		if !command.Confirmed {
 			return sourceError(400, "Review the source material, select the intended project, then repeat the import command with --confirm.")
 		}
@@ -249,6 +252,32 @@ func (h *Handler) runSourceCommand(ctx context.Context, inst engine.ResolvedInst
 		return nil
 	}
 	return sourceError(400, yixiezuo.CommandHelp)
+}
+
+func (h *Handler) runDirectYixiezuoImport(ctx context.Context, inst engine.ResolvedInstallation, actor pgtype.UUID, scope *yixiezuo.ChannelScope, key string, command yixiezuo.Command, result *engine.Result) error {
+	row, err := h.queueYixiezuoPreview(ctx, inst.WorkspaceID, actor, command.Target, key, scope, yixiezuo.OperationPayload{
+		AutoImport: true,
+		ProjectID:  command.ProjectID,
+	})
+	if err != nil {
+		return err
+	}
+	switch row.State {
+	case "succeeded", "failed", "conflict", "unknown":
+		result.ReplyText = h.settleYixiezuoAutoImport(ctx, row)
+		return nil
+	default:
+		result.ReplyText = fmt.Sprintf("Queued a direct import of %s. Keep `multica yixiezuo bridge` running with this Multica account. I'll send the result here.", rowPayloadSourceURL(row))
+		return nil
+	}
+}
+
+func rowPayloadSourceURL(row db.YixiezuoOperation) string {
+	var payload yixiezuo.OperationPayload
+	if json.Unmarshal(row.Payload, &payload) != nil || payload.Source.URL == "" {
+		return "the 易协作 issue"
+	}
+	return payload.Source.URL
 }
 
 func (h *Handler) sourceReviewReply(ctx context.Context, row db.YixiezuoOperation, payload yixiezuo.OperationPayload) (string, error) {

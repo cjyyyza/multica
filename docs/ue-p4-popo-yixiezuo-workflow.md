@@ -25,7 +25,7 @@
 
 预览不创建任务。确认导入后返回 Multica 任务编号，任务保持未分配且不启动智能体。重复导入复用已有任务，保留本地编辑、负责人和已建立的通知路由。若任务此前从网页导入且尚未关联聊天，在机器人中确认导入同一工单可建立通知路由。
 
-在 Multica 中确认项目与负责人，再分配给已连接 Windows 运行时的智能体。任务被认领时携带所选项目的 P4 资源；智能体通过 `multica p4 sync ... --output json` 按需取得独立 client 和目录。后续 P4 命令使用返回的 client 与配置的 port。任务中应保留 changelist、构建结果及实际 UE 验证证据。
+在 Multica 中确认项目与负责人，再分配给已连接 Windows 运行时的智能体。任务被认领时携带所选项目的 P4 资源；智能体通过 `multica p4 sync ... --output json` 按需取得独立 client 和目录。打开文件用 `multica p4 edit` / `checkout`，新增文件用 `add-files`，提交前用 `shelve` 并可用 `multica p4 swarm create --changelist <n>` 开 Helix Swarm review。不要使用本机默认 P4 client。任务中应保留 changelist、Swarm review、构建结果及实际 UE 验证证据。
 
 ```text
 /reply <Multica 任务编号> <补充说明>
