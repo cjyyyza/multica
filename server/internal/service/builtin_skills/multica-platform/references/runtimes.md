@@ -186,3 +186,11 @@ Workspace repos and project resources are not the same thing:
 Do not add a project resource just because `repo checkout` failed. First
 determine whether the user asked for durable project context or just a task
 checkout.
+
+For Perforce work, request `multica p4 sync ... --output json`. The response's
+`path` is the checkout root and `client` is the isolated task client. Use the
+configured `p4 -p <port> -c <client>` for subsequent Perforce operations in that
+directory; the host's default client may belong to another UE workspace.
+Record the changelist and the actual editor/build validation in the task.
+An imported 易协作 issue remains unassigned until a member chooses its owner.
+Result publication is a separate member-confirmed source operation.

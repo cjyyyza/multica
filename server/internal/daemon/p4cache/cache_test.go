@@ -3,6 +3,7 @@ package p4cache
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -13,56 +14,51 @@ import (
 
 func writeFakeP4(t *testing.T, dir string) string {
 	t.Helper()
-	name := "p4"
-	script := `#!/bin/sh
-log="${P4_FAKE_LOG:-$PWD/p4-fake.log}"
-printf '%s\n' "$*" >> "$log"
-for a in "$@"; do
-  if [ "$a" = "-i" ]; then
-    cat >> "${P4_FAKE_SPEC:-$PWD/p4-fake.spec}"
-  fi
-done
-if printf ' %s ' "$*" | grep -q ' info '; then
-  echo "User name: testuser"
-  echo "Client name: none"
-  echo "Server address: perforce:1666"
-  exit 0
-fi
-if printf ' %s ' "$*" | grep -q ' sync '; then
-  root="${P4_FAKE_ROOT:-.}"
-  mkdir -p "$root"
-  echo synced > "$root/.p4synced"
-  exit 0
-fi
-exit 0
-`
+	source := filepath.Join(dir, "fake_p4.go")
+	program := `package main
+import("fmt";"io";"os";"path/filepath";"strings")
+func main(){
+ args:=os.Args[1:]; joined:=" "+strings.Join(args," ")+" "
+ log:=os.Getenv("P4_FAKE_LOG"); f,err:=os.OpenFile(log,os.O_APPEND|os.O_CREATE|os.O_WRONLY,0600); if err!=nil{panic(err)}; fmt.Fprintln(f,strings.Join(args," ")); f.Close()
+ specPath:=os.Getenv("P4_FAKE_SPEC")
+ if strings.Contains(joined," info "){fmt.Println("User name: testuser");return}
+ if strings.Contains(joined," client -i "){b,_:=io.ReadAll(os.Stdin);if err:=os.WriteFile(specPath,b,0600);err!=nil{panic(err)};return}
+ if strings.Contains(joined," sync "){
+   b,err:=os.ReadFile(specPath);if err!=nil{panic(err)};root:="";client:=""
+   for _,line:=range strings.Split(string(b),"\n"){if strings.HasPrefix(line,"Root: "){root=strings.TrimSpace(strings.TrimPrefix(line,"Root: "))};if strings.HasPrefix(line,"Client: "){client=strings.TrimSpace(strings.TrimPrefix(line,"Client: "))}}
+   if root==""{panic("missing root")}
+   have:=specPath+"."+client+".have"
+   if _,err:=os.Stat(have);err==nil&&!strings.Contains(joined," -f "){return}
+   if err:=os.MkdirAll(root,0755);err!=nil{panic(err)}
+   if err:=os.WriteFile(filepath.Join(root,".p4synced"),[]byte("synced"),0600);err!=nil{panic(err)}
+   if err:=os.WriteFile(have,[]byte("have"),0600);err!=nil{panic(err)}
+   return
+ }
+ panic("unexpected p4 command")
+}`
+	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	name := "fake-p4"
 	if runtime.GOOS == "windows" {
-		name = "p4.cmd"
-		script = `@echo off
-echo %*>> "%P4_FAKE_LOG%"
-exit /b 0
-`
+		name += ".exe"
 	}
 	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake p4: %v", err)
+	cmd := exec.Command("go", "build", "-o", path, source)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build fake p4: %v\n%s", err, output)
 	}
 	return path
 }
 
 func TestSyncCreatesClientAndSyncs(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake p4 script is POSIX")
-	}
 	dir := t.TempDir()
 	bin := writeFakeP4(t, dir)
 	logPath := filepath.Join(dir, "p4.log")
 	specPath := filepath.Join(dir, "client.spec")
 	work := filepath.Join(dir, "work")
-	syncRoot := filepath.Join(work, "p4", "depot_proj")
 	t.Setenv("P4_FAKE_LOG", logPath)
 	t.Setenv("P4_FAKE_SPEC", specPath)
-	t.Setenv("P4_FAKE_ROOT", syncRoot)
 	t.Setenv("P4USER", "alice")
 
 	cache := &Cache{P4Path: bin}
@@ -75,8 +71,8 @@ func TestSyncCreatesClientAndSyncs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
-	if result.Path != syncRoot {
-		t.Fatalf("Path = %q, want %q", result.Path, syncRoot)
+	if filepath.Dir(result.Path) != filepath.Join(work, "p4") {
+		t.Fatalf("Path = %q is outside the task P4 directory", result.Path)
 	}
 	if !strings.HasPrefix(result.Client, "mc") {
 		t.Fatalf("Client = %q", result.Client)
@@ -103,21 +99,17 @@ func TestSyncCreatesClientAndSyncs(t *testing.T) {
 	if !strings.Contains(string(spec), "//depot/proj/...") {
 		t.Fatalf("spec missing view: %s", spec)
 	}
-	if _, err := os.Stat(filepath.Join(syncRoot, ".p4synced")); err != nil {
+	if _, err := os.Stat(filepath.Join(result.Path, ".p4synced")); err != nil {
 		t.Fatalf("sync marker: %v", err)
 	}
 }
 
 func TestSyncUsesStreamSpec(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake p4 script is POSIX")
-	}
 	dir := t.TempDir()
 	bin := writeFakeP4(t, dir)
 	specPath := filepath.Join(dir, "client.spec")
 	t.Setenv("P4_FAKE_LOG", filepath.Join(dir, "p4.log"))
 	t.Setenv("P4_FAKE_SPEC", specPath)
-	t.Setenv("P4_FAKE_ROOT", filepath.Join(dir, "work", "p4", "streams_main"))
 	t.Setenv("P4USER", "alice")
 
 	cache := &Cache{P4Path: bin}
@@ -127,7 +119,7 @@ func TestSyncUsesStreamSpec(t *testing.T) {
 		WorkDir:     filepath.Join(dir, "work"),
 		Ref: p4depot.Ref{
 			Port:   "perforce:1666",
-			Depot:  "//streams/main",
+			Depot:  "//streams",
 			Stream: "//streams/main",
 		},
 	}); err != nil {
@@ -142,6 +134,55 @@ func TestSyncUsesStreamSpec(t *testing.T) {
 	}
 	if strings.Contains(string(spec), "View:") {
 		t.Fatalf("stream spec should not set View: %s", spec)
+	}
+	log, err := os.ReadFile(filepath.Join(dir, "p4.log"))
+	if err != nil || !strings.Contains(string(log), "sync //streams/main/...") {
+		t.Fatalf("sync did not narrow the parent depot to the selected stream: %s %v", log, err)
+	}
+}
+
+func TestFreshSyncRestoresFilesDespiteExistingHaveList(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("P4_FAKE_LOG", filepath.Join(dir, "p4.log"))
+	t.Setenv("P4_FAKE_SPEC", filepath.Join(dir, "client.spec"))
+	t.Setenv("P4USER", "alice")
+	cache := &Cache{P4Path: writeFakeP4(t, dir)}
+	params := SyncParams{WorkspaceID: "ws", TaskID: "task", WorkDir: filepath.Join(dir, "work"), Ref: p4depot.Ref{Port: "p4:1666", Depot: "//depot/UE"}}
+	first, err := cache.Sync(context.Background(), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params.Fresh = true
+	second, err := cache.Sync(context.Background(), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Path != second.Path {
+		t.Fatal("fresh sync changed the task client")
+	}
+	if _, err := os.Stat(filepath.Join(second.Path, ".p4synced")); err != nil {
+		t.Fatalf("fresh sync left an empty checkout: %v", err)
+	}
+}
+
+func TestDifferentServersCannotShareCheckoutDirectory(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("P4_FAKE_LOG", filepath.Join(dir, "p4.log"))
+	t.Setenv("P4_FAKE_SPEC", filepath.Join(dir, "client.spec"))
+	t.Setenv("P4USER", "alice")
+	cache := &Cache{P4Path: writeFakeP4(t, dir)}
+	params := SyncParams{WorkspaceID: "ws", TaskID: "task", WorkDir: filepath.Join(dir, "work"), Ref: p4depot.Ref{Port: "first:1666", Depot: "//depot/UE"}}
+	first, err := cache.Sync(context.Background(), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params.Ref.Port = "second:1666"
+	second, err := cache.Sync(context.Background(), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Path == second.Path || first.Client == second.Client {
+		t.Fatal("different server identities share a checkout")
 	}
 }
 

@@ -80,7 +80,9 @@ func (c *Cache) Sync(ctx context.Context, params SyncParams) (*SyncResult, error
 	}
 
 	client := p4depot.ClientName(params.WorkspaceID, params.TaskID, ref)
-	root := filepath.Join(params.WorkDir, "p4", clientRelDir(ref))
+	// The client identity includes the server, depot, stream and task. Depot
+	// display names alone collide across servers and after path sanitization.
+	root := filepath.Join(params.WorkDir, "p4", client)
 	if params.Fresh {
 		if err := os.RemoveAll(root); err != nil {
 			return nil, fmt.Errorf("clear existing Perforce checkout: %w", err)
@@ -95,8 +97,19 @@ func (c *Cache) Sync(ctx context.Context, params SyncParams) (*SyncResult, error
 		return nil, err
 	}
 
-	syncArg := p4depot.SyncPath(ref.Depot, ref.Changelist)
-	if err := c.run(ctx, ref, user, client, "sync", syncArg); err != nil {
+	syncDepot := ref.Depot
+	if ref.Stream != "" && strings.HasPrefix(ref.Stream, strings.TrimSuffix(ref.Depot, "/...")+"/") {
+		// A parent depot request must stay inside the selected stream's view.
+		syncDepot = ref.Stream
+	}
+	syncArg := p4depot.SyncPath(syncDepot, ref.Changelist)
+	syncArgs := []string{"sync"}
+	if params.Fresh {
+		// Removing the local directory does not clear the server-side have list.
+		syncArgs = append(syncArgs, "-f")
+	}
+	syncArgs = append(syncArgs, syncArg)
+	if err := c.run(ctx, ref, user, client, syncArgs...); err != nil {
 		return nil, err
 	}
 
@@ -105,21 +118,6 @@ func (c *Cache) Sync(ctx context.Context, params SyncParams) (*SyncResult, error
 		Client:     client,
 		Changelist: ref.Changelist,
 	}, nil
-}
-
-func clientRelDir(ref p4depot.Ref) string {
-	raw := strings.TrimSpace(ref.Stream)
-	if raw == "" {
-		raw = strings.TrimSpace(ref.Depot)
-	}
-	raw = strings.TrimPrefix(raw, "//")
-	raw = strings.ReplaceAll(raw, "/", "_")
-	raw = strings.ReplaceAll(raw, "...", "")
-	raw = strings.Trim(raw, "._-")
-	if raw == "" {
-		raw = "depot"
-	}
-	return raw
 }
 
 func buildClientSpec(client, user, root string, ref p4depot.Ref) string {

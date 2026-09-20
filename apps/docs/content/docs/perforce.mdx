@@ -47,7 +47,9 @@ multica p4 sync --port perforce.example.com:1666 --depot //depot/project --strea
 multica p4 sync --port perforce.example.com:1666 --depot //depot/project --fresh
 ```
 
-The daemon creates a short task-scoped client (`mc` + 16 hex characters), runs `p4 sync` into `workdir/p4/<sanitized-depot>`, and returns that path. `--fresh` deletes the previous sync directory first. `p4` must be on the daemon host `PATH`.
+The daemon creates a short task-scoped client (`mc` + 16 hex characters), runs `p4 sync` into `workdir/p4/<client>`, and returns that path. Client and directory identities include the server, depot, stream and task. `--fresh` deletes the previous sync directory and forces a download even when the server still records those files in its have list. `p4` must be on the daemon host `PATH`.
+
+Use `--output json` to read both `path` and `client`. For subsequent Perforce commands in that directory, pass the configured `-p <port>` and returned `-c <client>`. A classic depot view maps the selected project directly into the returned checkout root.
 
 Depots are not prefetched. A Helix tree can be huge; sync happens when the agent asks for it.
 

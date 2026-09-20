@@ -158,10 +158,7 @@ func SyncPath(depot, changelistNum string) string {
 // used in a classic (non-stream) client spec View line.
 func ViewMaps(depot string) (depotSide, clientRel string) {
 	depotSide = SyncPath(depot, "")
-	if strings.HasPrefix(depotSide, "//") {
-		clientRel = depotSide[2:]
-	} else {
-		clientRel = depotSide
-	}
+	// A directory checkout starts at the returned root, not root/depot/path.
+	clientRel = depotSide[strings.LastIndex(depotSide, "/")+1:]
 	return depotSide, clientRel
 }

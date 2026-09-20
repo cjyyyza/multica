@@ -47,7 +47,9 @@ multica p4 sync --port perforce.example.com:1666 --depot //depot/project --strea
 multica p4 sync --port perforce.example.com:1666 --depot //depot/project --fresh
 ```
 
-守护进程会创建短的任务级 client（`mc` + 16 位十六进制），在 `workdir/p4/<sanitized-depot>` 里执行 `p4 sync`，并返回该路径。`--fresh` 会先删掉上次的同步目录。本机 `PATH` 里需要有 `p4`。
+守护进程会创建短的任务级 client（`mc` + 16 位十六进制），在 `workdir/p4/<client>` 里执行 `p4 sync`，并返回该路径。client 和目录同时区分服务器、depot、stream 和运行。`--fresh` 会先删除上次的同步目录，再强制下载文件，避免服务器仍保留 have list 时返回空目录。本机 `PATH` 里需要有 `p4`。
+
+使用 `--output json` 读取 `path` 和 `client`。之后在该目录执行 Perforce 命令时，显式传入配置的 `-p <port>` 和返回的 `-c <client>`。普通 depot 的 view 会把所选项目直接映射到返回的目录。
 
 不会预先拉取 depot。Helix 树可能很大，只在智能体请求时同步。
 

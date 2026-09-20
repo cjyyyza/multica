@@ -599,12 +599,12 @@ func (d *Daemon) p4SyncHandler() http.HandlerFunc {
 			return
 		}
 
-		if !d.workspaceP4Allowed(req.WorkspaceID, ref) {
+		if !d.workspaceP4Allowed(req.WorkspaceID, activeTask.TaskID, ref) {
 			if refreshErr := d.refreshWorkspaceP4Allowlist(r.Context(), req.WorkspaceID); refreshErr != nil {
 				d.logger.Debug("p4 allowlist refresh failed", "error", refreshErr)
 			}
 		}
-		if !d.workspaceP4Allowed(req.WorkspaceID, ref) {
+		if !d.workspaceP4Allowed(req.WorkspaceID, activeTask.TaskID, ref) {
 			http.Error(w, "perforce depot is not configured for this workspace or task", http.StatusBadRequest)
 			return
 		}

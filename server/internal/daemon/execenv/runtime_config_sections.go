@@ -439,7 +439,8 @@ func writeP4Depots(b *strings.Builder, ctx TaskContextForEnv) {
 		return
 	}
 	b.WriteString("## Perforce depots\n\n")
-	b.WriteString("Available in this workspace — `multica p4 sync --port <P4PORT> --depot <//depot/path>` to fetch. Uses the host Helix login (`p4 login`); Multica does not store a Perforce password.\n\n")
+	b.WriteString("Available to this task — `multica p4 sync --port <P4PORT> --depot <//depot/path> --output json` to fetch. Uses the host Helix login (`p4 login`); Multica does not store a Perforce password.\n\n")
+	b.WriteString("The response contains the checkout `path` and task-scoped `client`. Run subsequent Perforce commands with the configured `-p` port and returned `-c` client from that path. Record changelist and Unreal validation evidence in the task for human review.\n\n")
 	for _, depot := range ctx.P4Depots {
 		line := fmt.Sprintf("- `%s` `%s`", depot.Port, depot.Depot)
 		if depot.Stream != "" {

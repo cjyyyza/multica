@@ -104,3 +104,16 @@ func TestSyncPath(t *testing.T) {
 		}
 	}
 }
+
+func TestViewMapsPlacesProjectAtCheckoutRoot(t *testing.T) {
+	for _, tc := range []struct{ depot, source, target string }{
+		{"//depot/UE", "//depot/UE/...", "..."},
+		{"//depot/UE/...", "//depot/UE/...", "..."},
+		{"//depot/UE/Project.uproject", "//depot/UE/Project.uproject", "Project.uproject"},
+	} {
+		source, target := ViewMaps(tc.depot)
+		if source != tc.source || target != tc.target {
+			t.Fatalf("%s mapped to %s %s", tc.depot, source, target)
+		}
+	}
+}

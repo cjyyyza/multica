@@ -309,10 +309,9 @@ type workspaceState struct {
 	taskRepoURLs    map[string]struct{}
 	taskRepoRefs    map[string]map[string]string // taskID -> repo URL -> checkout ref
 	// allowedP4Identities is the workspace-level Perforce allowlist
-	// (port+depot+stream). taskP4Identities is the claim-time overlay so a
+	// (port+depot+stream). taskP4Refs is the claim-time overlay so a
 	// project-only depot can be synced without also living on the workspace.
 	allowedP4Identities map[string]struct{}
-	taskP4Identities    map[string]struct{}
 	taskP4Refs          map[string]map[string]P4DepotData // taskID -> identity -> depot
 	settings            json.RawMessage                   // workspace settings (JSONB)
 	lastRepoSyncErr     string
@@ -3485,9 +3484,6 @@ func (d *Daemon) registerTaskP4Depots(workspaceID, taskID string, depots []P4Dep
 	if !ok {
 		return
 	}
-	if ws.taskP4Identities == nil {
-		ws.taskP4Identities = make(map[string]struct{}, len(depots))
-	}
 	if taskID != "" && ws.taskP4Refs == nil {
 		ws.taskP4Refs = make(map[string]map[string]P4DepotData)
 	}
@@ -3497,7 +3493,6 @@ func (d *Daemon) registerTaskP4Depots(workspaceID, taskID string, depots []P4Dep
 			continue
 		}
 		id := p4depot.Identity(parsed)
-		ws.taskP4Identities[id] = struct{}{}
 		if taskID == "" {
 			continue
 		}
@@ -3522,7 +3517,7 @@ func (d *Daemon) clearTaskP4Refs(workspaceID, taskID string) {
 	}
 }
 
-func (d *Daemon) workspaceP4Allowed(workspaceID string, ref p4depot.Ref) bool {
+func (d *Daemon) workspaceP4Allowed(workspaceID, taskID string, ref p4depot.Ref) bool {
 	parsed, err := p4depot.Normalize(ref)
 	if err != nil {
 		return false
@@ -3537,7 +3532,7 @@ func (d *Daemon) workspaceP4Allowed(workspaceID string, ref p4depot.Ref) bool {
 	if _, allowed := ws.allowedP4Identities[id]; allowed {
 		return true
 	}
-	if _, allowed := ws.taskP4Identities[id]; allowed {
+	if _, allowed := ws.taskP4Refs[taskID][id]; allowed {
 		return true
 	}
 	return false
