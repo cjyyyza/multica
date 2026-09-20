@@ -11,6 +11,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 // mkProfiles creates ~/.multica/profiles/<name> for each name under a fresh
@@ -22,7 +24,7 @@ func mkProfiles(t *testing.T, names ...string) string {
 	t.Helper()
 	t.Chdir(t.TempDir())
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	for _, name := range names {
 		dir := filepath.Join(home, ".multica", "profiles", filepath.FromSlash(name))
 		if err := os.MkdirAll(dir, 0o755); err != nil {

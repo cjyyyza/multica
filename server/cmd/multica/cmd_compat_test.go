@@ -4,10 +4,12 @@ import (
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 func TestRunConfigSetPersistsValues(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	cmd := testCmd()
 
 	if err := runConfigSet(cmd, []string{"server_url", "http://example.com"}); err != nil {

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -222,7 +223,7 @@ func TestGuardLocalPathLinksOnlyFiresInAgentContext(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected a hard failure inside agent context")
 		}
-		if !strings.Contains(err.Error(), shot) {
+		if !strings.Contains(err.Error(), strconv.Quote(shot)) {
 			t.Errorf("error should name the offending target, got: %v", err)
 		}
 	})

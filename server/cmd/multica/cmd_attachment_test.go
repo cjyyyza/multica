@@ -69,7 +69,11 @@ func TestRunAttachmentDownloadWritesBasenameIntoOutputDir(t *testing.T) {
 	if strings.Contains(out, "../") {
 		t.Fatalf("stdout path should use sanitized basename, got %q", out)
 	}
-	if !strings.Contains(out, `"filename": "report.txt"`) || !strings.Contains(out, dest) {
+	var result struct {
+		Filename string `json:"filename"`
+		Path     string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil || result.Filename != "report.txt" || result.Path != dest {
 		t.Fatalf("stdout = %q, want JSON with sanitized file path", out)
 	}
 	if !strings.Contains(errOut, "Downloaded:") || !strings.Contains(errOut, dest) {

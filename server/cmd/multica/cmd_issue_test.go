@@ -20,6 +20,8 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/handler"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 // stderrCapture redirects os.Stderr through a pipe so a test can assert on
@@ -3411,7 +3413,7 @@ func TestRunIssueAssignRejectsNoStartWithUnassign(t *testing.T) {
 func TestIssueReadCommandsUseInjectedTaskToken(t *testing.T) {
 	const fakeTaskToken = "mat_task_issue_sentinel"
 	ownerHome := t.TempDir()
-	t.Setenv("HOME", ownerHome)
+	testenv.SetHome(t, ownerHome)
 	t.Setenv("MULTICA_AGENT_ID", "agent-test")
 	t.Setenv("MULTICA_TASK_ID", "task-test")
 	t.Setenv("MULTICA_TOKEN", fakeTaskToken)
@@ -3477,7 +3479,7 @@ func TestIssueReadCommandsUseInjectedTaskToken(t *testing.T) {
 
 func TestIssueReadCommandsFailClosedWithoutTaskToken(t *testing.T) {
 	ownerHome := t.TempDir()
-	t.Setenv("HOME", ownerHome)
+	testenv.SetHome(t, ownerHome)
 	t.Setenv("MULTICA_AGENT_ID", "agent-test")
 	t.Setenv("MULTICA_TASK_ID", "task-test")
 	t.Setenv("MULTICA_TOKEN", "")

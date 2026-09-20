@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 const (
@@ -75,7 +77,7 @@ var workspaceMcpLeakMarkers = []string{
 
 func mcpTestServer(t *testing.T, handler http.HandlerFunc) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("MULTICA_TOKEN", "test-token")
 	t.Setenv("MULTICA_WORKSPACE_ID", testWorkspaceMcpID)
 	srv := httptest.NewServer(handler)

@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 func newRuntimeDeleteTestCmd(serverURL string) *cobra.Command {
@@ -59,7 +61,7 @@ func captureRuntimeStdout(t *testing.T, fn func() error) (string, error) {
 }
 
 func TestRunRuntimeDeleteStrictSuccessPrintsJSON(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("MULTICA_TOKEN", "test-token")
 
 	var deleteCount int
@@ -100,7 +102,7 @@ func TestRunRuntimeDeleteStrictSuccessPrintsJSON(t *testing.T) {
 }
 
 func TestRunRuntimeDeleteConflictSuggestsCascade(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("MULTICA_TOKEN", "test-token")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +131,7 @@ func TestRunRuntimeDeleteConflictSuggestsCascade(t *testing.T) {
 }
 
 func TestRunRuntimeDeleteCascadeConfirmsActiveAgentSnapshot(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("MULTICA_TOKEN", "test-token")
 
 	var gotExpectedIDs []string
@@ -198,7 +200,7 @@ func TestRunRuntimeDeleteCascadeConfirmsActiveAgentSnapshot(t *testing.T) {
 // HTTPError.Error() used to print the whole JSON response at the user, burying
 // that guidance (GH #8456).
 func TestRunRuntimeDeleteProfileInstanceConflictShowsServerGuidance(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("MULTICA_TOKEN", "test-token")
 
 	const guidance = `cannot delete "MSI-S3TEST" on its own: it is registered from the custom runtime profile "Devin CLI (WSL)". It is offline, and Multica removes offline runtimes automatically after 7 days.`
@@ -229,7 +231,7 @@ func TestRunRuntimeDeleteProfileInstanceConflictShowsServerGuidance(t *testing.T
 // A 409 with no readable sentence must still fall back to the wrapper rather
 // than surfacing an empty error.
 func TestRunRuntimeDeleteConflictWithoutMessageKeepsWrapper(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("MULTICA_TOKEN", "test-token")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
