@@ -43,4 +43,6 @@ coverage
 # Repository-only tooling
 /.github/
 /deploy/
-/scripts/
+/scripts/**
+!/scripts/vitest-platform.mjs
+!/scripts/vitest-platform.d.mts

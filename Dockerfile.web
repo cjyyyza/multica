@@ -38,6 +38,8 @@ COPY --from=deps /app ./
 COPY package.json turbo.json pnpm-workspace.yaml ./
 COPY apps/web/ apps/web/
 COPY packages/ packages/
+# next build typechecks apps/web/vitest.config.ts, which imports this helper.
+COPY scripts/vitest-platform.mjs scripts/vitest-platform.d.mts ./scripts/
 
 # Re-link after source overlay (fixes any symlinks overwritten by COPY)
 RUN pnpm install --frozen-lockfile --offline
