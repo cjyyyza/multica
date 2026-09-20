@@ -300,7 +300,7 @@ CLI の設定ファイルには、あなたとして Multica にアクセスで�
 | `config` | `show`、`set <key> <value>` | 現在のプロファイルのローカル設定を表示・編集 | 優先順位: コマンドラインフラグ > 環境変数 > `config.json` > 組み込みデフォルト。空文字列を設定すると値をクリア |
 | `update` | — | CLI を最新バージョンに更新 | |
 | `version` | — | バージョン情報を表示 | `--output`（`text` または `json`） |
-| `yixiezuo` | `status` / `sync` / `pull` / `push` | この Windows コンピュータ上の `popo-cli pmmcp` で易协作と Multica のカンバンを同期します。サーバーは易协作にも popo-cli にも接続しません。 | `sync --watch`、`--interval` |
+| `yixiezuo` | `preview` / `import` / `bridge` | 課題を1件読み取り、確認して取り込みます。ローカルブリッジは明示的なプレビューと結果反映を処理します。 | `<issue-url>`, `import --confirm --project-id`, `bridge --once` |
 
 ## 別のコーディングエージェントから Multica を操作する
 
