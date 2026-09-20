@@ -47,6 +47,38 @@ This keeps Docker simple while still isolating schema and data.
 - Go `1.26.6`
 - Docker
 
+### Native Windows verification
+
+Run Go tests behind the native agent CLI guard so a test cannot accidentally
+start an installed agent or use its account:
+
+```powershell
+./scripts/go-test-with-agent-cli-guard.ps1 -CommandArgs @(
+  'go', '-C', 'server', 'test', './internal/daemon/execenv',
+  '-count=1', '-parallel=2', '-timeout=10m'
+)
+```
+
+The guard provides disposable executables for the names in
+`scripts/agent-cli-command-names.txt` and fails if a test invokes one. Tests
+requiring an agent must supply their own fake executable. Profile-sensitive
+tests use `testenv.SetHome`; `HOME` alone does not redirect Go's Windows profile
+lookup. `testenv.RunIsolated` also isolates default profile paths for a test
+binary and its child helpers.
+
+`pnpm test` limits workspace concurrency. Shared Vitest options also bound
+Windows workers and let jsdom own browser storage on newer Node versions.
+Keep Node scripts with a shebang in LF form, as specified by `.gitattributes`.
+If Electron's binary is missing after dependency installation, rerun the
+approved Electron install step with `pnpm rebuild electron`.
+
+POSIX mode-bit and symlink-only tests report unsupported host prerequisites;
+Windows file locks have native regression coverage. Persistent Hermes
+conversations require file symlink support. If unavailable, preparation reports
+the missing capability and retains existing database/WAL files. Codex history
+and Hermes memory directories use Windows directory junctions without requiring
+file symlink privileges.
+
 ## Important Rules
 
 - The main checkout should use `.env`.
