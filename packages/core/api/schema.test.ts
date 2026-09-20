@@ -116,6 +116,38 @@ describe("ApiClient schema fallback", () => {
     });
   });
 
+  describe("workspaces", () => {
+    const workspace = {
+      id: "ws-1",
+      name: "Acme",
+      slug: "acme",
+      repos: [{ url: "https://github.com/acme/app" }],
+    };
+
+    it("defaults missing p4_depots on list and get", async () => {
+      stubFetchJson([workspace]);
+      const client = new ApiClient("https://api.example.test");
+      await expect(client.listWorkspaces()).resolves.toEqual([
+        expect.objectContaining({
+          id: "ws-1",
+          repos: [{ url: "https://github.com/acme/app" }],
+          p4_depots: [],
+        }),
+      ]);
+
+      stubFetchJson(workspace);
+      await expect(client.getWorkspace("ws-1")).resolves.toEqual(
+        expect.objectContaining({ id: "ws-1", p4_depots: [] }),
+      );
+    });
+
+    it("falls back to an empty list when the workspace list is malformed", async () => {
+      stubFetchJson({ workspaces: "nope" });
+      const client = new ApiClient("https://api.example.test");
+      await expect(client.listWorkspaces()).resolves.toEqual([]);
+    });
+  });
+
   describe("listIssues", () => {
     it("falls back to an empty list when the response is malformed", async () => {
       // `issues` having the wrong type triggers the fallback. An object

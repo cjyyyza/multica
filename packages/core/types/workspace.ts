@@ -5,6 +5,16 @@ export interface WorkspaceRepo {
   description?: string;
 }
 
+export interface WorkspaceP4Depot {
+  port: string;
+  depot: string;
+  stream?: string;
+  user?: string;
+  charset?: string;
+  changelist?: string;
+  description?: string;
+}
+
 export interface Workspace {
   id: string;
   name: string;
@@ -13,6 +23,8 @@ export interface Workspace {
   context: string | null;
   settings: Record<string, unknown>;
   repos: WorkspaceRepo[];
+  /** Absent on older servers; treat as []. */
+  p4_depots?: WorkspaceP4Depot[];
   issue_prefix: string;
   avatar_url: string | null;
   created_at: string;

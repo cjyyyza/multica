@@ -148,8 +148,14 @@ func init() {
 	// payload works without further CLI changes. github_repo is supported via
 	// dedicated shortcuts; for that type, a non-JSON --ref value is treated as
 	// the default checkout ref.
-	projectResourceAddCmd.Flags().String("type", "github_repo", "Resource type (e.g. github_repo, local_directory — see docs)")
+	projectResourceAddCmd.Flags().String("type", "github_repo", "Resource type (e.g. github_repo, local_directory, perforce_depot — see docs)")
 	projectResourceAddCmd.Flags().String("url", "", "Shortcut: the repo URL (only used when --type github_repo)")
+	projectResourceAddCmd.Flags().String("port", "", "Shortcut: P4PORT (only used when --type perforce_depot)")
+	projectResourceAddCmd.Flags().String("depot", "", "Shortcut: depot path (only used when --type perforce_depot)")
+	projectResourceAddCmd.Flags().String("stream", "", "Shortcut: stream path (only used when --type perforce_depot)")
+	projectResourceAddCmd.Flags().String("user", "", "Shortcut: P4USER hint (only used when --type perforce_depot)")
+	projectResourceAddCmd.Flags().String("charset", "", "Shortcut: P4CHARSET (only used when --type perforce_depot)")
+	projectResourceAddCmd.Flags().String("changelist", "", "Shortcut: baseline changelist (only used when --type perforce_depot)")
 	projectResourceAddCmd.Flags().String("default-branch-hint", "", "Shortcut: optional default branch hint (only used when --type github_repo)")
 	projectResourceAddCmd.Flags().String("local-path", "", "Shortcut: absolute path to the working directory (only used when --type local_directory)")
 	projectResourceAddCmd.Flags().String("daemon-id", "", "Shortcut: id of the daemon that owns the local path (only used when --type local_directory)")
@@ -162,6 +168,12 @@ func init() {
 	// project resource update — mirrors `add` flags, but every field is
 	// optional so the caller can edit one thing at a time.
 	projectResourceUpdateCmd.Flags().String("url", "", "Shortcut: new repo URL (github_repo)")
+	projectResourceUpdateCmd.Flags().String("port", "", "Shortcut: new P4PORT (perforce_depot)")
+	projectResourceUpdateCmd.Flags().String("depot", "", "Shortcut: new depot path (perforce_depot)")
+	projectResourceUpdateCmd.Flags().String("stream", "", "Shortcut: new stream path (perforce_depot)")
+	projectResourceUpdateCmd.Flags().String("user", "", "Shortcut: new P4USER hint (perforce_depot)")
+	projectResourceUpdateCmd.Flags().String("charset", "", "Shortcut: new P4CHARSET (perforce_depot)")
+	projectResourceUpdateCmd.Flags().String("changelist", "", "Shortcut: new baseline changelist (perforce_depot)")
 	projectResourceUpdateCmd.Flags().String("default-branch-hint", "", "Shortcut: new default branch hint (github_repo)")
 	projectResourceUpdateCmd.Flags().String("local-path", "", "Shortcut: new absolute local path (local_directory)")
 	projectResourceUpdateCmd.Flags().String("daemon-id", "", "Shortcut: new daemon id (local_directory)")
@@ -597,6 +609,15 @@ func runProjectResourceAdd(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("github_repo requires --url (or pass a JSON payload via --ref)")
 			}
 			body["resource_ref"] = ref
+		case "perforce_depot":
+			ref, has, err := buildResourceRefFromFlags(cmd, resourceType, nil)
+			if err != nil {
+				return err
+			}
+			if !has {
+				return fmt.Errorf("perforce_depot requires --port and --depot (or pass a JSON payload via --ref)")
+			}
+			body["resource_ref"] = ref
 		case "local_directory":
 			pathVal, _ := cmd.Flags().GetString("local-path")
 			pathVal = strings.TrimSpace(pathVal)
@@ -908,11 +929,69 @@ func buildResourceRefFromFlags(cmd *cobra.Command, resourceType string, existing
 			return nil, false, fmt.Errorf("local_directory: --daemon-id is required (no existing daemon_id to merge with)")
 		}
 		return ref, true, nil
+	case "perforce_depot":
+		portSet := cmd.Flags().Changed("port")
+		depotSet := cmd.Flags().Changed("depot")
+		streamSet := cmd.Flags().Changed("stream")
+		userSet := cmd.Flags().Changed("user")
+		charsetSet := cmd.Flags().Changed("charset")
+		clSet := cmd.Flags().Changed("changelist")
+		if !portSet && !depotSet && !streamSet && !userSet && !charsetSet && !clSet {
+			return nil, false, nil
+		}
+		ref := map[string]any{}
+		if existingRef != nil {
+			for _, key := range []string{"port", "depot", "stream", "user", "charset", "changelist"} {
+				if v, ok := existingRef[key].(string); ok && strings.TrimSpace(v) != "" {
+					ref[key] = strings.TrimSpace(v)
+				}
+			}
+		}
+		setOrClear := func(flag, key string, changed bool) error {
+			if !changed {
+				return nil
+			}
+			val := strings.TrimSpace(mustString(cmd, flag))
+			if val == "" {
+				delete(ref, key)
+				return nil
+			}
+			ref[key] = val
+			return nil
+		}
+		if err := setOrClear("port", "port", portSet); err != nil {
+			return nil, false, err
+		}
+		if err := setOrClear("depot", "depot", depotSet); err != nil {
+			return nil, false, err
+		}
+		if err := setOrClear("stream", "stream", streamSet); err != nil {
+			return nil, false, err
+		}
+		if err := setOrClear("user", "user", userSet); err != nil {
+			return nil, false, err
+		}
+		if err := setOrClear("charset", "charset", charsetSet); err != nil {
+			return nil, false, err
+		}
+		if err := setOrClear("changelist", "changelist", clSet); err != nil {
+			return nil, false, err
+		}
+		if v, ok := ref["port"].(string); !ok || v == "" {
+			return nil, false, fmt.Errorf("perforce_depot: --port is required (no existing port to merge with)")
+		}
+		if v, ok := ref["depot"].(string); !ok || v == "" {
+			return nil, false, fmt.Errorf("perforce_depot: --depot is required (no existing depot to merge with)")
+		}
+		return ref, true, nil
 	default:
 		// Unknown type or empty (resource not found) — caller must use --ref.
 		if cmd.Flags().Changed("url") || cmd.Flags().Changed("default-branch-hint") ||
 			cmd.Flags().Changed("local-path") || cmd.Flags().Changed("daemon-id") ||
-			cmd.Flags().Changed("ref-label") || cmd.Flags().Changed("execution-mode") {
+			cmd.Flags().Changed("ref-label") || cmd.Flags().Changed("execution-mode") ||
+			cmd.Flags().Changed("port") || cmd.Flags().Changed("depot") ||
+			cmd.Flags().Changed("stream") || cmd.Flags().Changed("user") ||
+			cmd.Flags().Changed("charset") || cmd.Flags().Changed("changelist") {
 			return nil, false, fmt.Errorf("no built-in shortcut for resource type %q; pass the full payload via --ref '<json>'", resourceType)
 		}
 		return nil, false, nil
@@ -966,6 +1045,13 @@ func summarizeResourceRef(raw any) string {
 	}
 	if p, ok := m["local_path"].(string); ok && p != "" {
 		return p
+	}
+	if port, ok := m["port"].(string); ok && port != "" {
+		depot, _ := m["depot"].(string)
+		if depot != "" {
+			return port + " " + depot
+		}
+		return port
 	}
 	if data, err := json.Marshal(m); err == nil {
 		return string(data)

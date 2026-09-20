@@ -20,6 +20,12 @@ const workspaceRef = vi.hoisted(() => ({
       url: string;
       description?: string;
     }[],
+    p4_depots: [] as {
+      port: string;
+      depot: string;
+      stream?: string;
+      description?: string;
+    }[],
   },
 }));
 const membersRef = vi.hoisted(() => ({
@@ -151,6 +157,7 @@ describe("RepositoriesTab — automatic updates", () => {
       name: "Test Workspace",
       slug: "test-workspace",
       repos: [{ url: "https://github.com/multica-ai/multica" }],
+      p4_depots: [],
     };
     membersRef.current = [{ user_id: "user-1", role: "owner" }];
     githubRef.current = {
@@ -169,9 +176,15 @@ describe("RepositoriesTab — automatic updates", () => {
       searchParamsRef.current = new URLSearchParams(path.split("?")[1] ?? "");
     });
     mockUpdateWorkspace.mockImplementation(
-      async (_id: string, payload: { repos: { url: string; description?: string }[] }) => ({
+      async (
+        _id: string,
+        payload: {
+          repos?: { url: string; description?: string }[];
+          p4_depots?: { port: string; depot: string; stream?: string; description?: string }[];
+        },
+      ) => ({
         ...workspaceRef.current,
-        repos: payload.repos,
+        ...payload,
       }),
     );
   });
@@ -468,5 +481,23 @@ describe("RepositoriesTab — automatic updates", () => {
         name: "Choose GitHub repositories",
       }),
     ).toBeNull();
+  });
+
+  it("saves a Perforce depot independently of git repositories", async () => {
+    const user = setupUser();
+    render(<RepositoriesTab />, { wrapper: I18nWrapper });
+
+    await user.click(screen.getByRole("button", { name: /Add depot/ }));
+    const portInput = screen.getByLabelText("perforce.example.com:1666");
+    const depotInput = screen.getByLabelText("//depot/project");
+    await user.type(portInput, "p4.example.com:1666");
+    await user.type(depotInput, "//depot/game");
+    await user.tab();
+
+    await waitFor(() => {
+      expect(mockUpdateWorkspace).toHaveBeenCalledWith("workspace-1", {
+        p4_depots: [{ port: "p4.example.com:1666", depot: "//depot/game" }],
+      });
+    });
   });
 });

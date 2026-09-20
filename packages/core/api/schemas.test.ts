@@ -65,6 +65,8 @@ import {
   PluginPreviewSchema,
   EMPTY_PLUGIN_INSTALLATION_LIST,
   EMPTY_PLUGIN_PREVIEW,
+  WorkspaceSchema,
+  EMPTY_WORKSPACE,
 } from "./schemas";
 import { IssueViewSchema, IssueViewListSchema } from "./schemas";
 import {
@@ -2284,5 +2286,44 @@ describe("TaskMessageListSchema", () => {
   it("downgrades an unknown message type instead of dropping the transcript", () => {
     const parsed = TaskMessageListSchema.parse([{ ...row, type: "video" }]);
     expect(parsed[0]?.type).toBe("text");
+  });
+});
+
+describe("WorkspaceSchema", () => {
+  const baseWorkspace = {
+    id: "ws-1",
+    name: "Acme",
+    slug: "acme",
+  };
+
+  it("defaults missing p4_depots so older servers keep loading", () => {
+    const parsed = WorkspaceSchema.parse(baseWorkspace);
+    expect(parsed.p4_depots).toEqual([]);
+    expect(parsed.repos).toEqual([]);
+  });
+
+  it("keeps the workspace when p4_depots is malformed instead of emptying the picker", () => {
+    const parsed = parseWithFallback(
+      { ...baseWorkspace, p4_depots: "not-an-array" },
+      WorkspaceSchema,
+      EMPTY_WORKSPACE,
+      { endpoint: "GET /api/workspaces/{id}" },
+    );
+    expect(parsed.id).toBe("ws-1");
+    expect(parsed.p4_depots).toEqual([]);
+  });
+
+  it("reads a valid Perforce depot", () => {
+    const parsed = WorkspaceSchema.parse({
+      ...baseWorkspace,
+      p4_depots: [
+        { port: "perforce.example.com:1666", depot: "//depot/game", extra: "ok" },
+      ],
+    });
+    expect(parsed.p4_depots[0]).toMatchObject({
+      port: "perforce.example.com:1666",
+      depot: "//depot/game",
+      extra: "ok",
+    });
   });
 });

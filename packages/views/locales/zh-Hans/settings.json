@@ -1174,6 +1174,25 @@
     "toast_saved": "已保存代码仓库",
     "toast_save_failed": "保存代码仓库失败"
   },
+  "perforce": {
+    "section_title": "Perforce",
+    "description": "智能体用本机 Helix 登录（P4USER、P4TICKETS、P4CONFIG）同步这些 depot。Multica 不保存 Perforce 密码。",
+    "port_placeholder": "perforce.example.com:1666",
+    "depot_placeholder": "//depot/project",
+    "stream_placeholder": "Stream（可选）",
+    "description_placeholder": "描述（可选）",
+    "add": "添加 depot",
+    "empty": "还没有 Perforce depot。",
+    "incomplete": "需要填写 port 和 depot。",
+    "delete_aria": "删除 Perforce depot",
+    "delete_confirm_title": "删除 Perforce depot？",
+    "delete_confirm_description": "这个 depot 会立即从工作区移除。",
+    "delete_confirm_cancel": "取消",
+    "delete_confirm_action": "删除 depot",
+    "manage_hint": "只有管理员和所有者可以管理 Perforce depot。",
+    "toast_saved": "已保存 Perforce depot",
+    "toast_save_failed": "保存 Perforce depot 失败"
+  },
   "desktop": {
     "tabs": {
       "updates": "更新"

@@ -19,6 +19,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/internal/p4depot"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -102,6 +103,7 @@ type WorkspaceResponse struct {
 	Context     *string `json:"context"`
 	Settings    any     `json:"settings"`
 	Repos       any     `json:"repos"`
+	P4Depots    any     `json:"p4_depots"`
 	IssuePrefix string  `json:"issue_prefix"`
 	AvatarURL   *string `json:"avatar_url"`
 	CreatedAt   string  `json:"created_at"`
@@ -123,6 +125,13 @@ func (h *Handler) workspaceToResponse(w db.Workspace) WorkspaceResponse {
 	if repos == nil {
 		repos = []any{}
 	}
+	var p4Depots any
+	if w.P4Depots != nil {
+		json.Unmarshal(w.P4Depots, &p4Depots)
+	}
+	if p4Depots == nil {
+		p4Depots = []any{}
+	}
 	return WorkspaceResponse{
 		ID:          uuidToString(w.ID),
 		Name:        w.Name,
@@ -131,6 +140,7 @@ func (h *Handler) workspaceToResponse(w db.Workspace) WorkspaceResponse {
 		Context:     textToPtr(w.Context),
 		Settings:    settings,
 		Repos:       repos,
+		P4Depots:    p4Depots,
 		IssuePrefix: w.IssuePrefix,
 		AvatarURL:   h.resolveAvatarURLPtr(textToPtr(w.AvatarUrl)),
 		CreatedAt:   timestampToString(w.CreatedAt),
@@ -325,6 +335,7 @@ type UpdateWorkspaceRequest struct {
 	Context     *string `json:"context"`
 	Settings    any     `json:"settings"`
 	Repos       any     `json:"repos"`
+	P4Depots    any     `json:"p4_depots"`
 	IssuePrefix *string `json:"issue_prefix"`
 	AvatarURL   *string `json:"avatar_url"`
 }
@@ -361,6 +372,39 @@ func validateAndNormalizeWorkspaceRepos(value any) ([]byte, error) {
 		}
 		seen[repo.URL] = struct{}{}
 		normalized = append(normalized, repo)
+	}
+
+	out, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func validateAndNormalizeWorkspaceP4Depots(value any) ([]byte, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+
+	var depots []p4depot.Ref
+	if err := json.Unmarshal(raw, &depots); err != nil {
+		return nil, fmt.Errorf("p4_depots must be an array of Perforce depot objects: %w", err)
+	}
+
+	normalized := make([]p4depot.Ref, 0, len(depots))
+	seen := make(map[string]struct{}, len(depots))
+	for i, depot := range depots {
+		parsed, err := p4depot.Normalize(depot)
+		if err != nil {
+			return nil, fmt.Errorf("p4_depots[%d]: %w", i, err)
+		}
+		id := p4depot.Identity(parsed)
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		normalized = append(normalized, parsed)
 	}
 
 	out, err := json.Marshal(normalized)
@@ -411,6 +455,14 @@ func (h *Handler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		params.Repos = reposJSON
+	}
+	if req.P4Depots != nil {
+		depotsJSON, err := validateAndNormalizeWorkspaceP4Depots(req.P4Depots)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		params.P4Depots = depotsJSON
 	}
 	if req.IssuePrefix != nil {
 		prefix, ok := normalizeIssuePrefix(*req.IssuePrefix)

@@ -64,12 +64,23 @@ export interface ListProjectsResponse {
 //   - github_repo: cloud-side git checkout, ref = { url, ref?, default_branch_hint? }
 //   - local_directory: agent execution on a specific daemon,
 //     ref = { local_path, daemon_id, label?, execution_mode? }
-export type ProjectResourceType = "github_repo" | "local_directory";
+//   - perforce_depot: Helix depot the daemon syncs with host p4 credentials,
+//     ref = { port, depot, stream?, user?, charset?, changelist? }
+export type ProjectResourceType = "github_repo" | "local_directory" | "perforce_depot";
 
 export interface GithubRepoResourceRef {
   url: string;
   ref?: string;
   default_branch_hint?: string;
+}
+
+export interface PerforceDepotResourceRef {
+  port: string;
+  depot: string;
+  stream?: string;
+  user?: string;
+  charset?: string;
+  changelist?: string;
 }
 
 /**
@@ -102,6 +113,7 @@ export interface LocalDirectoryResourceRef {
 export type ProjectResourceRef =
   | GithubRepoResourceRef
   | LocalDirectoryResourceRef
+  | PerforceDepotResourceRef
   | Record<string, unknown>;
 
 export interface ProjectResource {

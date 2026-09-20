@@ -1174,6 +1174,25 @@
     "toast_saved": "リポジトリを保存しました",
     "toast_save_failed": "リポジトリを保存できませんでした"
   },
+  "perforce": {
+    "section_title": "Perforce",
+    "description": "エージェントはホストの Helix ログイン（P4USER、P4TICKETS、P4CONFIG）でこれらの depot を同期します。Multica は Perforce パスワードを保存しません。",
+    "port_placeholder": "perforce.example.com:1666",
+    "depot_placeholder": "//depot/project",
+    "stream_placeholder": "Stream（任意）",
+    "description_placeholder": "説明（任意）",
+    "add": "depot を追加",
+    "empty": "まだ Perforce depot がありません。",
+    "incomplete": "port と depot は必須です。",
+    "delete_aria": "Perforce depot を削除",
+    "delete_confirm_title": "Perforce depot を削除しますか？",
+    "delete_confirm_description": "この depot はワークスペースから直ちに削除されます。",
+    "delete_confirm_cancel": "キャンセル",
+    "delete_confirm_action": "depot を削除",
+    "manage_hint": "Perforce depot を管理できるのは admin と owner のみです。",
+    "toast_saved": "Perforce depot を保存しました",
+    "toast_save_failed": "Perforce depot を保存できませんでした"
+  },
   "desktop": {
     "tabs": {
       "updates": "アップデート"

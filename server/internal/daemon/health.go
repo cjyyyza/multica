@@ -13,7 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/daemon/p4cache"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
+	"github.com/multica-ai/multica/server/internal/p4depot"
 )
 
 // HealthResponse is returned by the daemon's local health endpoint.
@@ -403,6 +405,7 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux.HandleFunc("/health", d.healthHandler(startedAt))
 	mux.HandleFunc("/shutdown", d.shutdownHandler())
 	mux.HandleFunc("/repo/checkout", d.repoCheckoutHandler())
+	mux.HandleFunc("/p4/sync", d.p4SyncHandler())
 
 	srv := &http.Server{Handler: mux}
 
@@ -534,4 +537,118 @@ func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
 	}
+}
+
+type p4SyncRequest struct {
+	Port        string `json:"port"`
+	Depot       string `json:"depot"`
+	Stream      string `json:"stream,omitempty"`
+	User        string `json:"user,omitempty"`
+	Charset     string `json:"charset,omitempty"`
+	Changelist  string `json:"changelist,omitempty"`
+	WorkspaceID string `json:"workspace_id"`
+	WorkDir     string `json:"workdir"`
+	TaskID      string `json:"task_id"`
+	Fresh       bool   `json:"fresh,omitempty"`
+}
+
+func (d *Daemon) p4SyncHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		activeTask, authResult := d.activeRepoCheckoutTask(r)
+		if authResult != repoCheckoutAuthOK {
+			d.writeRepoCheckoutAuthError(w, authResult)
+			return
+		}
+
+		var req p4SyncRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		ref, err := p4depot.Normalize(p4depot.Ref{
+			Port:       req.Port,
+			Depot:      req.Depot,
+			Stream:     req.Stream,
+			User:       req.User,
+			Charset:    req.Charset,
+			Changelist: req.Changelist,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.WorkspaceID == "" {
+			http.Error(w, "workspace_id is required", http.StatusBadRequest)
+			return
+		}
+		if req.WorkDir == "" {
+			http.Error(w, "workdir is required", http.StatusBadRequest)
+			return
+		}
+		if req.WorkspaceID != activeTask.WorkspaceID || req.TaskID != activeTask.TaskID {
+			http.Error(w, "p4 sync task context does not match the active task", http.StatusForbidden)
+			return
+		}
+		authorizedWorkDir, authErr := authorizeRepoCheckoutWorkDir(activeTask.WorkDir, req.WorkDir)
+		if authErr != nil {
+			http.Error(w, "p4 sync workdir is not owned by the active task", http.StatusForbidden)
+			return
+		}
+
+		if !d.workspaceP4Allowed(req.WorkspaceID, ref) {
+			if refreshErr := d.refreshWorkspaceP4Allowlist(r.Context(), req.WorkspaceID); refreshErr != nil {
+				d.logger.Debug("p4 allowlist refresh failed", "error", refreshErr)
+			}
+		}
+		if !d.workspaceP4Allowed(req.WorkspaceID, ref) {
+			http.Error(w, "perforce depot is not configured for this workspace or task", http.StatusBadRequest)
+			return
+		}
+
+		stored := d.taskP4Default(req.WorkspaceID, activeTask.TaskID, ref)
+		if ref.User == "" {
+			ref.User = stored.User
+		}
+		if ref.Charset == "" {
+			ref.Charset = stored.Charset
+		}
+		if ref.Changelist == "" {
+			ref.Changelist = stored.Changelist
+		}
+
+		if d.p4Cache == nil {
+			http.Error(w, "perforce sync is not initialized", http.StatusInternalServerError)
+			return
+		}
+		result, err := d.p4Cache.Sync(r.Context(), p4cache.SyncParams{
+			WorkspaceID: req.WorkspaceID,
+			TaskID:      activeTask.TaskID,
+			WorkDir:     authorizedWorkDir,
+			Ref:         ref,
+			Fresh:       req.Fresh,
+		})
+		if err != nil {
+			if r.Context().Err() != nil {
+				return
+			}
+			d.logger.Error("p4 sync failed", "port", ref.Port, "depot", ref.Depot, "error", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
+	}
+}
+
+func (d *Daemon) refreshWorkspaceP4Allowlist(ctx context.Context, workspaceID string) error {
+	resp, err := d.refreshWorkspaceRepos(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	_ = resp
+	return nil
 }

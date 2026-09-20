@@ -61,6 +61,7 @@ import {
 } from "./settings-layout";
 import { useAutoSave } from "./use-auto-save";
 import { GitHubMark } from "./github-mark";
+import { PerforceDepotsSection } from "./perforce-depots-section";
 
 const EMPTY_REPOSITORIES: WorkspaceRepo[] = [];
 
@@ -364,6 +365,7 @@ export function RepositoriesTab() {
   return (
     <SettingsTab title={t(($) => $.page.tabs.repositories)}>
       <SettingsSection
+        title={t(($) => $.repositories.section_title)}
         description={t(($) => $.repositories.description)}
         action={
           <SettingsSaveState
@@ -689,6 +691,8 @@ export function RepositoriesTab() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <PerforceDepotsSection />
     </SettingsTab>
   );
 }

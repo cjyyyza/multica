@@ -54,6 +54,7 @@ import type {
   IssueReaction,
   Workspace,
   WorkspaceRepo,
+  WorkspaceP4Depot,
   WorkspaceMcpServer,
   MemberWithUser,
   User,
@@ -452,6 +453,9 @@ import {
   PluginPreviewSchema,
   WorkspaceMcpServerListSchema,
   WorkspaceMcpServerSchema,
+  WorkspaceSchema,
+  WorkspaceListSchema,
+  EMPTY_WORKSPACE,
   ShareLinkSchema,
   ShareLinkListResponseSchema,
   ShareLinkInfoSchema,
@@ -2764,24 +2768,36 @@ export class ApiClient {
 
   // Workspaces
   async listWorkspaces(): Promise<Workspace[]> {
-    return this.fetch("/api/workspaces");
-  }
-
-  async getWorkspace(id: string): Promise<Workspace> {
-    return this.fetch(`/api/workspaces/${id}`);
-  }
-
-  async createWorkspace(data: { name: string; slug: string; description?: string; context?: string; issue_prefix?: string }): Promise<Workspace> {
-    return this.fetch("/api/workspaces", {
-      method: "POST",
-      body: JSON.stringify(data),
+    const raw = await this.fetch<unknown>("/api/workspaces");
+    return parseWithFallback(raw, WorkspaceListSchema, [] as Workspace[], {
+      endpoint: "GET /api/workspaces",
     });
   }
 
-  async updateWorkspace(id: string, data: { name?: string; description?: string; context?: string; settings?: Record<string, unknown>; repos?: WorkspaceRepo[]; issue_prefix?: string; avatar_url?: string }): Promise<Workspace> {
-    return this.fetch(`/api/workspaces/${id}`, {
+  async getWorkspace(id: string): Promise<Workspace> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${id}`);
+    return parseWithFallback(raw, WorkspaceSchema, EMPTY_WORKSPACE, {
+      endpoint: "GET /api/workspaces/{id}",
+    });
+  }
+
+  async createWorkspace(data: { name: string; slug: string; description?: string; context?: string; issue_prefix?: string }): Promise<Workspace> {
+    const raw = await this.fetch<unknown>("/api/workspaces", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, WorkspaceSchema, EMPTY_WORKSPACE, {
+      endpoint: "POST /api/workspaces",
+    });
+  }
+
+  async updateWorkspace(id: string, data: { name?: string; description?: string; context?: string; settings?: Record<string, unknown>; repos?: WorkspaceRepo[]; p4_depots?: WorkspaceP4Depot[]; issue_prefix?: string; avatar_url?: string }): Promise<Workspace> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, WorkspaceSchema, EMPTY_WORKSPACE, {
+      endpoint: "PATCH /api/workspaces/{id}",
     });
   }
 

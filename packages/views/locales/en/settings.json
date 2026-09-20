@@ -1177,6 +1177,25 @@
     "toast_saved": "Repositories saved",
     "toast_save_failed": "Failed to save repositories"
   },
+  "perforce": {
+    "section_title": "Perforce",
+    "description": "Agents sync these Helix depots with the host login (P4USER, P4TICKETS, P4CONFIG). Multica does not store a Perforce password.",
+    "port_placeholder": "perforce.example.com:1666",
+    "depot_placeholder": "//depot/project",
+    "stream_placeholder": "Stream (optional)",
+    "description_placeholder": "Description (optional)",
+    "add": "Add depot",
+    "empty": "No Perforce depots yet.",
+    "incomplete": "Port and depot are required.",
+    "delete_aria": "Delete Perforce depot",
+    "delete_confirm_title": "Delete Perforce depot?",
+    "delete_confirm_description": "This depot will be removed from the workspace immediately.",
+    "delete_confirm_cancel": "Cancel",
+    "delete_confirm_action": "Delete depot",
+    "manage_hint": "Only admins and owners can manage Perforce depots.",
+    "toast_saved": "Perforce depots saved",
+    "toast_save_failed": "Failed to save Perforce depots"
+  },
   "desktop": {
     "tabs": {
       "updates": "Updates"

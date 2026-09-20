@@ -87,6 +87,7 @@ import type {
   TimelineEntry,
   User,
   WebhookDelivery,
+  Workspace,
   WorkspaceMcpServer,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
@@ -3388,6 +3389,54 @@ export const WorkspaceMcpServerSchema = z.object({
 });
 
 export const WorkspaceMcpServerListSchema = z.array(WorkspaceMcpServerSchema);
+
+export const WorkspaceRepoSchema = z.object({
+  url: z.string(),
+  description: z.string().optional(),
+});
+
+export const WorkspaceP4DepotSchema = z.object({
+  port: z.string(),
+  depot: z.string(),
+  stream: z.string().optional().default(""),
+  user: z.string().optional().default(""),
+  charset: z.string().optional().default(""),
+  changelist: z.string().optional().default(""),
+  description: z.string().optional().default(""),
+}).loose();
+
+export const WorkspaceSchema = z.object({
+  id: z.string().default(""),
+  name: z.string().default(""),
+  slug: z.string().default(""),
+  description: z.string().nullable().optional().default(null),
+  context: z.string().nullable().optional().default(null),
+  settings: z.record(z.string(), z.unknown()).optional().default({}),
+  repos: z.array(WorkspaceRepoSchema).optional().default([]),
+  // A bad depot list must not drop the whole workspace from the picker.
+  p4_depots: z.array(WorkspaceP4DepotSchema).optional().default([]).catch([]),
+  issue_prefix: z.string().optional().default(""),
+  avatar_url: z.string().nullable().optional().default(null),
+  created_at: z.string().optional().default(""),
+  updated_at: z.string().optional().default(""),
+});
+
+export const WorkspaceListSchema = z.array(WorkspaceSchema);
+
+export const EMPTY_WORKSPACE: Workspace = {
+  id: "",
+  name: "",
+  slug: "",
+  description: null,
+  context: null,
+  settings: {},
+  repos: [],
+  p4_depots: [],
+  issue_prefix: "",
+  avatar_url: null,
+  created_at: "",
+  updated_at: "",
+};
 
 export const EMPTY_WORKSPACE_MCP_SERVER: WorkspaceMcpServer = {
   id: "",

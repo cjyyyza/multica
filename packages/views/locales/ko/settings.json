@@ -915,6 +915,25 @@
     "toast_saved": "저장소를 저장했습니다",
     "toast_save_failed": "저장소를 저장하지 못했습니다"
   },
+  "perforce": {
+    "section_title": "Perforce",
+    "description": "에이전트는 호스트 Helix 로그인(P4USER, P4TICKETS, P4CONFIG)으로 이 depot을 동기화합니다. Multica는 Perforce 비밀번호를 저장하지 않습니다.",
+    "port_placeholder": "perforce.example.com:1666",
+    "depot_placeholder": "//depot/project",
+    "stream_placeholder": "Stream(선택)",
+    "description_placeholder": "설명(선택)",
+    "add": "depot 추가",
+    "empty": "아직 Perforce depot이 없습니다.",
+    "incomplete": "port와 depot이 필요합니다.",
+    "delete_aria": "Perforce depot 삭제",
+    "delete_confirm_title": "Perforce depot을 삭제할까요?",
+    "delete_confirm_description": "이 depot은 워크스페이스에서 즉시 제거됩니다.",
+    "delete_confirm_cancel": "취소",
+    "delete_confirm_action": "depot 삭제",
+    "manage_hint": "관리자와 소유자만 Perforce depot을 관리할 수 있습니다.",
+    "toast_saved": "Perforce depot을 저장했습니다",
+    "toast_save_failed": "Perforce depot을 저장하지 못했습니다"
+  },
   "desktop": {
     "tabs": {
       "updates": "업데이트"

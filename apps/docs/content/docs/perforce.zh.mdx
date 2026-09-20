@@ -1,0 +1,60 @@
+---
+title: Perforce
+description: 像 Git checkout 一样，把 Helix depot 同步到智能体工作目录。
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Multica 可以把 [Perforce](https://www.perforce.com/) Helix depot 同步到一次执行的工作目录。Git 远程仍写在 `workspace.repos` 和 `github_repo` 资源里。Perforce 使用单独的 `p4_depots` 列表和 `perforce_depot` 资源，避免旧版守护进程把 Helix port 当成 Git 去 clone。
+
+<Callout type="info">
+Multica 不保存 Perforce 密码。守护进程使用本机 Helix 登录（`P4USER`、`P4TICKETS`、`P4CONFIG`）。请先在那台机器上执行 `p4 login`。
+</Callout>
+
+## 添加工作区 depot
+
+打开 **设置 → 代码仓库**。Perforce 一栏列出工作区可以同步的 Helix depot。
+
+每条需要：
+
+| 字段 | 必填 | 示例 |
+|---|---|---|
+| Port | 是 | `perforce.example.com:1666` 或 `ssl:perforce.example.com:1666` |
+| Depot | 是 | `//depot/project` |
+| Stream | 否 | `//depot/project/main` |
+| 描述 | 否 | 游戏客户端 |
+
+HTTP 形式的 Git URL 不能当作 port。也可以用 `multica p4 list`、`multica p4 add`、`multica p4 remove` 管理列表。
+
+## 关联项目资源
+
+打开项目的 **资源**，从工作区已有 depot 里选一条，或填写 port 和 depot。同一个项目可以同时关联 Git 仓库、本地目录和 Perforce depot。
+
+```bash
+multica project resource add <project-id> --type perforce_depot \
+  --port perforce.example.com:1666 --depot //depot/project --output json
+```
+
+认领执行时，项目上的 `perforce_depot` 会成为 P4 列表。如果项目没有这类资源，就回退到工作区的 `p4_depots`。Git 回退是独立的：只有 Git 的项目仍会继承工作区 Perforce depot；只有 Perforce 的项目仍会继承工作区 Git 仓库。
+
+## 执行中同步
+
+智能体用任务 CLI 同步，而不是直接连 Helix：
+
+```bash
+multica p4 sync --port perforce.example.com:1666 --depot //depot/project
+multica p4 sync --port perforce.example.com:1666 --depot //depot/project --stream //depot/project/main
+multica p4 sync --port perforce.example.com:1666 --depot //depot/project --fresh
+```
+
+守护进程会创建短的任务级 client（`mc` + 16 位十六进制），在 `workdir/p4/<sanitized-depot>` 里执行 `p4 sync`，并返回该路径。`--fresh` 会先删掉上次的同步目录。本机 `PATH` 里需要有 `p4`。
+
+不会预先拉取 depot。Helix 树可能很大，只在智能体请求时同步。
+
+## 本版未包含
+
+- Swarm / Helix review 镜像、webhook、CI 状态
+- 任务上的 changelist 自动关联
+- 创建项目对话框里直接挂 P4（创建后再关联）
+- 移动端 Perforce 界面
+- 官网营销文案
