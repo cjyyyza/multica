@@ -132,6 +132,8 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"webhook_delivery":                   workspaceDelete,
 	"yixiezuo_card_link":                 workspaceDelete,
 	"yixiezuo_connection":                workspaceDelete,
+	"yixiezuo_import":                    workspaceDelete,
+	"yixiezuo_operation":                 workspaceDelete,
 	"workspace":                          workspaceDelete,
 	"workspace_invitation":               workspaceDelete,
 	"workspace_share_link":               workspaceDelete,

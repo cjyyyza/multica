@@ -1642,3 +1642,33 @@ type YixiezuoConnection struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
+
+type YixiezuoImport struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	IssueID           pgtype.UUID        `json:"issue_id"`
+	SourceHost        string             `json:"source_host"`
+	ExternalID        string             `json:"external_id"`
+	SourceUrl         string             `json:"source_url"`
+	Snapshot          []byte             `json:"snapshot"`
+	ImportedBy        pgtype.UUID        `json:"imported_by"`
+	PublishedRevision int64              `json:"published_revision"`
+	PublishedAt       pgtype.Timestamptz `json:"published_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+type YixiezuoOperation struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	RequestedBy pgtype.UUID        `json:"requested_by"`
+	Kind        string             `json:"kind"`
+	IssueID     pgtype.UUID        `json:"issue_id"`
+	Payload     []byte             `json:"payload"`
+	State       string             `json:"state"`
+	Result      []byte             `json:"result"`
+	Error       string             `json:"error"`
+	LeaseToken  pgtype.UUID        `json:"lease_token"`
+	StartedAt   pgtype.Timestamptz `json:"started_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+}

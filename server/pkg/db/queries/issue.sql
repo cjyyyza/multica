@@ -388,6 +388,12 @@ cleared_vcs_pr_links AS (
 ),
 cleared_yixiezuo_links AS (
     DELETE FROM yixiezuo_card_link WHERE issue_id IN (SELECT target.id FROM target)
+),
+cleared_yixiezuo_operations AS (
+    DELETE FROM yixiezuo_operation WHERE issue_id IN (SELECT target.id FROM target)
+),
+cleared_yixiezuo_imports AS (
+    DELETE FROM yixiezuo_import WHERE issue_id IN (SELECT target.id FROM target)
 )
 DELETE FROM issue WHERE issue.id IN (SELECT target.id FROM target);
 

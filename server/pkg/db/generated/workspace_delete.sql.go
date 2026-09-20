@@ -371,6 +371,12 @@ deleted_issue_vcs_links AS (
 deleted_yixiezuo_card_links AS (
     DELETE FROM yixiezuo_card_link WHERE workspace_id = $1
 ),
+deleted_yixiezuo_operations AS (
+    DELETE FROM yixiezuo_operation WHERE workspace_id = $1
+),
+deleted_yixiezuo_imports AS (
+    DELETE FROM yixiezuo_import WHERE workspace_id = $1
+),
 deleted_agent_invocation_targets AS (
     DELETE FROM agent_invocation_target
     WHERE agent_id IN (SELECT id FROM ws_agents)
