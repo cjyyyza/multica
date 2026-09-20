@@ -31,6 +31,7 @@ import (
 	composiointeg "github.com/multica-ai/multica/server/internal/integrations/composio"
 	"github.com/multica-ai/multica/server/internal/integrations/dingtalk"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
+	"github.com/multica-ai/multica/server/internal/integrations/popo"
 	"github.com/multica-ai/multica/server/internal/integrations/slack"
 	"github.com/multica-ai/multica/server/internal/integrations/telegram"
 	"github.com/multica-ai/multica/server/internal/integrations/wecom"
@@ -521,7 +522,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// is the single shared inbound handler injected into every Channel.
 	channelRegistry := channel.NewRegistry()
 	channelRouter := engine.NewRouter(h.IssueService, h.TaskService, queries, engine.RouterConfig{
-		Logger: slog.Default(), Lifecycle: h,
+		Logger: slog.Default(), Lifecycle: h, Follow: h,
 	})
 	// Debounce the per-session run trigger so a burst of messages collapses
 	// into one agent run instead of one per message (MUL-2968).
@@ -1132,6 +1133,53 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		slog.Info("telegram integration disabled (MULTICA_TELEGRAM_SECRET_KEY not set)")
 	}
 
+	// POPO Open / dj01bot. Transport is a workspace-scoped Windows bridge:
+	// the API never opens POPO, popo-cli, or dj01bot. Gated by
+	// MULTICA_POPO_ENABLED=true.
+	if strings.TrimSpace(os.Getenv("MULTICA_POPO_ENABLED")) == "true" {
+		popoBridge := popo.NewBridgeService(queries, pool)
+		var popoMedia engine.MediaResolver
+		if store != nil {
+			ledger := engine.NewDBMediaIntentLedger(queries)
+			popoBridge.WithMedia(store, ledger)
+			popoMedia = popo.NewMediaResolver(queries, ledger, slog.Default())
+			h.DeclareChannelFileDelivery(string(popo.TypePopo))
+		}
+		h.PopoBridge = popoBridge
+		popoBindingSvc := popo.NewBindingTokenService(queries, pool)
+		h.PopoBindingTokens = popoBindingSvc
+		popoReplier := popo.NewOutboundReplier(popo.OutboundReplierConfig{
+			Binding: popoBindingSvc,
+			Queue:   popoBridge,
+			AppURL:  appURLFromEnv(),
+			Logger:  slog.Default(),
+		})
+		channelRouter.Register(popo.TypePopo, popo.NewPopoResolverSet(queries, pool, popoReplier, popoMedia))
+		popoOutbound := popo.NewOutbound(queries, popoBridge, slog.Default()).WithDelivery(store, appURLFromEnv())
+		popoOutbound.Register(bus)
+		h.PopoOutbound = popoOutbound
+		popo.RegisterPopo(channelRegistry, popo.ChannelDeps{
+			Queue:  popoBridge,
+			Lookup: queries,
+			Logger: slog.Default(),
+		})
+		installSvc, ierr := popo.NewInstallService(queries, pool)
+		if ierr != nil {
+			slog.Error("popo: InstallService init failed; install disabled", "error", ierr)
+		} else {
+			h.PopoInstall = installSvc
+			regSvc, rerr := popo.NewRegistrationService(queries, pool, installSvc)
+			if rerr != nil {
+				slog.Error("popo: RegistrationService init failed; QR register disabled", "error", rerr)
+			} else {
+				h.PopoRegistration = regSvc
+			}
+		}
+		slog.Info("popo integration enabled (Windows bridge)")
+	} else {
+		slog.Info("popo integration disabled (MULTICA_POPO_ENABLED is not true)")
+	}
+
 	// Composio integration (MUL-3720). Gated by COMPOSIO_API_KEY plus the
 	// composio_mcp_apps feature flag. The env var is the project-scoped key the
 	// standalone SDK authenticates Composio with (sent as x-api-key; the project
@@ -1416,6 +1464,20 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// purpose: the bearer token in the URL path IS the credential. Workspace
 	// context is derived from the trigger row, never from request headers.
 	r.Post("/api/webhooks/autopilots/{token}", h.HandleAutopilotWebhook)
+	// POPO Windows bridge. Bearer is a workspace-scoped bridge token, not a
+	// user JWT. Register consumes a one-time pairing code instead.
+	r.Route("/api/popo/bridge", func(r chi.Router) {
+		r.Post("/register", h.RegisterPopoBridge)
+		r.Post("/heartbeat", h.PopoBridgeHeartbeat)
+		r.Post("/inbound", h.IngestPopoBridgeInbound)
+		r.Post("/media/sessions", h.CreatePopoBridgeMediaSession)
+		r.Put("/media/sessions/{id}", h.PutPopoBridgeMediaSession)
+		r.Get("/media/outbound/{attachmentId}", h.GetPopoBridgeOutboundMedia)
+		r.Get("/commands", h.ListPopoBridgeCommands)
+		r.Post("/commands/{id}/receipt", h.AckPopoBridgeCommand)
+		r.Post("/commands/{id}/authorize", h.AuthorizePopoBridgeCommand)
+		r.Post("/registrations/{id}/progress", h.ProgressPopoRegistration)
+	})
 	// GitHub App webhook (no Multica auth — requests are authenticated via
 	// HMAC-SHA256 signature in the handler) and post-install setup callback.
 	r.Post("/api/webhooks/github", h.HandleGitHubWebhook)
@@ -1769,6 +1831,28 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Delete("/telegram/installations/{installationId}", h.RevokeTelegramInstallation)
 					r.Post("/telegram/install", h.RegisterTelegramBot)
 				})
+
+				// POPO / dj01bot. Listing is member-visible. Install and
+				// revoke use canManageAgent (agent owner or workspace
+				// owner/admin). Pairing mint and bridge revoke are
+				// owner/admin only. Windows uses /api/popo/bridge/*, not
+				// these member routes.
+				r.Group(func(r chi.Router) {
+					r.Use(middleware.RequireWorkspaceMemberFromURL(queries, "id"))
+					r.Get("/popo/installations", h.ListPopoInstallations)
+					r.Get("/popo/bridges", h.ListPopoBridges)
+					r.Get("/popo/status", h.GetPopoStatus)
+					r.Post("/popo/install", h.RegisterPopoBot)
+					r.Delete("/popo/installations/{installationId}", h.RevokePopoInstallation)
+					r.Post("/popo/registrations", h.CreatePopoRegistration)
+					r.Get("/popo/registrations/{registrationId}", h.GetPopoRegistration)
+					r.Delete("/popo/registrations/{registrationId}", h.CancelPopoRegistration)
+				})
+				r.Group(func(r chi.Router) {
+					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
+					r.Post("/popo/bridge-pairings", h.CreatePopoBridgePairing)
+					r.Delete("/popo/bridges/{bridgeId}", h.RevokePopoBridge)
+				})
 			})
 		})
 
@@ -1796,6 +1880,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// workspace-scoped, identity from the session, token proves only
 		// "this Telegram user id requested binding".
 		r.Post("/api/telegram/binding/redeem", h.RedeemTelegramBindingToken)
+		// POPO binding-token redemption. Same rationale: not workspace-scoped,
+		// identity from the session, token proves only "this POPO user id
+		// requested binding".
+		r.Post("/api/popo/binding/redeem", h.RedeemPopoBindingToken)
 
 		// Composio integration (MUL-3720). User-scoped (no workspace context):
 		// a connection belongs to a user. These four require a logged-in

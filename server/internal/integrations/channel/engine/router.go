@@ -41,6 +41,7 @@ type Router struct {
 	tasks     TaskEnqueuer
 	reader    SessionReader
 	lifecycle ChannelChatLifecycle
+	follow    IssueFollow
 
 	batcher *pendingBatcher
 
@@ -78,6 +79,10 @@ type RouterConfig struct {
 	MediaConcurrency int
 	Logger           *slog.Logger
 	Lifecycle        ChannelChatLifecycle
+	// Follow is the actor-explicit comment/cancel/status/quote seam. Nil
+	// keeps the historical chat-only pipeline (used by tests that do not
+	// exercise issue follow-ups).
+	Follow IssueFollow
 }
 
 // NewRouter builds a Router around the shared (platform-agnostic) services:
@@ -104,6 +109,7 @@ func NewRouter(issues IssueCreator, tasks TaskEnqueuer, reader SessionReader, cf
 		tasks:        tasks,
 		reader:       reader,
 		lifecycle:    cfg.Lifecycle,
+		follow:       cfg.Follow,
 		replyTimeout: cfg.ReplyTimeout,
 		mediaTimeout: cfg.MediaTimeout,
 		mediaCtx:     mediaCtx,
@@ -310,6 +316,9 @@ func (r *Router) dispatch(ctx context.Context, set ResolverSet, msg channel.Inbo
 		token, err := set.Dedup.Claim(ctx, inst.ID, msg.MessageID)
 		if err != nil {
 			if errors.Is(err, ErrDuplicate) {
+				if recovered, ok := r.recoverDuplicateCommand(ctx, set, inst, msg); ok {
+					return recovered, inst, nil
+				}
 				return r.drop(ctx, set, msg, inst.ID, DropReasonDuplicate), inst, nil
 			}
 			return Result{}, inst, fmt.Errorf("dedup claim: %w", err)
@@ -368,6 +377,15 @@ func (r *Router) processClaimed(ctx context.Context, set ResolverSet, msg channe
 			return r.drop(ctx, set, msg, inst.ID, DropReasonNonWorkspaceMember), finalizeMark, nil
 		default:
 			return Result{}, finalizeRelease, fmt.Errorf("resolve sender: %w", err)
+		}
+	}
+
+	if !startChat {
+		if followRes, handled, followErr := r.handleFollow(ctx, set, inst, identity, msg); handled {
+			if followErr != nil {
+				return Result{}, finalizeRelease, followErr
+			}
+			return followRes, finalizeMark, nil
 		}
 	}
 
@@ -585,7 +603,21 @@ func (r *Router) processClaimed(ctx context.Context, set ResolverSet, msg channe
 			// cannot race an issue agent reading the newly-created issue.
 			assignedRunFireAt = localMediaDeadline.Add(mediaFinalizeTimeout)
 		}
-		issueRes, err := r.createIssue(ctx, inst, set.OriginType, identity.UserID, sessionID, *appendRes.IssueCommand, prefix, assignedRunFireAt)
+		issueRes, err := r.createIssue(ctx, inst, set.OriginType, identity.UserID, sessionID, *appendRes.IssueCommand, prefix, assignedRunFireAt, msg, appendRes.BindingID, appendRes.RouteRevision)
+		if issueRes.IdempotentReplay {
+			duplicate := issueRes.Issue
+			if issueRes.DuplicateIssue != nil {
+				duplicate = *issueRes.DuplicateIssue
+			}
+			res.IssueID = duplicate.ID
+			res.IssueNumber = duplicate.Number
+			res.IssueTitle = duplicate.Title
+			res.IssueIdentifier = service.IssueIdentifier(prefix, duplicate.Number)
+			res.IssueWorkspaceSlug = workspaceSlug
+			res.Outcome = OutcomeDropped
+			res.DropReason = DropReasonDuplicate
+			return res, postAppendFinalize, nil
+		}
 		if errors.Is(err, service.ErrActiveDuplicate) && issueRes.DuplicateIssue != nil {
 			duplicate := *issueRes.DuplicateIssue
 			res.IssueID = duplicate.ID
@@ -1067,7 +1099,7 @@ func (r *Router) drop(ctx context.Context, set ResolverSet, msg channel.InboundM
 	return Result{Outcome: OutcomeDropped, DropReason: reason, InstallationID: instID}
 }
 
-func (r *Router) createIssue(ctx context.Context, inst ResolvedInstallation, originType string, creatorUserID, sessionID pgtype.UUID, cmd IssueCommand, issuePrefix string, assignedRunFireAt time.Time) (service.IssueCreateResult, error) {
+func (r *Router) createIssue(ctx context.Context, inst ResolvedInstallation, originType string, creatorUserID, sessionID pgtype.UUID, cmd IssueCommand, issuePrefix string, assignedRunFireAt time.Time, msg channel.InboundMessage, bindingID pgtype.UUID, routeRevision int64) (service.IssueCreateResult, error) {
 	if cmd.Title == "" {
 		return service.IssueCreateResult{}, ErrEmptyIssueTitle
 	}
@@ -1094,6 +1126,8 @@ func (r *Router) createIssue(ctx context.Context, inst ResolvedInstallation, ori
 	// shape regardless of which entry point created the issue.
 	opts := service.IssueCreateOpts{
 		AssignedAgentRunFireAt: assignedRunFireAt,
+		ChannelIdempotency:     channelIdempotency(inst, msg, InboundWriteKindIssue),
+		ChannelSource:          channelIssueSource(inst, originType, msg, bindingID, routeRevision),
 		BroadcastPayload: func(issue db.Issue, _ []db.Attachment, _ []db.IssueLabel) map[string]any {
 			// Plain IssueToMap is authoritative here: this path always creates
 			// with the built-in "todo" above, and a built-in status IS its own
@@ -1120,5 +1154,31 @@ func (r *Router) issueWorkspaceIdentity(ctx context.Context, workspaceID pgtype.
 // ErrEmptyIssueTitle is a defensive invariant error. Router handles a
 // user-authored empty title as OutcomeIssueUsage before calling createIssue.
 var ErrEmptyIssueTitle = errors.New("issue title is empty")
+
+func channelIdempotency(inst ResolvedInstallation, msg channel.InboundMessage, kind string) *service.ChannelIdempotencyKey {
+	if strings.TrimSpace(msg.MessageID) == "" || !inst.ID.Valid {
+		return nil
+	}
+	return &service.ChannelIdempotencyKey{
+		InstallationID: inst.ID,
+		ChannelType:    string(msg.Source.ChannelType),
+		MessageID:      msg.MessageID,
+		Kind:           kind,
+	}
+}
+
+func channelIssueSource(inst ResolvedInstallation, originType string, msg channel.InboundMessage, bindingID pgtype.UUID, routeRevision int64) *service.ChannelIssueSource {
+	if originType == "" || !inst.ID.Valid || strings.TrimSpace(msg.Source.ChatID) == "" {
+		return nil
+	}
+	return &service.ChannelIssueSource{
+		InstallationID: inst.ID,
+		ChannelType:    string(msg.Source.ChannelType),
+		ChatID:         msg.Source.ChatID,
+		ChatType:       string(msg.Source.ChatType),
+		BindingID:      bindingID,
+		RouteRevision:  routeRevision,
+	}
+}
 
 var _ channel.InboundHandler = (*Router)(nil).Handle

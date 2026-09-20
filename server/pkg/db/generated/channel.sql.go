@@ -1476,6 +1476,62 @@ func (q *Queries) GetChannelChatSessionBindingBySessionAny(ctx context.Context, 
 	return i, err
 }
 
+const getChannelInboundWrite = `-- name: GetChannelInboundWrite :one
+SELECT id, workspace_id, installation_id, channel_type, message_id, kind, issue_id, comment_id, task_id, created_at FROM channel_inbound_write
+WHERE installation_id = $1
+  AND message_id = $2
+  AND kind = $3
+`
+
+type GetChannelInboundWriteParams struct {
+	InstallationID pgtype.UUID `json:"installation_id"`
+	MessageID      string      `json:"message_id"`
+	Kind           string      `json:"kind"`
+}
+
+func (q *Queries) GetChannelInboundWrite(ctx context.Context, arg GetChannelInboundWriteParams) (ChannelInboundWrite, error) {
+	row := q.db.QueryRow(ctx, getChannelInboundWrite, arg.InstallationID, arg.MessageID, arg.Kind)
+	var i ChannelInboundWrite
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InstallationID,
+		&i.ChannelType,
+		&i.MessageID,
+		&i.Kind,
+		&i.IssueID,
+		&i.CommentID,
+		&i.TaskID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getChannelInboundWriteByComment = `-- name: GetChannelInboundWriteByComment :one
+SELECT id, workspace_id, installation_id, channel_type, message_id, kind, issue_id, comment_id, task_id, created_at FROM channel_inbound_write
+WHERE comment_id = $1
+  AND kind = 'comment'
+LIMIT 1
+`
+
+func (q *Queries) GetChannelInboundWriteByComment(ctx context.Context, commentID pgtype.UUID) (ChannelInboundWrite, error) {
+	row := q.db.QueryRow(ctx, getChannelInboundWriteByComment, commentID)
+	var i ChannelInboundWrite
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InstallationID,
+		&i.ChannelType,
+		&i.MessageID,
+		&i.Kind,
+		&i.IssueID,
+		&i.CommentID,
+		&i.TaskID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getChannelInstallation = `-- name: GetChannelInstallation :one
 SELECT id, workspace_id, agent_id, channel_type, config, status, ws_lease_token, ws_lease_expires_at, installer_user_id, installed_at, created_at, updated_at FROM channel_installation
 WHERE id = $1 AND channel_type = $2
@@ -1670,6 +1726,29 @@ func (q *Queries) GetChannelInstallationSlotOwnerByAppID(ctx context.Context, ar
 	return i, err
 }
 
+const getChannelIssueSourceByIssue = `-- name: GetChannelIssueSourceByIssue :one
+SELECT id, workspace_id, issue_id, installation_id, channel_type, channel_chat_id, chat_type, binding_id, route_revision, created_at FROM channel_issue_source
+WHERE issue_id = $1
+`
+
+func (q *Queries) GetChannelIssueSourceByIssue(ctx context.Context, issueID pgtype.UUID) (ChannelIssueSource, error) {
+	row := q.db.QueryRow(ctx, getChannelIssueSourceByIssue, issueID)
+	var i ChannelIssueSource
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.IssueID,
+		&i.InstallationID,
+		&i.ChannelType,
+		&i.ChannelChatID,
+		&i.ChatType,
+		&i.BindingID,
+		&i.RouteRevision,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getChannelOutboundCardByTask = `-- name: GetChannelOutboundCardByTask :one
 SELECT id, chat_session_id, task_id, channel_type, channel_chat_id, channel_card_message_id, status, last_patched_at, created_at FROM channel_outbound_card_message
 WHERE task_id = $1
@@ -1697,6 +1776,57 @@ func (q *Queries) GetChannelOutboundCardByTask(ctx context.Context, arg GetChann
 		&i.Status,
 		&i.LastPatchedAt,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getChannelOutboundMessageForQuote = `-- name: GetChannelOutboundMessageForQuote :one
+SELECT outbound.installation_id, outbound.channel_type, outbound.channel_message_id,
+       outbound.binding_id, outbound.route_revision, outbound.task_id,
+       outbound.outbound_kind, outbound.issue_id, outbound.comment_id,
+       outbound.created_at, binding.channel_chat_id, binding.chat_type
+FROM channel_outbound_message AS outbound
+JOIN channel_chat_session_binding AS binding ON binding.id = outbound.binding_id
+WHERE outbound.installation_id = $1
+  AND outbound.channel_message_id = $2
+`
+
+type GetChannelOutboundMessageForQuoteParams struct {
+	InstallationID   pgtype.UUID `json:"installation_id"`
+	ChannelMessageID string      `json:"channel_message_id"`
+}
+
+type GetChannelOutboundMessageForQuoteRow struct {
+	InstallationID   pgtype.UUID        `json:"installation_id"`
+	ChannelType      string             `json:"channel_type"`
+	ChannelMessageID string             `json:"channel_message_id"`
+	BindingID        pgtype.UUID        `json:"binding_id"`
+	RouteRevision    int64              `json:"route_revision"`
+	TaskID           pgtype.UUID        `json:"task_id"`
+	OutboundKind     string             `json:"outbound_kind"`
+	IssueID          pgtype.UUID        `json:"issue_id"`
+	CommentID        pgtype.UUID        `json:"comment_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	ChannelChatID    string             `json:"channel_chat_id"`
+	ChatType         string             `json:"chat_type"`
+}
+
+func (q *Queries) GetChannelOutboundMessageForQuote(ctx context.Context, arg GetChannelOutboundMessageForQuoteParams) (GetChannelOutboundMessageForQuoteRow, error) {
+	row := q.db.QueryRow(ctx, getChannelOutboundMessageForQuote, arg.InstallationID, arg.ChannelMessageID)
+	var i GetChannelOutboundMessageForQuoteRow
+	err := row.Scan(
+		&i.InstallationID,
+		&i.ChannelType,
+		&i.ChannelMessageID,
+		&i.BindingID,
+		&i.RouteRevision,
+		&i.TaskID,
+		&i.OutboundKind,
+		&i.IssueID,
+		&i.CommentID,
+		&i.CreatedAt,
+		&i.ChannelChatID,
+		&i.ChatType,
 	)
 	return i, err
 }
@@ -1751,6 +1881,110 @@ func (q *Queries) GetChannelUserBindingByUserID(ctx context.Context, arg GetChan
 		&i.ChannelUserID,
 		&i.Config,
 		&i.BoundAt,
+	)
+	return i, err
+}
+
+const insertChannelInboundWrite = `-- name: InsertChannelInboundWrite :one
+
+INSERT INTO channel_inbound_write (
+    workspace_id, installation_id, channel_type, message_id, kind,
+    issue_id, comment_id, task_id
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8
+)
+RETURNING id, workspace_id, installation_id, channel_type, message_id, kind, issue_id, comment_id, task_id, created_at
+`
+
+type InsertChannelInboundWriteParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	InstallationID pgtype.UUID `json:"installation_id"`
+	ChannelType    string      `json:"channel_type"`
+	MessageID      string      `json:"message_id"`
+	Kind           string      `json:"kind"`
+	IssueID        pgtype.UUID `json:"issue_id"`
+	CommentID      pgtype.UUID `json:"comment_id"`
+	TaskID         pgtype.UUID `json:"task_id"`
+}
+
+// =====================
+// channel_inbound_write
+// =====================
+func (q *Queries) InsertChannelInboundWrite(ctx context.Context, arg InsertChannelInboundWriteParams) (ChannelInboundWrite, error) {
+	row := q.db.QueryRow(ctx, insertChannelInboundWrite,
+		arg.WorkspaceID,
+		arg.InstallationID,
+		arg.ChannelType,
+		arg.MessageID,
+		arg.Kind,
+		arg.IssueID,
+		arg.CommentID,
+		arg.TaskID,
+	)
+	var i ChannelInboundWrite
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InstallationID,
+		&i.ChannelType,
+		&i.MessageID,
+		&i.Kind,
+		&i.IssueID,
+		&i.CommentID,
+		&i.TaskID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertChannelIssueSource = `-- name: InsertChannelIssueSource :one
+
+INSERT INTO channel_issue_source (
+    workspace_id, issue_id, installation_id, channel_type,
+    channel_chat_id, chat_type, binding_id, route_revision
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8
+)
+RETURNING id, workspace_id, issue_id, installation_id, channel_type, channel_chat_id, chat_type, binding_id, route_revision, created_at
+`
+
+type InsertChannelIssueSourceParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	IssueID        pgtype.UUID `json:"issue_id"`
+	InstallationID pgtype.UUID `json:"installation_id"`
+	ChannelType    string      `json:"channel_type"`
+	ChannelChatID  string      `json:"channel_chat_id"`
+	ChatType       string      `json:"chat_type"`
+	BindingID      pgtype.UUID `json:"binding_id"`
+	RouteRevision  int64       `json:"route_revision"`
+}
+
+// =====================
+// channel_issue_source
+// =====================
+func (q *Queries) InsertChannelIssueSource(ctx context.Context, arg InsertChannelIssueSourceParams) (ChannelIssueSource, error) {
+	row := q.db.QueryRow(ctx, insertChannelIssueSource,
+		arg.WorkspaceID,
+		arg.IssueID,
+		arg.InstallationID,
+		arg.ChannelType,
+		arg.ChannelChatID,
+		arg.ChatType,
+		arg.BindingID,
+		arg.RouteRevision,
+	)
+	var i ChannelIssueSource
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.IssueID,
+		&i.InstallationID,
+		&i.ChannelType,
+		&i.ChannelChatID,
+		&i.ChatType,
+		&i.BindingID,
+		&i.RouteRevision,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -2022,7 +2256,7 @@ func (q *Queries) ListChannelOutboundMessageIDsForBinding(ctx context.Context, b
 }
 
 const listChannelOutboundMessagesByIDs = `-- name: ListChannelOutboundMessagesByIDs :many
-SELECT outbound.installation_id, outbound.channel_type, outbound.channel_message_id, outbound.binding_id, outbound.route_revision, outbound.task_id, outbound.outbound_kind, outbound.created_at FROM channel_outbound_message AS outbound
+SELECT outbound.installation_id, outbound.channel_type, outbound.channel_message_id, outbound.binding_id, outbound.route_revision, outbound.task_id, outbound.outbound_kind, outbound.created_at, outbound.issue_id, outbound.comment_id FROM channel_outbound_message AS outbound
 WHERE outbound.installation_id = $1
   AND outbound.channel_message_id = ANY($2::text[])
 `
@@ -2050,6 +2284,8 @@ func (q *Queries) ListChannelOutboundMessagesByIDs(ctx context.Context, arg List
 			&i.TaskID,
 			&i.OutboundKind,
 			&i.CreatedAt,
+			&i.IssueID,
+			&i.CommentID,
 		); err != nil {
 			return nil, err
 		}
@@ -2548,12 +2784,13 @@ const recordChannelOutboundMessage = `-- name: RecordChannelOutboundMessage :exe
 
 INSERT INTO channel_outbound_message (
     installation_id, channel_type, channel_message_id, binding_id,
-    route_revision, task_id, outbound_kind
+    route_revision, task_id, outbound_kind, issue_id, comment_id
 ) VALUES (
     $1, $2,
     $3, $4,
     $5, $6,
-    $7
+    $7, $8,
+    $9
 )
 ON CONFLICT (installation_id, channel_message_id) DO NOTHING
 `
@@ -2566,6 +2803,8 @@ type RecordChannelOutboundMessageParams struct {
 	OutboundRouteRevision  int64       `json:"outbound_route_revision"`
 	OutboundTaskID         pgtype.UUID `json:"outbound_task_id"`
 	OutboundKind           string      `json:"outbound_kind"`
+	OutboundIssueID        pgtype.UUID `json:"outbound_issue_id"`
+	OutboundCommentID      pgtype.UUID `json:"outbound_comment_id"`
 }
 
 // =====================
@@ -2580,6 +2819,8 @@ func (q *Queries) RecordChannelOutboundMessage(ctx context.Context, arg RecordCh
 		arg.OutboundRouteRevision,
 		arg.OutboundTaskID,
 		arg.OutboundKind,
+		arg.OutboundIssueID,
+		arg.OutboundCommentID,
 	)
 	return err
 }

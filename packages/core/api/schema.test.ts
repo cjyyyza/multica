@@ -614,6 +614,91 @@ describe("ApiClient schema fallback", () => {
     });
   });
 
+  describe("POPO integration", () => {
+    it("falls back to a safe empty installation list when the response is malformed", async () => {
+      stubFetchJson({ installations: "not-an-array", configured: true });
+      const client = new ApiClient("https://api.example.test");
+      await expect(client.listPopoInstallations("ws-1")).resolves.toEqual({
+        installations: [],
+        configured: false,
+      });
+    });
+
+    it("falls back safely when register and redeem responses are malformed", async () => {
+      stubFetchJson({ id: 123 });
+      const client = new ApiClient("https://api.example.test");
+      await expect(
+        client.registerPopoBot("ws-1", "agent-1", {
+          bridge_id: "b1",
+          robot_id: "default",
+        }),
+      ).resolves.toMatchObject({ id: "", status: "revoked" });
+
+      stubFetchJson({ workspace_id: 123 });
+      await expect(client.redeemPopoBindingToken("bind-token")).resolves.toEqual({
+        workspace_id: "",
+        installation_id: "",
+        popo_user_id: "",
+      });
+    });
+
+    it("falls back to a safe empty bridge list when the response is malformed", async () => {
+      stubFetchJson({ bridges: "not-an-array", configured: true });
+      const client = new ApiClient("https://api.example.test");
+      await expect(client.listPopoBridges("ws-1")).resolves.toEqual({
+        bridges: [],
+        configured: false,
+      });
+    });
+
+    it("falls back to a safe empty status when the response is malformed", async () => {
+      stubFetchJson({ bridges: "not-an-array", configured: true, runtime_online: "yes" });
+      const client = new ApiClient("https://api.example.test");
+      await expect(client.getPopoStatus("ws-1")).resolves.toEqual({
+        configured: false,
+        protocol_version: 1,
+        bridges: [],
+        runtime_online: false,
+      });
+    });
+
+    it("falls back safely when a pairing response is malformed", async () => {
+      stubFetchJson({ id: 123, pairing_code: ["secret"] });
+      const client = new ApiClient("https://api.example.test");
+      await expect(client.createPopoBridgePairing("ws-1")).resolves.toEqual({
+        id: "",
+        pairing_code: "",
+        expires_at: "",
+        ttl_seconds: 900,
+      });
+    });
+
+    it("falls back safely when registration create and poll responses are malformed", async () => {
+      stubFetchJson({ id: 123, status: ["pending"] });
+      const client = new ApiClient("https://api.example.test");
+      await expect(client.createPopoRegistration("ws-1", "agent-1")).resolves.toEqual({
+        id: "",
+        status: "pending",
+        qr_url: "",
+        robot_id: "",
+        installation_id: "",
+        error_reason: "",
+        poll_interval_seconds: 2,
+      });
+
+      stubFetchJson(null);
+      await expect(client.getPopoRegistration("ws-1", "reg-1")).resolves.toEqual({
+        id: "",
+        status: "pending",
+        qr_url: "",
+        robot_id: "",
+        installation_id: "",
+        error_reason: "",
+        poll_interval_seconds: 2,
+      });
+    });
+  });
+
   describe("listDingTalkGroups", () => {
     it("preserves bot activity metadata for each group relationship", async () => {
       stubFetchJson({

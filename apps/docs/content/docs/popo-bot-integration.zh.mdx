@@ -1,0 +1,73 @@
+---
+title: POPO 机器人
+description: 通过 Windows 上的 dj01bot 通道，把 Multica 智能体接到 POPO。
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+POPO 的产品面和飞书一样（IM 通道 + 共享引擎）。Windows 进程持有 POPO 连接，用工作区限定的通道凭证连 Multica。服务端不会打开 POPO、popo-cli 或 dj01bot。
+
+一个 dj01bot 机器人对应一个 Multica 智能体。`robot_id` 取自本机 `~/.dj01bot/config.json` 的 `websocketRobots[].id`，默认是 `default`。
+
+## 开始之前
+
+- 工作区 owner 或 admin 在 Multica 创建一次性配对码。
+- 这台 Windows 上已能独立跑通 dj01bot（`start.bat` / `dj01bot gateway`）。
+- 自托管需设置 `MULTICA_POPO_ENABLED=true`。
+
+<Callout type="info">
+`multica popo gateway` 已移除，改用 `python -m nanobot.multica_bridge`。
+</Callout>
+
+## 1. 配对 Windows 通道
+
+1. 在 Multica 创建一次性配对码（owner/admin）。
+2. 在 Windows 上：
+
+```bash
+python -m nanobot.multica_bridge pair --server https://your-multica.example --pairing-code <code>
+python -m nanobot.multica_bridge run --server https://your-multica.example
+```
+
+配对成功后把 `{server, bridge_id, token, workspace_id}` 写到 `%LOCALAPPDATA%/dj01bot/multica-bridge/`。保持 `run` 运行，心跳超过 45 秒会显示离线。
+
+## 2. 把机器人连到智能体
+
+1. 打开 **智能体**，选一个智能体，进入 **集成**。
+2. 选择在线的 Windows 通道，以及空闲机器人（已连接且未被 dj01bot/Sparse 占用）。
+3. 点击 **连接**。
+
+一个机器人只能绑定一个有效的 Multica 智能体。
+
+## 首次使用与账号绑定
+
+成员第一次找机器人说话时，会收到一次性绑定链接（`/popo/bind?token=`）。打开、登录同一工作区，再回到 POPO 重发消息。链接 15 分钟过期。
+
+## 怎么用
+
+### 私聊
+
+直接发文字，不需要 @。
+
+### 群聊
+
+本版不接群聊 @、媒体、扫码开通，以及 `/reply` `/status` `/stop`。
+
+### 命令
+
+- `/new`、`/clear` 走共享引擎，和飞书一样。
+- `/issue <标题>` 建 Multica 单（`origin_type=popo_chat`）。
+
+## 管理连接
+
+**设置 → 集成 → POPO** 可查看通道和机器人。owner / admin 可以立即撤销通道凭证。断开机器人后该智能体不再收发 POPO，Multica 会话会保留。
+
+## 自托管
+
+```dotenv
+MULTICA_POPO_ENABLED=true
+```
+
+未设置或不是 `true` 时，管理接口返回 `configured: false`，Windows 通道接口返回 `503 popo_not_configured`。
+
+`popo-cli` 是登录用户身份（给别的 Windows 工具用），不是这条机器人通道。

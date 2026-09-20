@@ -94,6 +94,13 @@ vi.mock("@multica/core/telegram", () => ({
   }),
 }));
 
+vi.mock("@multica/core/popo", () => ({
+  popoInstallationsOptions: () => ({
+    queryKey: ["popo", "installations"],
+    queryFn: vi.fn(),
+  }),
+}));
+
 vi.mock("@multica/core/dingtalk", () => ({
   dingtalkInstallationsOptions: () => ({
     queryKey: ["dingtalk", "installations"],
@@ -166,6 +173,22 @@ vi.mock("../../../settings/components/wecom-tab", () => ({
 vi.mock("../../../settings/components/telegram-tab", () => ({
   TelegramAgentBindButton: ({ agentId }: { agentId: string }) => (
     <div data-testid="telegram-bind-button" data-agent-id={agentId} />
+  ),
+}));
+
+vi.mock("../../../settings/components/popo-tab", () => ({
+  PopoAgentBindButton: ({
+    agentId,
+    agentOwnerId,
+  }: {
+    agentId: string;
+    agentOwnerId?: string | null;
+  }) => (
+    <div
+      data-testid="popo-bind-button"
+      data-agent-id={agentId}
+      data-agent-owner-id={agentOwnerId ?? ""}
+    />
   ),
 }));
 
@@ -275,11 +298,13 @@ describe("IntegrationsTab", () => {
     expect(screen.getByText("Lark")).toBeTruthy();
     expect(screen.getByText("Slack")).toBeTruthy();
     expect(screen.getByText("Telegram")).toBeTruthy();
+    expect(screen.getByText("POPO")).toBeTruthy();
     expect(screen.getByTestId("lark-bind-button").getAttribute("data-agent-id")).toBe("agent-1");
     expect(screen.getByTestId("slack-bind-button").getAttribute("data-agent-id")).toBe("agent-1");
     expect(screen.getByTestId("telegram-bind-button").getAttribute("data-agent-id")).toBe(
       "agent-1",
     );
+    expect(screen.getByTestId("popo-bind-button").getAttribute("data-agent-id")).toBe("agent-1");
   });
 
   it("shows only this Agent's 1:1 bot and its groups", () => {
@@ -553,22 +578,25 @@ describe("IntegrationsTab", () => {
     expect(screen.queryByTestId("slack-bind-button")).toBeNull();
     expect(screen.queryByTestId("wecom-bind-button")).toBeNull();
     expect(screen.queryByTestId("telegram-bind-button")).toBeNull();
+    expect(screen.queryByTestId("popo-bind-button")).toBeNull();
   });
 
-  it("lets a non-admin agent owner bind Lark and DingTalk", () => {
-    // The agent's owner (user-1) is only a plain workspace member. Lark and
-    // DingTalk both authorize the target agent's owner through canManageAgent;
-    // Slack, WeCom and Telegram remain workspace owner/admin-only.
+  it("lets a non-admin agent owner bind Lark, DingTalk, and POPO", () => {
+    // The agent's owner (user-1) is only a plain workspace member. Lark,
+    // DingTalk and POPO authorize the target agent's owner through
+    // canManageAgent; Slack, WeCom and Telegram remain workspace owner/admin-only.
     membersRef.current = [{ user_id: "user-1", role: "member" }];
     renderTab(<IntegrationsTab agent={agent} />);
     const larkButton = screen.getByTestId("lark-bind-button");
     expect(larkButton.getAttribute("data-agent-id")).toBe("agent-1");
     expect(larkButton.getAttribute("data-agent-owner-id")).toBe("user-1");
     expect(screen.getByTestId("dingtalk-agent-connect")).toBeTruthy();
+    const popoButton = screen.getByTestId("popo-bind-button");
+    expect(popoButton.getAttribute("data-agent-id")).toBe("agent-1");
+    expect(popoButton.getAttribute("data-agent-owner-id")).toBe("user-1");
     expect(screen.queryByTestId("slack-bind-button")).toBeNull();
     expect(screen.queryByTestId("wecom-bind-button")).toBeNull();
     expect(screen.queryByTestId("telegram-bind-button")).toBeNull();
-    // The Slack, WeCom and Telegram sections fall back to the shared members note.
     expect(
       screen.getAllByText(/Only workspace owners and admins can manage this connection/i),
     ).toHaveLength(3);

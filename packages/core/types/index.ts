@@ -251,6 +251,23 @@ export type {
   RedeemTelegramBindingTokenResponse,
 } from "./telegram";
 export type {
+  PopoInstallation,
+  ListPopoInstallationsResponse,
+  RegisterPopoRequest,
+  RedeemPopoBindingTokenResponse,
+  PopoRobotOccupant,
+  PopoBridgeRobot,
+  PopoBridge,
+  ListPopoBridgesResponse,
+  PopoStatusBridge,
+  PopoStatusResponse,
+  PopoBridgePairing,
+  CreatePopoBridgePairingRequest,
+  CreatePopoRegistrationRequest,
+  PopoRegistration,
+} from "./popo";
+export { isIdlePopoRobot } from "./popo";
+export type {
   Autopilot,
   AutopilotStatus,
   AutopilotExecutionMode,

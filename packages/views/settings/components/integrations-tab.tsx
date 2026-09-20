@@ -16,6 +16,7 @@ import { slackInstallationsOptions } from "@multica/core/slack";
 import { dingtalkInstallationsOptions } from "@multica/core/dingtalk";
 import { wecomInstallationsOptions } from "@multica/core/wecom";
 import { telegramInstallationsOptions } from "@multica/core/telegram";
+import { popoInstallationsOptions } from "@multica/core/popo";
 import { vcsConnectionsOptions } from "@multica/core/vcs";
 import { useConfigStore, useFeatureEnabled } from "@multica/core/config";
 import { COMPOSIO_MCP_APPS_FLAG } from "@multica/core/feature-flags";
@@ -29,6 +30,7 @@ import { DingTalkTab } from "./dingtalk-tab";
 import { VCSTab } from "./vcs-tab";
 import { WecomTab } from "./wecom-tab";
 import { TelegramTab } from "./telegram-tab";
+import { PopoTab } from "./popo-tab";
 import { GitHubTab } from "./github-tab";
 import { YixiezuoTab } from "./yixiezuo-tab";
 import { GitHubMark } from "./github-mark";
@@ -105,6 +107,11 @@ export function IntegrationsTab() {
   });
   const telegram = useQuery({
     ...telegramInstallationsOptions(wsId),
+    enabled: canView,
+    select: hasActiveInstallation,
+  });
+  const popo = useQuery({
+    ...popoInstallationsOptions(wsId),
     enabled: canView,
     select: hasActiveInstallation,
   });
@@ -207,6 +214,14 @@ export function IntegrationsTab() {
           icon: <IntegrationChannelIcon channel="telegram" />,
           content: <TelegramTab />,
           state: telegram,
+        },
+        {
+          id: "popo",
+          label: t(($) => $.popo.section_title),
+          description: t(($) => $.popo.page_description),
+          icon: <IntegrationChannelIcon channel="popo" />,
+          content: <PopoTab />,
+          state: popo,
         },
       ],
     },

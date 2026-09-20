@@ -13,10 +13,10 @@ func yixiezuoRequest(method, path string, body any) *http.Request {
 	return withURLParam(newRequest(method, path, body), "id", testWorkspaceID)
 }
 func manualOperationRequest(method, operationID string, body any) *http.Request {
-	return withURLParam(yixiezuoRequest(method, "/api/workspaces/"+testWorkspaceID+"/yixiezuo/operations/"+operationID, body), "operationId", operationID)
+	return withURLParams(newRequest(method, "/api/workspaces/"+testWorkspaceID+"/yixiezuo/operations/"+operationID, body), "id", testWorkspaceID, "operationId", operationID)
 }
 func manualIssueRequest(method, issueID string, body any) *http.Request {
-	return withURLParam(yixiezuoRequest(method, "/api/workspaces/"+testWorkspaceID+"/yixiezuo/imports/"+issueID, body), "issueId", issueID)
+	return withURLParams(newRequest(method, "/api/workspaces/"+testWorkspaceID+"/yixiezuo/imports/"+issueID, body), "id", testWorkspaceID, "issueId", issueID)
 }
 func prepareManualImport(t *testing.T) (string, IssueResponse) {
 	t.Helper()

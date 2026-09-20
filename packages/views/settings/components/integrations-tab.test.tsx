@@ -71,6 +71,9 @@ vi.mock("./telegram-tab", () => ({
 vi.mock("./yixiezuo-tab", () => ({
   YixiezuoTab: () => <div>Yixiezuo detail</div>,
 }));
+vi.mock("./popo-tab", () => ({
+  PopoTab: () => <div>POPO detail</div>,
+}));
 
 import { IntegrationsTab } from "./integrations-tab";
 
@@ -95,11 +98,11 @@ describe("Integration directory", () => {
       screen.getByRole("link", { name: /GitHub Connected/ }),
     ).toBeInTheDocument();
     expect(screen.queryByText("GitHub detail")).not.toBeInTheDocument();
-    const shapes = ["lark", "slack", "dingtalk", "wecom", "telegram"].map(
+    const shapes = ["lark", "slack", "dingtalk", "wecom", "telegram", "popo"].map(
       (channel) =>
         screen.getByTestId(`integration-channel-icon-${channel}`).innerHTML,
     );
-    expect(new Set(shapes).size).toBe(5);
+    expect(new Set(shapes).size).toBe(6);
     fireEvent.click(screen.getByRole("link", { name: /GitHub Connected/ }));
     expect(state.push).toHaveBeenCalledWith(
       "/acme/settings?tab=integrations&integration=github",
@@ -177,7 +180,7 @@ describe("Integration directory", () => {
     expect(
       screen.getByRole("link", { name: /GitHub Connected/ }),
     ).toBeInTheDocument();
-    for (const channel of ["Lark", "Slack", "DingTalk", "WeCom", "Telegram"]) {
+    for (const channel of ["Lark", "Slack", "DingTalk", "WeCom", "Telegram", "POPO"]) {
       expect(
         screen.getByRole("link", { name: new RegExp(`${channel} Not connected`) }),
       ).toBeInTheDocument();

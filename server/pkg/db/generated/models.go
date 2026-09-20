@@ -386,6 +386,19 @@ type ChannelInboundMessageDedup struct {
 	ClaimToken     pgtype.UUID        `json:"claim_token"`
 }
 
+type ChannelInboundWrite struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	ChannelType    string             `json:"channel_type"`
+	MessageID      string             `json:"message_id"`
+	Kind           string             `json:"kind"`
+	IssueID        pgtype.UUID        `json:"issue_id"`
+	CommentID      pgtype.UUID        `json:"comment_id"`
+	TaskID         pgtype.UUID        `json:"task_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
 type ChannelInstallation struct {
 	ID               pgtype.UUID        `json:"id"`
 	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
@@ -399,6 +412,19 @@ type ChannelInstallation struct {
 	InstalledAt      pgtype.Timestamptz `json:"installed_at"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ChannelIssueSource struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	IssueID        pgtype.UUID        `json:"issue_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	ChannelType    string             `json:"channel_type"`
+	ChannelChatID  string             `json:"channel_chat_id"`
+	ChatType       string             `json:"chat_type"`
+	BindingID      pgtype.UUID        `json:"binding_id"`
+	RouteRevision  int64              `json:"route_revision"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
 type ChannelMediaPendingObject struct {
@@ -438,6 +464,8 @@ type ChannelOutboundMessage struct {
 	TaskID           pgtype.UUID        `json:"task_id"`
 	OutboundKind     string             `json:"outbound_kind"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	IssueID          pgtype.UUID        `json:"issue_id"`
+	CommentID        pgtype.UUID        `json:"comment_id"`
 }
 
 type ChannelTaskDelivery struct {
@@ -1190,6 +1218,120 @@ type PluginStorage struct {
 	ScopeID        pgtype.UUID        `json:"scope_id"`
 	Key            string             `json:"key"`
 	Value          string             `json:"value"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PopoBridge struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	TokenHash       string             `json:"token_hash"`
+	Hostname        string             `json:"hostname"`
+	Status          string             `json:"status"`
+	LastHeartbeatAt pgtype.Timestamptz `json:"last_heartbeat_at"`
+	RobotsJson      []byte             `json:"robots_json"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	RevokedAt       pgtype.Timestamptz `json:"revoked_at"`
+	RevokedBy       pgtype.UUID        `json:"revoked_by"`
+}
+
+type PopoBridgeCommand struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	BridgeID        pgtype.UUID        `json:"bridge_id"`
+	InstallationID  pgtype.UUID        `json:"installation_id"`
+	Type            string             `json:"type"`
+	DeliveryID      pgtype.UUID        `json:"delivery_id"`
+	Payload         []byte             `json:"payload"`
+	Status          string             `json:"status"`
+	LeaseExpiresAt  pgtype.Timestamptz `json:"lease_expires_at"`
+	RemoteMessageID pgtype.Text        `json:"remote_message_id"`
+	LastError       pgtype.Text        `json:"last_error"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PopoBridgePairing struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	CodeHash    string             `json:"code_hash"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	Hostname    string             `json:"hostname"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt  pgtype.Timestamptz `json:"consumed_at"`
+	BridgeID    pgtype.UUID        `json:"bridge_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type PopoInboundEvent struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	BridgeID       pgtype.UUID        `json:"bridge_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	EventID        string             `json:"event_id"`
+	RobotID        string             `json:"robot_id"`
+	Accepted       bool               `json:"accepted"`
+	Duplicate      bool               `json:"duplicate"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type PopoMediaStaging struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	BridgeID       pgtype.UUID        `json:"bridge_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	RobotID        string             `json:"robot_id"`
+	EventID        string             `json:"event_id"`
+	MediaIndex     int32              `json:"media_index"`
+	Filename       string             `json:"filename"`
+	MimeType       string             `json:"mime_type"`
+	SizeBytes      int64              `json:"size_bytes"`
+	Kind           string             `json:"kind"`
+	Status         string             `json:"status"`
+	StorageKey     pgtype.Text        `json:"storage_key"`
+	StorageUrl     pgtype.Text        `json:"storage_url"`
+	Error          pgtype.Text        `json:"error"`
+	UploadedAt     pgtype.Timestamptz `json:"uploaded_at"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type PopoOutboundMediaGrant struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	BridgeID       pgtype.UUID        `json:"bridge_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	CommandID      pgtype.UUID        `json:"command_id"`
+	AttachmentID   pgtype.UUID        `json:"attachment_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+}
+
+type PopoOutboundQueue struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	ChatID         string             `json:"chat_id"`
+	RobotID        string             `json:"robot_id"`
+	Content        string             `json:"content"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	DeliveredAt    pgtype.Timestamptz `json:"delivered_at"`
+	LastError      pgtype.Text        `json:"last_error"`
+}
+
+type PopoRegistration struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	AgentID        pgtype.UUID        `json:"agent_id"`
+	InitiatorID    pgtype.UUID        `json:"initiator_id"`
+	BridgeID       pgtype.UUID        `json:"bridge_id"`
+	Status         string             `json:"status"`
+	QrUrl          string             `json:"qr_url"`
+	RobotID        string             `json:"robot_id"`
+	RobotName      string             `json:"robot_name"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	ErrorReason    string             `json:"error_reason"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }

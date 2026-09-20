@@ -431,6 +431,36 @@ deleted_channel_outbound_messages AS (
     DELETE FROM channel_outbound_message
     WHERE installation_id IN (SELECT id FROM ws_channel_installations)
 ),
+deleted_channel_issue_sources AS (
+    DELETE FROM channel_issue_source WHERE workspace_id = $1
+),
+deleted_channel_inbound_writes AS (
+    DELETE FROM channel_inbound_write WHERE workspace_id = $1
+),
+deleted_popo_outbound_queue AS (
+    DELETE FROM popo_outbound_queue WHERE workspace_id = $1
+),
+deleted_popo_inbound_event AS (
+    DELETE FROM popo_inbound_event WHERE workspace_id = $1
+),
+deleted_popo_media_staging AS (
+    DELETE FROM popo_media_staging WHERE workspace_id = $1
+),
+deleted_popo_outbound_media_grant AS (
+    DELETE FROM popo_outbound_media_grant WHERE workspace_id = $1
+),
+deleted_popo_registration AS (
+    DELETE FROM popo_registration WHERE workspace_id = $1
+),
+deleted_popo_bridge_command AS (
+    DELETE FROM popo_bridge_command WHERE workspace_id = $1
+),
+deleted_popo_bridge_pairing AS (
+    DELETE FROM popo_bridge_pairing WHERE workspace_id = $1
+),
+deleted_popo_bridge AS (
+    DELETE FROM popo_bridge WHERE workspace_id = $1
+),
 deleted_channel_chat_contexts AS (
     DELETE FROM channel_chat_context_generation
     WHERE chat_session_id IN (SELECT id FROM ws_sessions)

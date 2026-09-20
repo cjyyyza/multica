@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -133,6 +134,33 @@ type IssueCreateOpts struct {
 	// still resolving, then promotes the returned task after attachment binding.
 	// Zero preserves the ordinary immediate enqueue path.
 	AssignedAgentRunFireAt time.Time
+
+	// ChannelIdempotency, when set, keys this create by the inbound channel
+	// event. The write row and issue insert share the create transaction so a
+	// replay cannot treat "chat message already deduped" as "issue created".
+	ChannelIdempotency *ChannelIdempotencyKey
+
+	// ChannelSource freezes the originating chat for channel-created issues
+	// so later comments and run results return to that route.
+	ChannelSource *ChannelIssueSource
+}
+
+// ChannelIdempotencyKey is the external event key for a channel issue write.
+type ChannelIdempotencyKey struct {
+	InstallationID pgtype.UUID
+	ChannelType    string
+	MessageID      string
+	Kind           string
+}
+
+// ChannelIssueSource is the frozen originating chat for a channel-created issue.
+type ChannelIssueSource struct {
+	InstallationID pgtype.UUID
+	ChannelType    string
+	ChatID         string
+	ChatType       string
+	BindingID      pgtype.UUID
+	RouteRevision  int64
 }
 
 // ErrActiveDuplicate signals that the duplicate guard found an active
@@ -203,6 +231,9 @@ type IssueCreateResult struct {
 	// understood label_ids (see the create handler's compatibility contract).
 	Labels         []db.IssueLabel
 	DuplicateIssue *db.Issue
+	// IdempotentReplay is true when ChannelIdempotency found a prior write for
+	// the same inbound event. The returned Issue is the original row.
+	IdempotentReplay bool
 }
 
 // Create runs the full issue-creation pipeline atomically end-to-end:
@@ -272,6 +303,12 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 			p.Yixiezuo.Attachments[i].LocalURL = attachment.Url
 		}
 		p.Description = pgtype.Text{String: p.Yixiezuo.Markdown(), Valid: true}
+	}
+
+	if replay, ok, replayErr := s.loadChannelIssueReplay(ctx, qtx, opts.ChannelIdempotency); replayErr != nil {
+		return IssueCreateResult{}, replayErr
+	} else if ok {
+		return IssueCreateResult{Issue: replay, IdempotentReplay: true}, nil
 	}
 
 	// A quick-create origin is authoritative user input, so validate and claim
@@ -516,6 +553,13 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		}
 	}
 
+	if err := s.persistChannelIssueLedger(ctx, qtx, issue, opts); err != nil {
+		if replay, ok, replayErr := s.loadChannelIssueReplay(ctx, qtx, opts.ChannelIdempotency); replayErr == nil && ok {
+			return IssueCreateResult{Issue: replay, IdempotentReplay: true}, nil
+		}
+		return IssueCreateResult{}, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return IssueCreateResult{}, fmt.Errorf("commit: %w", err)
 	}
@@ -703,6 +747,76 @@ func (s *IssueService) linkAttachments(ctx context.Context, issue db.Issue, ids 
 	return list
 }
 
+func (s *IssueService) loadChannelIssueReplay(ctx context.Context, q *db.Queries, key *ChannelIdempotencyKey) (db.Issue, bool, error) {
+	if key == nil || !key.InstallationID.Valid || strings.TrimSpace(key.MessageID) == "" {
+		return db.Issue{}, false, nil
+	}
+	kind := key.Kind
+	if kind == "" {
+		kind = "issue"
+	}
+	row, err := q.GetChannelInboundWrite(ctx, db.GetChannelInboundWriteParams{
+		InstallationID: key.InstallationID,
+		MessageID:      key.MessageID,
+		Kind:           kind,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.Issue{}, false, nil
+		}
+		return db.Issue{}, false, err
+	}
+	if !row.IssueID.Valid {
+		return db.Issue{}, false, nil
+	}
+	issue, err := q.GetIssue(ctx, row.IssueID)
+	if err != nil {
+		return db.Issue{}, false, err
+	}
+	return issue, true, nil
+}
+
+func (s *IssueService) persistChannelIssueLedger(ctx context.Context, qtx *db.Queries, issue db.Issue, opts IssueCreateOpts) error {
+	if key := opts.ChannelIdempotency; key != nil && key.InstallationID.Valid && strings.TrimSpace(key.MessageID) != "" {
+		kind := key.Kind
+		if kind == "" {
+			kind = "issue"
+		}
+		channelType := key.ChannelType
+		if channelType == "" {
+			channelType = "popo"
+		}
+		if _, err := qtx.InsertChannelInboundWrite(ctx, db.InsertChannelInboundWriteParams{
+			WorkspaceID:    issue.WorkspaceID,
+			InstallationID: key.InstallationID,
+			ChannelType:    channelType,
+			MessageID:      key.MessageID,
+			Kind:           kind,
+			IssueID:        issue.ID,
+		}); err != nil {
+			if isUniqueViolation(err) {
+				return err
+			}
+			return fmt.Errorf("persist channel inbound write: %w", err)
+		}
+	}
+	if src := opts.ChannelSource; src != nil && src.InstallationID.Valid && strings.TrimSpace(src.ChatID) != "" {
+		if _, err := qtx.InsertChannelIssueSource(ctx, db.InsertChannelIssueSourceParams{
+			WorkspaceID:    issue.WorkspaceID,
+			IssueID:        issue.ID,
+			InstallationID: src.InstallationID,
+			ChannelType:    src.ChannelType,
+			ChannelChatID:  src.ChatID,
+			ChatType:       src.ChatType,
+			BindingID:      src.BindingID,
+			RouteRevision:  src.RouteRevision,
+		}); err != nil && !isUniqueViolation(err) {
+			return fmt.Errorf("persist channel issue source: %w", err)
+		}
+	}
+	return nil
+}
+
 func (s *IssueService) publishIssueCreated(issue db.Issue, attachments []db.Attachment, labels []db.IssueLabel, creatorType, actorID string, opts IssueCreateOpts) {
 	if s.Bus == nil {
 		return
@@ -831,6 +945,8 @@ func classifyOrigin(issue db.Issue, opts IssueCreateOpts) (source, taskID, autop
 		return analytics.SourceManual, originID, ""
 	case "autopilot":
 		return analytics.SourceAutopilot, "", originID
+	case "lark_chat", "slack_chat", "dingtalk_chat", "wecom_chat", "telegram_chat", "popo_chat":
+		return analytics.SourceManual, "", ""
 	default:
 		slog.Warn("analytics: unknown issue origin type",
 			"origin_type", issue.OriginType.String,

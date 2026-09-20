@@ -1,0 +1,16 @@
+---
+title: POPO Bot
+description: Windows dj01bot 브리지로 Multica 에이전트를 POPO에 연결합니다.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+POPO의 제품 면은 Feishu/Lark와 같습니다(IM 채널 + 공유 엔진). Windows 프로세스가 POPO 연결을 들고, 워크스페이스 한정 브리지 자격 증명으로 Multica에 붙습니다. API 서버는 POPO, popo-cli, dj01bot을 열지 않습니다.
+
+자세한 절차는 [영문](/popo-bot-integration)과 [중문](/zh/popo-bot-integration)을 보세요.
+
+1. Multica에서 일회용 페어링 코드를 만듭니다(owner/admin).
+2. Windows에서 `python -m nanobot.multica_bridge pair`와 `run`을 실행합니다.
+3. 온라인 Windows 브리지와 유휴 로봇을 에이전트에 연결합니다.
+
+서버 스위치는 `MULTICA_POPO_ENABLED=true`입니다. `multica popo gateway`는 제거되었습니다.

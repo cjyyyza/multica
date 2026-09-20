@@ -13,6 +13,21 @@ import {
   EMPTY_TELEGRAM_INSTALLATION,
   EMPTY_LIST_TELEGRAM_INSTALLATIONS_RESPONSE,
   EMPTY_REDEEM_TELEGRAM_BINDING_TOKEN_RESPONSE,
+  PopoInstallationSchema,
+  ListPopoInstallationsResponseSchema,
+  RedeemPopoBindingTokenResponseSchema,
+  PopoBridgeSchema,
+  ListPopoBridgesResponseSchema,
+  PopoStatusResponseSchema,
+  PopoBridgePairingSchema,
+  PopoRegistrationSchema,
+  EMPTY_POPO_INSTALLATION,
+  EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE,
+  EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE,
+  EMPTY_LIST_POPO_BRIDGES_RESPONSE,
+  EMPTY_POPO_STATUS_RESPONSE,
+  EMPTY_POPO_BRIDGE_PAIRING,
+  EMPTY_POPO_REGISTRATION,
   AgentTaskListSchema,
   TaskMessageListSchema,
   AutopilotQuotaUsageSchema,
@@ -2019,6 +2034,228 @@ describe("Telegram installation schemas", () => {
         { endpoint: "POST /api/telegram/binding/redeem" },
       ),
     ).toEqual(EMPTY_REDEEM_TELEGRAM_BINDING_TOKEN_RESPONSE);
+  });
+});
+
+describe("POPO installation schemas", () => {
+  it("parses a well-formed installation", () => {
+    const parsed = PopoInstallationSchema.parse({
+      id: "i1",
+      workspace_id: "w1",
+      agent_id: "a1",
+      robot_id: "default",
+      robot_name: "dj01",
+      webhook_url: "http://127.0.0.1:28792",
+      installer_user_id: "u1",
+      status: "active",
+    });
+    expect(parsed.robot_id).toBe("default");
+    expect(parsed.status).toBe("active");
+  });
+
+  it("defaults incomplete data to the disconnected state", () => {
+    const parsed = PopoInstallationSchema.parse({ id: "i1" });
+    expect(parsed.status).toBe("revoked");
+    expect(parsed.robot_id).toBe("");
+    expect(parsed.bridge_id).toBe("");
+    expect(parsed.webhook_url).toBe("");
+    const list = ListPopoInstallationsResponseSchema.parse({});
+    expect(list).toEqual({ installations: [], configured: false });
+  });
+
+  it("falls back safely for malformed list, install, and redeem responses", () => {
+    expect(
+      parseWithFallback(
+        "not json",
+        ListPopoInstallationsResponseSchema,
+        EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE,
+        { endpoint: "GET /api/workspaces/:id/popo/installations" },
+      ),
+    ).toEqual(EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE);
+    expect(
+      parseWithFallback(42, PopoInstallationSchema, EMPTY_POPO_INSTALLATION, {
+        endpoint: "POST /api/workspaces/:id/popo/install",
+      }),
+    ).toEqual(EMPTY_POPO_INSTALLATION);
+    expect(
+      parseWithFallback(
+        null,
+        RedeemPopoBindingTokenResponseSchema,
+        EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE,
+        { endpoint: "POST /api/popo/binding/redeem" },
+      ),
+    ).toEqual(EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE);
+  });
+});
+
+describe("POPO bridge schemas", () => {
+  it("parses a well-formed bridge list including idle and occupied robots", () => {
+    const parsed = ListPopoBridgesResponseSchema.parse({
+      configured: true,
+      bridges: [
+        {
+          id: "b1",
+          hostname: "WIN-HOST",
+          status: "active",
+          online: true,
+          last_heartbeat_at: "2026-09-19T12:00:00Z",
+          robots: [
+            {
+              robot_id: "default",
+              display_name: "Support Bot",
+              connected: true,
+              occupied_by: null,
+            },
+            {
+              robot_id: "busy",
+              connected: true,
+              occupied_by: "dj01bot",
+            },
+          ],
+          created_at: "2026-09-19T11:00:00Z",
+        },
+      ],
+    });
+    expect(parsed.configured).toBe(true);
+    expect(parsed.bridges[0]?.hostname).toBe("WIN-HOST");
+    expect(parsed.bridges[0]?.robots[0]?.occupied_by).toBeNull();
+    expect(parsed.bridges[0]?.robots[1]?.occupied_by).toBe("dj01bot");
+    expect(parsed.bridges[0]?.robots[1]?.display_name).toBe("");
+  });
+
+  it("keeps unknown occupancy and status strings", () => {
+    const parsed = PopoBridgeSchema.parse({
+      id: "b1",
+      status: "draining",
+      online: true,
+      robots: [{ robot_id: "r1", connected: true, occupied_by: "future-lock" }],
+    });
+    expect(parsed.status).toBe("draining");
+    expect(parsed.robots[0]?.occupied_by).toBe("future-lock");
+  });
+
+  it("defaults an incomplete bridge list to disconnected / not configured", () => {
+    const list = ListPopoBridgesResponseSchema.parse({});
+    expect(list).toEqual({ bridges: [], configured: false });
+    const pairing = PopoBridgePairingSchema.parse({ id: "p1" });
+    expect(pairing.pairing_code).toBe("");
+    expect(pairing.ttl_seconds).toBe(900);
+  });
+
+  it("falls back safely for malformed bridge list and pairing responses", () => {
+    expect(
+      parseWithFallback(
+        "not json",
+        ListPopoBridgesResponseSchema,
+        EMPTY_LIST_POPO_BRIDGES_RESPONSE,
+        { endpoint: "GET /api/workspaces/:id/popo/bridges" },
+      ),
+    ).toEqual(EMPTY_LIST_POPO_BRIDGES_RESPONSE);
+    expect(
+      parseWithFallback(42, PopoBridgePairingSchema, EMPTY_POPO_BRIDGE_PAIRING, {
+        endpoint: "POST /api/workspaces/:id/popo/bridge-pairings",
+      }),
+    ).toEqual(EMPTY_POPO_BRIDGE_PAIRING);
+  });
+});
+
+describe("POPO status schemas", () => {
+  it("parses independent counters and does not invent a health flag", () => {
+    const parsed = PopoStatusResponseSchema.parse({
+      configured: true,
+      protocol_version: 1,
+      runtime_online: false,
+      bridges: [
+        {
+          id: "b1",
+          hostname: "WIN-HOST",
+          online: true,
+          last_heartbeat_at: "2026-09-19T12:00:00Z",
+          popo_connected: true,
+          robots: [{ robot_id: "default", connected: true, occupied_by: null }],
+          inbound_backlog: 2,
+          outbound_backlog: 4,
+          unknown_deliveries: 1,
+        },
+      ],
+    });
+    expect(parsed.runtime_online).toBe(false);
+    expect(parsed.bridges[0]?.online).toBe(true);
+    expect(parsed.bridges[0]?.popo_connected).toBe(true);
+    expect(parsed.bridges[0]?.inbound_backlog).toBe(2);
+    expect(parsed.bridges[0]?.outbound_backlog).toBe(4);
+    expect(parsed.bridges[0]?.unknown_deliveries).toBe(1);
+    expect(parsed).not.toHaveProperty("healthy");
+  });
+
+  it("defaults missing counters to zero instead of collapsing to healthy", () => {
+    const parsed = PopoStatusResponseSchema.parse({
+      configured: true,
+      bridges: [{ id: "b1" }],
+    });
+    expect(parsed.protocol_version).toBe(1);
+    expect(parsed.runtime_online).toBe(false);
+    expect(parsed.bridges[0]?.online).toBe(false);
+    expect(parsed.bridges[0]?.popo_connected).toBe(false);
+    expect(parsed.bridges[0]?.inbound_backlog).toBe(0);
+    expect(parsed.bridges[0]?.outbound_backlog).toBe(0);
+    expect(parsed.bridges[0]?.unknown_deliveries).toBe(0);
+  });
+
+  it("falls back safely for a malformed status response", () => {
+    expect(
+      parseWithFallback(
+        { bridges: "not-an-array", configured: true, runtime_online: "yes" },
+        PopoStatusResponseSchema,
+        EMPTY_POPO_STATUS_RESPONSE,
+        { endpoint: "GET /api/workspaces/:id/popo/status" },
+      ),
+    ).toEqual(EMPTY_POPO_STATUS_RESPONSE);
+  });
+});
+
+describe("POPO registration schemas", () => {
+  it("parses a well-formed registration", () => {
+    const parsed = PopoRegistrationSchema.parse({
+      id: "r1",
+      status: "awaiting_scan",
+      qr_url: "https://popo.example/qr",
+      robot_id: "",
+      installation_id: "",
+      error_reason: "",
+      poll_interval_seconds: 2,
+    });
+    expect(parsed.status).toBe("awaiting_scan");
+    expect(parsed.qr_url).toBe("https://popo.example/qr");
+    expect(parsed.poll_interval_seconds).toBe(2);
+  });
+
+  it("defaults incomplete data so older clients keep a pending poll shape", () => {
+    const parsed = PopoRegistrationSchema.parse({ id: "r1" });
+    expect(parsed.status).toBe("pending");
+    expect(parsed.qr_url).toBe("");
+    expect(parsed.robot_id).toBe("");
+    expect(parsed.installation_id).toBe("");
+    expect(parsed.error_reason).toBe("");
+    expect(parsed.poll_interval_seconds).toBe(2);
+  });
+
+  it("keeps an unknown status string from a newer backend", () => {
+    const parsed = PopoRegistrationSchema.parse({ id: "r1", status: "waiting_host" });
+    expect(parsed.status).toBe("waiting_host");
+  });
+
+  it("falls back safely for malformed create and poll responses", () => {
+    expect(
+      parseWithFallback(42, PopoRegistrationSchema, EMPTY_POPO_REGISTRATION, {
+        endpoint: "POST /api/workspaces/:id/popo/registrations",
+      }),
+    ).toEqual(EMPTY_POPO_REGISTRATION);
+    expect(
+      parseWithFallback(null, PopoRegistrationSchema, EMPTY_POPO_REGISTRATION, {
+        endpoint: "GET /api/workspaces/:id/popo/registrations/:registrationId",
+      }),
+    ).toEqual(EMPTY_POPO_REGISTRATION);
   });
 });
 

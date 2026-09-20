@@ -198,6 +198,16 @@ import type {
   ListTelegramInstallationsResponse,
   RegisterTelegramRequest,
   RedeemTelegramBindingTokenResponse,
+  PopoInstallation,
+  ListPopoInstallationsResponse,
+  RegisterPopoRequest,
+  RedeemPopoBindingTokenResponse,
+  ListPopoBridgesResponse,
+  PopoStatusResponse,
+  PopoBridgePairing,
+  CreatePopoBridgePairingRequest,
+  CreatePopoRegistrationRequest,
+  PopoRegistration,
   Squad,
   SquadMember,
   SquadMemberStatusListResponse,
@@ -371,6 +381,20 @@ import {
   EMPTY_LIST_TELEGRAM_INSTALLATIONS_RESPONSE,
   EMPTY_REDEEM_TELEGRAM_BINDING_TOKEN_RESPONSE,
   YixiezuoImportResultSchema,
+  PopoInstallationSchema,
+  ListPopoInstallationsResponseSchema,
+  RedeemPopoBindingTokenResponseSchema,
+  ListPopoBridgesResponseSchema,
+  PopoStatusResponseSchema,
+  PopoBridgePairingSchema,
+  PopoRegistrationSchema,
+  EMPTY_POPO_INSTALLATION,
+  EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE,
+  EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE,
+  EMPTY_LIST_POPO_BRIDGES_RESPONSE,
+  EMPTY_POPO_STATUS_RESPONSE,
+  EMPTY_POPO_BRIDGE_PAIRING,
+  EMPTY_POPO_REGISTRATION,
   EMPTY_BILLING_BALANCE,
   EMPTY_BILLING_TRANSACTIONS_PAGE,
   EMPTY_BILLING_BATCHES_PAGE,
@@ -5010,5 +5034,136 @@ export class ApiClient {
 
   async publishYixiezuoResult(wsId: string, issueId: string, body: { summary: string; status_name: string; revision: number; confirmed: boolean; source_digest: string }): Promise<YixiezuoOperation> {
     return this.yixiezuoOperationRequest(wsId, "/imports/" + issueId + "/publish", body);
+  }
+
+  async listPopoInstallations(
+    workspaceId: string,
+  ): Promise<ListPopoInstallationsResponse> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/popo/installations`);
+    return parseWithFallback(
+      raw,
+      ListPopoInstallationsResponseSchema,
+      EMPTY_LIST_POPO_INSTALLATIONS_RESPONSE,
+      { endpoint: "GET /api/workspaces/:id/popo/installations" },
+    );
+  }
+
+  async listPopoBridges(workspaceId: string): Promise<ListPopoBridgesResponse> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/popo/bridges`);
+    return parseWithFallback(
+      raw,
+      ListPopoBridgesResponseSchema,
+      EMPTY_LIST_POPO_BRIDGES_RESPONSE,
+      { endpoint: "GET /api/workspaces/:id/popo/bridges" },
+    );
+  }
+
+  async getPopoStatus(workspaceId: string): Promise<PopoStatusResponse> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/popo/status`);
+    return parseWithFallback(
+      raw,
+      PopoStatusResponseSchema,
+      EMPTY_POPO_STATUS_RESPONSE,
+      { endpoint: "GET /api/workspaces/:id/popo/status" },
+    );
+  }
+
+  async createPopoBridgePairing(
+    workspaceId: string,
+    body?: CreatePopoBridgePairingRequest,
+  ): Promise<PopoBridgePairing> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/popo/bridge-pairings`,
+      {
+        method: "POST",
+        body: JSON.stringify(body ?? {}),
+      },
+    );
+    return parseWithFallback(raw, PopoBridgePairingSchema, EMPTY_POPO_BRIDGE_PAIRING, {
+      endpoint: "POST /api/workspaces/:id/popo/bridge-pairings",
+    });
+  }
+
+  async revokePopoBridge(workspaceId: string, bridgeId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/popo/bridges/${bridgeId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async registerPopoBot(
+    workspaceId: string,
+    agentId: string,
+    body: RegisterPopoRequest,
+  ): Promise<PopoInstallation> {
+    const search = new URLSearchParams({ agent_id: agentId });
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/popo/install?${search.toString()}`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          bridge_id: body.bridge_id,
+          robot_id: body.robot_id,
+          robot_name: body.robot_name ?? "",
+        }),
+      },
+    );
+    return parseWithFallback(raw, PopoInstallationSchema, EMPTY_POPO_INSTALLATION, {
+      endpoint: "POST /api/workspaces/:id/popo/install",
+    });
+  }
+
+  async deletePopoInstallation(workspaceId: string, installationId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/popo/installations/${installationId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async createPopoRegistration(
+    workspaceId: string,
+    agentId: string,
+    body?: CreatePopoRegistrationRequest,
+  ): Promise<PopoRegistration> {
+    const search = new URLSearchParams({ agent_id: agentId });
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/popo/registrations?${search.toString()}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ bridge_id: body?.bridge_id ?? "" }),
+      },
+    );
+    return parseWithFallback(raw, PopoRegistrationSchema, EMPTY_POPO_REGISTRATION, {
+      endpoint: "POST /api/workspaces/:id/popo/registrations",
+    });
+  }
+
+  async getPopoRegistration(
+    workspaceId: string,
+    registrationId: string,
+  ): Promise<PopoRegistration> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/popo/registrations/${registrationId}`,
+    );
+    return parseWithFallback(raw, PopoRegistrationSchema, EMPTY_POPO_REGISTRATION, {
+      endpoint: "GET /api/workspaces/:id/popo/registrations/:registrationId",
+    });
+  }
+
+  async cancelPopoRegistration(workspaceId: string, registrationId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/popo/registrations/${registrationId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async redeemPopoBindingToken(token: string): Promise<RedeemPopoBindingTokenResponse> {
+    const raw = await this.fetch<unknown>(`/api/popo/binding/redeem`, {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+    return parseWithFallback(
+      raw,
+      RedeemPopoBindingTokenResponseSchema,
+      EMPTY_REDEEM_POPO_BINDING_TOKEN_RESPONSE,
+      { endpoint: "POST /api/popo/binding/redeem" },
+    );
   }
 }

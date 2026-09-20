@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS idx_popo_outbound_media_grant_workspace;
