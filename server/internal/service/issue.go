@@ -13,6 +13,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/integrations/yixiezuo"
 	"github.com/multica-ai/multica/server/internal/issueguard"
 	"github.com/multica-ai/multica/server/internal/issueposition"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
@@ -89,6 +90,8 @@ type IssueCreateParams struct {
 	// Its immutable snapshot and cloned attachment rows commit in the same
 	// transaction as the new issue.
 	SourceContext *SourceContextCapture
+	// Yixiezuo is confirmed source material, persisted in the issue transaction.
+	Yixiezuo *yixiezuo.Snapshot
 }
 
 // IssueCreateOpts groups optional knobs for IssueService.Create. Most
@@ -235,6 +238,41 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	}
 	defer tx.Rollback(ctx)
 	qtx := s.Queries.WithTx(tx)
+	if p.Yixiezuo != nil {
+		source := p.Yixiezuo.Source
+		if err := qtx.LockYixiezuoImportSource(ctx, util.UUIDToString(p.WorkspaceID)+"/"+source.Host+"/"+source.ID); err != nil {
+			return IssueCreateResult{}, err
+		}
+		existing, err := qtx.GetYixiezuoImportBySource(ctx, db.GetYixiezuoImportBySourceParams{WorkspaceID: p.WorkspaceID, SourceHost: source.Host, ExternalID: source.ID})
+		if err == nil {
+			issue, err := qtx.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{WorkspaceID: p.WorkspaceID, ID: existing.IssueID})
+			if err != nil {
+				return IssueCreateResult{}, err
+			}
+			return IssueCreateResult{DuplicateIssue: &issue}, ErrYixiezuoAlreadyImported
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return IssueCreateResult{}, err
+		}
+	}
+
+	if p.Yixiezuo != nil {
+		for _, attachment := range p.Yixiezuo.Attachments {
+			id, err := util.ParseUUID(attachment.LocalID)
+			if err != nil {
+				return IssueCreateResult{}, fmt.Errorf("source attachment has not been staged")
+			}
+			p.AttachmentIDs = append(p.AttachmentIDs, id)
+		}
+		for i, id := range p.AttachmentIDs {
+			attachment, err := qtx.GetAttachment(ctx, db.GetAttachmentParams{ID: id, WorkspaceID: p.WorkspaceID})
+			if err != nil || attachment.UploaderID != p.CreatorID {
+				return IssueCreateResult{}, fmt.Errorf("source attachment is not owned by this importer")
+			}
+			p.Yixiezuo.Attachments[i].LocalURL = attachment.Url
+		}
+		p.Description = pgtype.Text{String: p.Yixiezuo.Markdown(), Valid: true}
+	}
 
 	// A quick-create origin is authoritative user input, so validate and claim
 	// it before any issue counter or issue row write. Locking the task makes the
@@ -409,6 +447,30 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	}
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("create issue: %w", err)
+	}
+
+	if p.Yixiezuo != nil {
+		snapshot, _ := json.Marshal(p.Yixiezuo)
+		if len(p.AttachmentIDs) > 0 {
+			linked, err := qtx.LinkAttachmentsToIssue(ctx, db.LinkAttachmentsToIssueParams{IssueID: issue.ID, WorkspaceID: p.WorkspaceID, AttachmentIds: p.AttachmentIDs, BumpRevision: false})
+			if err != nil || linked.LinkedCount != int64(len(p.AttachmentIDs)) {
+				return IssueCreateResult{}, fmt.Errorf("source attachments are unavailable; preview the issue again")
+			}
+		}
+		source := p.Yixiezuo.Source
+		if _, err := qtx.CreateYixiezuoImport(ctx, db.CreateYixiezuoImportParams{WorkspaceID: p.WorkspaceID, IssueID: issue.ID, SourceHost: source.Host, ExternalID: source.ID, SourceUrl: source.URL, Snapshot: snapshot, ImportedBy: p.CreatorID}); err != nil {
+			return IssueCreateResult{}, err
+		}
+		for key, value := range map[string]string{"yixiezuo_url": source.URL, "yixiezuo_id": source.ID, "yixiezuo_status": p.Yixiezuo.Status} {
+			raw, _ := json.Marshal(value)
+			if _, err := qtx.SetIssueMetadataKey(ctx, db.SetIssueMetadataKeyParams{ID: issue.ID, WorkspaceID: p.WorkspaceID, Key: key, Value: raw}); err != nil {
+				return IssueCreateResult{}, err
+			}
+		}
+		issue, err = qtx.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{WorkspaceID: p.WorkspaceID, ID: issue.ID})
+		if err != nil {
+			return IssueCreateResult{}, err
+		}
 	}
 
 	if p.SourceContext != nil {

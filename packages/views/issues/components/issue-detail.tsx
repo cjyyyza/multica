@@ -95,6 +95,7 @@ import { ExecutionLogSection } from "./execution-log-section";
 import { QuickActionsSection } from "./quick-actions-section";
 import { PluginPanelSection } from "../../plugins";
 import { PullRequestList } from "./pull-request-list";
+import { YixiezuoSource } from "./yixiezuo-source";
 import { useGitHubSettings } from "@multica/core/github";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
@@ -2567,6 +2568,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           own token spend, with the issue total on the section header.
           Self-contained; owns its own collapse state and WS subscriptions.
           Hides itself when there are no runs to show. */}
+      {typeof issue.metadata?.yixiezuo_id === "string" && <YixiezuoSource key={`${issue.workspace_id}:${id}`} issueId={id} revision={issue.revision} />}
       <ExecutionLogSection issueId={id} identifier={issue.identifier} />
 
       {/* Details — creator and timestamps. Sits below the execution log

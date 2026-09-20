@@ -1,3 +1,4 @@
+import { YixiezuoOperationSchema, YixiezuoImportEnvelopeSchema, YixiezuoImportStatesSchema, type YixiezuoOperation, type YixiezuoImport, type YixiezuoImportState } from "../yixiezuo/schemas";
 import type { InboxFilters } from "../inbox/filter-store";
 import type { ArchivedInboxPage, ArchivedInboxFacets } from "../types/inbox";
 import { configStore } from "../config";
@@ -196,8 +197,6 @@ import type {
   ListTelegramInstallationsResponse,
   RegisterTelegramRequest,
   RedeemTelegramBindingTokenResponse,
-  YixiezuoConnectionEnvelope,
-  UpsertYixiezuoConnectionRequest,
   Squad,
   SquadMember,
   SquadMemberStatusListResponse,
@@ -370,8 +369,7 @@ import {
   EMPTY_TELEGRAM_INSTALLATION,
   EMPTY_LIST_TELEGRAM_INSTALLATIONS_RESPONSE,
   EMPTY_REDEEM_TELEGRAM_BINDING_TOKEN_RESPONSE,
-  YixiezuoConnectionEnvelopeSchema,
-  EMPTY_YIXIEZUO_CONNECTION_ENVELOPE,
+  YixiezuoImportResultSchema,
   EMPTY_BILLING_BALANCE,
   EMPTY_BILLING_TRANSACTIONS_PAGE,
   EMPTY_BILLING_BATCHES_PAGE,
@@ -4953,37 +4951,48 @@ export class ApiClient {
     );
   }
 
-  // 易协作 kanban sync. The server only stores the connection and card links;
-  // the local CLI is the only process that talks to 易协作.
-  async getYixiezuoConnection(workspaceId: string): Promise<YixiezuoConnectionEnvelope> {
-    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/yixiezuo`);
-    return parseWithFallback(
-      raw,
-      YixiezuoConnectionEnvelopeSchema,
-      EMPTY_YIXIEZUO_CONNECTION_ENVELOPE,
-      { endpoint: "GET /api/workspaces/:id/yixiezuo" },
-    );
+
+  async previewYixiezuoIssue(wsId: string, url: string): Promise<YixiezuoOperation> {
+    return this.yixiezuoOperationRequest(wsId, "/preview", { url });
   }
 
-  async upsertYixiezuoConnection(
-    workspaceId: string,
-    body: UpsertYixiezuoConnectionRequest,
-  ): Promise<YixiezuoConnectionEnvelope> {
-    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/yixiezuo`, {
-      method: "PUT",
-      body: JSON.stringify(body),
-    });
-    return parseWithFallback(
-      raw,
-      YixiezuoConnectionEnvelopeSchema,
-      EMPTY_YIXIEZUO_CONNECTION_ENVELOPE,
-      { endpoint: "PUT /api/workspaces/:id/yixiezuo" },
-    );
+  async getYixiezuoOperation(wsId: string, id: string): Promise<YixiezuoOperation> {
+    return this.yixiezuoOperationRequest(wsId, "/operations/" + id);
   }
 
-  async deleteYixiezuoConnection(workspaceId: string): Promise<void> {
-    await this.fetch(`/api/workspaces/${workspaceId}/yixiezuo`, {
-      method: "DELETE",
-    });
+  private async yixiezuoOperationRequest(wsId: string, suffix: string, body?: unknown): Promise<YixiezuoOperation> {
+    const endpoint = "/api/workspaces/" + wsId + "/yixiezuo" + suffix;
+    const raw = await this.fetch<unknown>(endpoint, body === undefined ? undefined : { method: "POST", body: JSON.stringify(body) });
+    const parsed = parseWithFallback<YixiezuoOperation | null>(raw, YixiezuoOperationSchema, null, { endpoint });
+    if (!parsed) throw new Error("Invalid 易协作 operation response");
+    return parsed;
+  }
+
+  async importYixiezuoIssue(wsId: string, operationId: string, projectId: string | null): Promise<{ issue: Issue; existing: boolean }> {
+    const endpoint = "/api/workspaces/" + wsId + "/yixiezuo/imports";
+    const raw = await this.fetch<unknown>(endpoint, { method: "POST", body: JSON.stringify({ operation_id: operationId, project_id: projectId }) });
+    const parsed = parseWithFallback<{ issue: Issue; existing: boolean } | null>(raw, YixiezuoImportResultSchema, null, { endpoint });
+    if (!parsed) throw new Error("Invalid 易协作 import response");
+    return parsed;
+  }
+
+  async getYixiezuoImport(wsId: string, issueId: string): Promise<{ import: YixiezuoImport | null }> {
+    const endpoint = "/api/workspaces/" + wsId + "/yixiezuo/imports/" + issueId;
+    const raw = await this.fetch<unknown>(endpoint);
+    return parseWithFallback(raw, YixiezuoImportEnvelopeSchema, { import: null } as { import: YixiezuoImport | null }, { endpoint });
+  }
+
+  async listYixiezuoImportStates(wsId: string): Promise<YixiezuoImportState[]> {
+    const endpoint = "/api/workspaces/" + wsId + "/yixiezuo/imports";
+    const raw = await this.fetch<unknown>(endpoint);
+    return parseWithFallback<YixiezuoImportState[]>(raw, YixiezuoImportStatesSchema, [], { endpoint });
+  }
+
+  async refreshYixiezuoImport(wsId: string, issueId: string): Promise<YixiezuoOperation> {
+    return this.yixiezuoOperationRequest(wsId, "/imports/" + issueId + "/refresh", {});
+  }
+
+  async publishYixiezuoResult(wsId: string, issueId: string, body: { summary: string; status_name: string; revision: number; confirmed: boolean; source_digest: string }): Promise<YixiezuoOperation> {
+    return this.yixiezuoOperationRequest(wsId, "/imports/" + issueId + "/publish", body);
   }
 }

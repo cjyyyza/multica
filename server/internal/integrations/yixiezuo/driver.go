@@ -14,39 +14,21 @@ import (
 const (
 	defaultCLIBin    = "popo-cli"
 	defaultMCPTarget = "gcp"
-	listPerPage      = 50
 )
-
-// Driver is the local 易协作 CLI surface. The Multica server never implements this.
-type Driver interface {
-	ListCards(ctx context.Context) ([]Card, error)
-	GetCard(ctx context.Context, externalID string) (Card, error)
-	CreateCard(ctx context.Context, fields IssueFields, statusName string) (Card, error)
-	UpdateCard(ctx context.Context, externalID string, fields IssueFields, statusName string) (Card, error)
-}
 
 // ExecOptions configure the Windows-local popo-cli pmmcp issue tools.
 type ExecOptions struct {
-	Bin               string
-	MCPTarget         string
-	GCPHost           string
-	ExternalProjectID string
-	ListQueryID       string
-	TrackerID         string
-	LookPath          func(file string) (string, error)
-	Run               func(ctx context.Context, bin string, args []string) ([]byte, error)
+	Bin       string
+	MCPTarget string
+	GCPHost   string
+	LookPath  func(file string) (string, error)
+	Run       func(ctx context.Context, bin string, args []string) ([]byte, error)
 }
 
 // ExecDriver shells out to the Windows-local popo-cli. Command names come from
 // the inspected `popo-cli pmmcp` surface on this machine.
 type ExecDriver struct {
-	opts     ExecOptions
-	statuses []namedID
-}
-
-type namedID struct {
-	ID   int
-	Name string
+	opts ExecOptions
 }
 
 func NewExecDriver(opts ExecOptions) *ExecDriver {
@@ -84,46 +66,6 @@ func (d *ExecDriver) resolveBin() (string, error) {
 	return path, nil
 }
 
-func (d *ExecDriver) ListCards(ctx context.Context) ([]Card, error) {
-	queryID, err := parseIntish(d.opts.ListQueryID)
-	if err != nil {
-		return nil, fmt.Errorf("set list_query_id to a saved 易协作 filter; unscoped kanban pulls are refused")
-	}
-	var all []Card
-	totalPages := 1
-	for page := 1; page <= totalPages; page++ {
-		payload, err := d.listIssuesPage(ctx, page, queryID)
-		if err != nil {
-			return nil, err
-		}
-		if payload.TotalPage > 0 {
-			totalPages = payload.TotalPage
-		}
-		pageCards := 0
-		for _, row := range payload.List {
-			card, cardErr := cardFromListRow(row)
-			if cardErr != nil {
-				return nil, cardErr
-			}
-			if pid := strings.TrimSpace(d.opts.ExternalProjectID); pid != "" {
-				rowProject := stringifyID(row.ProjectID)
-				if rowProject != "" && rowProject != pid {
-					continue
-				}
-			}
-			all = append(all, card)
-			pageCards++
-		}
-		if pageCards == 0 && page >= payload.TotalPage {
-			break
-		}
-		if payload.TotalPage <= 0 && len(payload.List) < listPerPage {
-			break
-		}
-	}
-	return all, nil
-}
-
 func (d *ExecDriver) GetCard(ctx context.Context, externalID string) (Card, error) {
 	id, err := parseIntish(externalID)
 	if err != nil {
@@ -134,163 +76,6 @@ func (d *ExecDriver) GetCard(ctx context.Context, externalID string) (Card, erro
 		return Card{}, err
 	}
 	return parseIssueBase(raw)
-}
-
-func (d *ExecDriver) CreateCard(ctx context.Context, fields IssueFields, statusName string) (Card, error) {
-	projectID, err := parseIntish(d.opts.ExternalProjectID)
-	if err != nil {
-		return Card{}, fmt.Errorf("creating a 易协作 card requires external_project_id: %w", err)
-	}
-	issue := map[string]any{
-		"project_id": projectID,
-		"subject":    fields.Title,
-	}
-	if fields.Description != "" {
-		issue["description"] = fields.Description
-	}
-	if fields.StartDate != "" {
-		issue["start_date"] = fields.StartDate
-	}
-	if fields.DueDate != "" {
-		issue["due_date"] = fields.DueDate
-	}
-	if trackerID, trackerErr := parseIntish(d.opts.TrackerID); trackerErr == nil {
-		issue["tracker_id"] = trackerID
-	}
-	if statusID, ok, statusErr := d.statusIDByName(ctx, statusName); statusErr != nil {
-		return Card{}, statusErr
-	} else if ok {
-		issue["status_id"] = statusID
-	}
-	raw, err := d.toolCall(ctx, "createIssue", map[string]any{"issue": issue})
-	if err != nil {
-		return Card{}, err
-	}
-	card, err := parseCreatedCard(raw)
-	if err != nil || card.ExternalID == "" {
-		return Card{}, fmt.Errorf("decode 易协作 createIssue: %w", err)
-	}
-	if detailed, detailErr := d.GetCard(ctx, card.ExternalID); detailErr == nil {
-		return detailed, nil
-	}
-	return card, nil
-}
-
-func (d *ExecDriver) UpdateCard(ctx context.Context, externalID string, fields IssueFields, statusName string) (Card, error) {
-	id, err := parseIntish(externalID)
-	if err != nil {
-		return Card{}, fmt.Errorf("易协作 issue id %q: %w", externalID, err)
-	}
-	issue := map[string]any{}
-	if fields.Title != "" {
-		issue["subject"] = fields.Title
-	}
-	if fields.Description != "" {
-		issue["description"] = fields.Description
-	}
-	if fields.StartDate != "" {
-		issue["start_date"] = fields.StartDate
-	}
-	if fields.DueDate != "" {
-		issue["due_date"] = fields.DueDate
-	}
-	if statusID, ok, statusErr := d.statusIDByName(ctx, statusName); statusErr != nil {
-		return Card{}, statusErr
-	} else if ok {
-		issue["status_id"] = statusID
-	}
-	if len(issue) == 0 {
-		return d.GetCard(ctx, externalID)
-	}
-	raw, err := d.toolCall(ctx, "update_issue", map[string]any{"id": id, "issue": issue})
-	if err != nil {
-		return Card{}, err
-	}
-	if card, parseErr := parseCreatedCard(raw); parseErr == nil && card.ExternalID != "" {
-		return card, nil
-	}
-	return d.GetCard(ctx, externalID)
-}
-
-type listIssuesPage struct {
-	List       []rawCard `json:"list"`
-	Page       int       `json:"page"`
-	TotalPage  int       `json:"total_page"`
-	TotalCount int       `json:"total_count"`
-}
-
-func (d *ExecDriver) listIssuesPage(ctx context.Context, page, queryID int) (listIssuesPage, error) {
-	args := map[string]any{
-		"set_filter": 1,
-		"page":       page,
-		"per_page":   listPerPage,
-		"context":    "kanban",
-		"query_id":   queryID,
-		"c":          []string{"id", "subject", "status", "description", "start_date", "due_date", "priority", "updated_on"},
-	}
-	raw, err := d.toolCall(ctx, "list_issues", args)
-	if err != nil {
-		return listIssuesPage{}, err
-	}
-	var payload listIssuesPage
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return listIssuesPage{}, fmt.Errorf("decode 易协作 list_issues: %w", err)
-	}
-	return payload, nil
-}
-
-func (d *ExecDriver) statusIDByName(ctx context.Context, name string) (int, bool, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return 0, false, nil
-	}
-	if err := d.ensureStatuses(ctx); err != nil {
-		return 0, false, err
-	}
-	want := normalize(name)
-	for _, item := range d.statuses {
-		if normalize(item.Name) == want {
-			return item.ID, true, nil
-		}
-	}
-	return 0, false, nil
-}
-
-func (d *ExecDriver) ensureStatuses(ctx context.Context) error {
-	if len(d.statuses) > 0 {
-		return nil
-	}
-	var all []namedID
-	for page := 1; ; page++ {
-		raw, err := d.toolCall(ctx, "listIssueStatuses", map[string]any{"page": page, "limit": 50})
-		if err != nil {
-			return err
-		}
-		var payload struct {
-			List      []namedIDJSON `json:"list"`
-			TotalPage int           `json:"total_page"`
-		}
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return fmt.Errorf("decode 易协作 listIssueStatuses: %w", err)
-		}
-		for _, row := range payload.List {
-			id, err := parseIntish(stringifyID(row.ID))
-			if err != nil || strings.TrimSpace(row.Name) == "" {
-				continue
-			}
-			all = append(all, namedID{ID: id, Name: row.Name})
-		}
-		if page >= payload.TotalPage || len(payload.List) == 0 {
-			break
-		}
-	}
-	d.statuses = all
-	return nil
-}
-
-type namedIDJSON struct {
-	ID   any    `json:"id"`
-	Name string `json:"name"`
 }
 
 func (d *ExecDriver) toolCall(ctx context.Context, toolName string, arguments any) ([]byte, error) {
@@ -519,17 +304,6 @@ func parseIssueBase(raw []byte) (Card, error) {
 	return card, nil
 }
 
-func parseCreatedCard(raw []byte) (Card, error) {
-	if card, err := parseIssueBase(raw); err == nil && card.ExternalID != "" {
-		return card, nil
-	}
-	var row rawCard
-	if err := json.Unmarshal(raw, &row); err == nil && stringifyID(row.ID) != "" {
-		return cardFromListRow(row)
-	}
-	return Card{}, fmt.Errorf("易协作 issue is missing id")
-}
-
 func applyCoreFields(card *Card, groups []json.RawMessage) {
 	for _, group := range groups {
 		var fields []struct {
@@ -632,28 +406,7 @@ func decodeStringish(raw json.RawMessage) string {
 	return ""
 }
 
-func parseCLITime(s string) (time.Time, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return time.Time{}, nil
-	}
-	for _, layout := range []string{
-		time.RFC3339,
-		time.RFC3339Nano,
-		"2006-01-02 15:04:05",
-		"2006-01-02 15:04",
-		"2006-01-02T15:04:05-07:00",
-		time.DateOnly,
-	} {
-		if ts, err := time.Parse(layout, s); err == nil {
-			return ts, nil
-		}
-		if ts, err := time.ParseInLocation(layout, s, time.Local); err == nil && !strings.Contains(layout, "Z") && !strings.Contains(layout, "07:00") {
-			return ts, nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("unparsed time %q", s)
-}
+func parseCLITime(s string) (time.Time, error) { return ParseLocalTime(strings.TrimSpace(s)) }
 
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {

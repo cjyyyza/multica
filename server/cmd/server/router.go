@@ -1605,10 +1605,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// for the same reason as GitHub installations; connect /
 					// disconnect are admin-gated in the group below.
 					r.Get("/vcs/connections", h.ListVCSConnections)
-					r.Get("/yixiezuo", h.GetYixiezuoConnection)
-					r.Post("/yixiezuo/pull", h.PullYixiezuoCards)
-					r.Get("/yixiezuo/export", h.ExportYixiezuoChanges)
-					r.Post("/yixiezuo/push-ack", h.AckYixiezuoPush)
+					r.Post("/yixiezuo/preview", h.PreviewYixiezuoIssue)
+					r.Post("/yixiezuo/bridge/claim", h.ClaimYixiezuoOperation)
+					r.Get("/yixiezuo/operations/{operationId}", h.GetYixiezuoOperation)
+					r.Post("/yixiezuo/operations/{operationId}/complete", h.CompleteYixiezuoOperation)
+					r.Post("/yixiezuo/imports", h.ImportYixiezuoIssue)
+					r.Get("/yixiezuo/imports", h.ListYixiezuoImportStates)
+					r.Get("/yixiezuo/imports/{issueId}", h.GetYixiezuoImport)
+					r.Post("/yixiezuo/imports/{issueId}/refresh", h.RefreshYixiezuoImport)
+					r.Post("/yixiezuo/imports/{issueId}/publish", h.PublishYixiezuoResult)
 					// Custom runtime profiles — listing/reading is member-visible
 					// (the Runtime page renders for everyone; create/edit/delete
 					// are admin-gated below).
@@ -1696,8 +1701,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/vcs/connections", h.ConnectVCS)
 					r.Post("/vcs/connections/{connectionId}/rotate-webhook", h.RotateVCSConnectionWebhook)
 					r.Delete("/vcs/connections/{connectionId}", h.DeleteVCSConnection)
-					r.Put("/yixiezuo", h.UpsertYixiezuoConnection)
-					r.Delete("/yixiezuo", h.DeleteYixiezuoConnection)
 				})
 
 				// Lark integration. Every endpoint here only requires

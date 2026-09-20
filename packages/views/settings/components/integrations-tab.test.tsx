@@ -185,7 +185,7 @@ describe("Integration directory", () => {
   });
   it("lists 易协作 in the boards group and opens its page", () => {
     const { unmount } = renderWithI18n(<IntegrationsTab />);
-    expect(screen.getByRole("link", { name: /易协作 Connected/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /易协作Import a selected issue/ })).toBeInTheDocument();
     unmount();
     state.search = "tab=integrations&integration=yixiezuo";
     renderWithI18n(<IntegrationsTab />);

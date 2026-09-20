@@ -250,11 +250,6 @@ export type {
   RedeemTelegramBindingTokenResponse,
 } from "./telegram";
 export type {
-  YixiezuoConnection,
-  YixiezuoConnectionEnvelope,
-  UpsertYixiezuoConnectionRequest,
-} from "./yixiezuo";
-export type {
   Autopilot,
   AutopilotStatus,
   AutopilotExecutionMode,

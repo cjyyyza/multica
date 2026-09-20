@@ -17,7 +17,6 @@ import { dingtalkInstallationsOptions } from "@multica/core/dingtalk";
 import { wecomInstallationsOptions } from "@multica/core/wecom";
 import { telegramInstallationsOptions } from "@multica/core/telegram";
 import { vcsConnectionsOptions } from "@multica/core/vcs";
-import { yixiezuoConnectionOptions } from "@multica/core/yixiezuo";
 import { useConfigStore, useFeatureEnabled } from "@multica/core/config";
 import { COMPOSIO_MCP_APPS_FLAG } from "@multica/core/feature-flags";
 import { cn } from "@multica/ui/lib/utils";
@@ -49,7 +48,7 @@ interface IntegrationEntry {
   description: string;
   icon: ReactNode;
   content: ReactNode;
-  state: ConnectionState;
+  state: ConnectionState | null;
 }
 
 // The IM channels soft-revoke: the row survives with status 'revoked', so a row
@@ -114,11 +113,6 @@ export function IntegrationsTab() {
     enabled: canView && vcsAvailable,
     select: (data) => (data.connections?.length ?? 0) > 0,
   });
-  const yixiezuo = useQuery({
-    ...yixiezuoConnectionOptions(wsId),
-    enabled: canView,
-    select: (data) => data.connection != null,
-  });
   const composio = useQuery({
     ...composioConnectionsOptions(),
     enabled: composioAvailable,
@@ -166,7 +160,7 @@ export function IntegrationsTab() {
           description: t(($) => $.yixiezuo.page_constraint),
           icon: <FolderKanban className="size-5" />,
           content: <YixiezuoTab />,
-          state: yixiezuo,
+          state: null,
         },
       ],
     },
@@ -304,7 +298,7 @@ export function IntegrationsTab() {
                     <span className="text-body font-medium text-foreground">
                       {item.label}
                     </span>{" "}
-                    <ConnectionBadge state={item.state} />{" "}
+                    {item.state && <ConnectionBadge state={item.state} />}{" "}
                   </span>
                   <span className="mt-1 block text-caption leading-5 text-muted-foreground">
                     {group.id === "messaging"

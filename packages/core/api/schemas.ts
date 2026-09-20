@@ -44,8 +44,6 @@ import type {
   TelegramInstallation,
   ListTelegramInstallationsResponse,
   RedeemTelegramBindingTokenResponse,
-  YixiezuoConnection,
-  YixiezuoConnectionEnvelope,
   GroupedIssuesResponse,
   GitHubConnectResponse,
   GitHubPullRequest,
@@ -3462,48 +3460,6 @@ export const JoinShareLinkResponseSchema = z.object({
   workspace_slug: z.string().optional().default(""),
 }).loose();
 
-export const YixiezuoConnectionSchema = z.object({
-  id: z.string(),
-  workspace_id: z.string().default(""),
-  project_id: z.string().nullable().optional().default(null),
-  cli_bin: z.string().default("popo-cli"),
-  gcp_host: z.string().default(""),
-  list_query_id: z.string().default(""),
-  external_project_id: z.string().default(""),
-  tracker_id: z.string().default(""),
-  status_map: z.record(z.string(), z.string()).default({}),
-  last_pulled_at: z.string().nullable().optional().default(null),
-  last_pushed_at: z.string().nullable().optional().default(null),
-  created_at: z.string().default(""),
-  updated_at: z.string().default(""),
-}).loose();
-
-export const EMPTY_YIXIEZUO_CONNECTION: YixiezuoConnection = {
-  id: "",
-  workspace_id: "",
-  project_id: null,
-  cli_bin: "popo-cli",
-  gcp_host: "",
-  list_query_id: "",
-  external_project_id: "",
-  tracker_id: "",
-  status_map: {},
-  last_pulled_at: null,
-  last_pushed_at: null,
-  created_at: "",
-  updated_at: "",
-};
-
-export const YixiezuoConnectionEnvelopeSchema = z.object({
-  connection: YixiezuoConnectionSchema.nullable().optional().default(null),
-  can_manage: z.boolean().default(false),
-}).loose();
-
-export const EMPTY_YIXIEZUO_CONNECTION_ENVELOPE: YixiezuoConnectionEnvelope = {
-  connection: null,
-  can_manage: false,
-};
-
 export const EMPTY_JOIN_SHARE_LINK_RESPONSE: {
   member: MemberWithUser;
   workspace_id: string;
@@ -3522,3 +3478,5 @@ export const EMPTY_JOIN_SHARE_LINK_RESPONSE: {
   workspace_id: "",
   workspace_slug: "",
 };
+
+export const YixiezuoImportResultSchema = z.object({ issue: CreateIssueResponseSchema, existing: z.boolean().default(false) });
