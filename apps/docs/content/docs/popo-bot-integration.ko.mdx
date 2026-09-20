@@ -14,3 +14,5 @@ POPO의 제품 면은 Feishu/Lark와 같습니다(IM 채널 + 공유 엔진). Wi
 3. 온라인 Windows 브리지와 유휴 로봇을 에이전트에 연결합니다.
 
 서버 스위치는 `MULTICA_POPO_ENABLED=true`입니다. `multica popo gateway`는 제거되었습니다.
+
+기존 태스크는 `/reply`, `/status`, `/stop`으로 관리합니다. `/yixiezuo preview`와 `show`로 내용을 검토한 뒤 `import --confirm`으로 미배정 태스크를 생성합니다. `publish`는 검토 내용을 만들며, 같은 멤버가 같은 채팅에서 `confirm`해야 결과 반영이 대기열에 등록됩니다. 검토는 15분 후 만료되고 태스크나 원본이 변경되면 다시 검토해야 합니다.

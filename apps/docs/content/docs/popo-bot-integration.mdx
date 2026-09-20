@@ -51,12 +51,20 @@ Send text directly. No @-mention is required.
 
 ### Groups
 
-Group @, media, QR onboarding, and `/reply` `/status` `/stop` are not in this version.
+Mention the robot in a group to send it a request. Quoting a known task reply can add a comment to that same task. Media attachments and Windows QR registration are supported by the corresponding bridge flows.
 
 ### Commands
 
 - `/new` and `/clear` use the shared engine, same as Feishu.
 - `/issue <title>` creates a Multica issue (`origin_type=popo_chat`).
+- `/reply ISSUE-123 <comment>`, `/status ISSUE-123` and `/stop ISSUE-123` operate on an existing task. Stopping a run keeps task status separate.
+- `/yixiezuo preview <issue-url>` queues a single-source preview. Keep `multica yixiezuo bridge --workspace-id <workspace-uuid>` running under the same Multica member account that is bound to the sender.
+- `/yixiezuo show <operation-id>` displays source material or the operation result.
+- `/yixiezuo import <preview-id> --confirm --project <project-uuid>` imports an unassigned native task and associates its notifications with this chat. Repeated import preserves the existing task and any existing notification route.
+- `/yixiezuo refresh ISSUE-123` updates the source snapshot while preserving local task fields.
+- `/yixiezuo publish ISSUE-123 [--status <source-status>]`, followed by a result summary on the next line, prepares a review. `/yixiezuo confirm <review-id>` queues the reviewed write. Confirmation expires after 15 minutes and is bound to the same member, robot, chat, task revision and source snapshot.
+
+The selected project can carry a `perforce_depot` resource. After a member assigns the imported task, the run receives that project's P4 context. Task comments and run results return through the original chat; publishing a result to 易协作 remains an explicit confirmation step.
 
 ## Manage connections
 

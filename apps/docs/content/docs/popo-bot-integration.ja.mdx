@@ -14,3 +14,5 @@ POPO の製品面は Feishu/Lark と同じ（IM チャネル + 共有エンジ�
 3. オンラインの Windows ブリッジと空いているロボットをエージェントに接続します。
 
 サーバー側のスイッチは `MULTICA_POPO_ENABLED=true` です。`multica popo gateway` は削除されました。
+
+既存タスクは `/reply`、`/status`、`/stop` で操作できます。`/yixiezuo preview` と `show` で内容を確認し、`import --confirm` で未割り当てのタスクを作成します。`publish` はレビューを作り、同じメンバーが同じチャットで `confirm` して初めて結果を反映します。レビューは 15 分で期限切れになり、タスクや元データの更新後は再確認が必要です。
