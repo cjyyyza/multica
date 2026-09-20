@@ -95,6 +95,7 @@ flowchart LR
 | `POST /api/popo/bridge/inbound` | 提交规范化入站消息 |
 | `GET /api/popo/bridge/commands` | Windows 长轮询领取注册、发送及停止连接等命令 |
 | `POST /api/popo/bridge/commands/{id}/receipt` | 回报命令结果及真实 POPO 消息 ID |
+| `POST /api/popo/bridge/commands/{id}/authorize` | 发送前确认绑定仍有效，并续租发送命令 |
 | `/api/popo/bridge/media` | 按受限上传会话传输媒体，接入现有附件存储 |
 
 协议固定以下原则：
@@ -382,7 +383,7 @@ pairing 过期/已用：410。未知协议版本：400。
 `GET /api/popo/bridge/commands?wait_ms=25000`
 
 - `wait_ms` 默认 25000，上限 30000。无命令时阻塞至超时后返回 `{ "commands": [] }`。
-- 每次最多 20 条。领取后状态 `leased`，租约 60s；超时未回执则重新 `pending`。
+- 每次最多 20 条。领取后状态 `leased`；发送命令租约 60s，扫码命令租约 12 分钟，覆盖最长 10 分钟的扫码等待；超时未回执则重新 `pending`。
 - P1 命令类型只有 `send`：
 
 ```json
@@ -406,6 +407,12 @@ pairing 过期/已用：410。未知协议版本：400。
 
 Chat 回复与绑定提示都走这条命令队列。`popoChannel.Send` 与 `OutboundReplier` 改为入队 command，不再写 `popo_outbound_queue` 给用户 JWT 去轮询。
 
+Windows 在准备附件前、实际调用 POPO 发送前，分别调用
+`POST /api/popo/bridge/commands/{id}/authorize`。返回 `{ "allowed": true }`
+才继续；绑定撤销、桥接撤销或命令已终结时返回 `false`。准备阶段的临时网络错误
+等待租约重投；只有真正开始发送后无法确认结果，才记为 `unknown`。
+已经发往 POPO 的请求无法通过撤销追回。
+
 删除（不再注册）成员可见的：
 
 - `POST /api/workspaces/{id}/popo/inbound`
@@ -428,10 +435,12 @@ Chat 回复与绑定提示都走这条命令队列。`popoChannel.Send` 与 `Out
 
 `status`：`delivered` | `failed` | `unknown`。
 
-- `delivered`：必须带 `remote_message_id`。
+- `delivered`：`send` 命令必须带真实 `remote_message_id`；扫码和取消扫码等控制命令不要求消息 ID。
 - `failed`：确认未送到，可另建命令重试（P1 可先不自动重试）。
 - `unknown`：POPO 可能已收到；**禁止**再发同一 `delivery_id`。
 - 幂等：同一 command 重复回执，若结果一致则 200；冲突则 409。
+- 成功回执与引用回复映射在同一事务提交；重复回执可修复旧版本留下的缺失映射。
+- 任务回复、评论、运行失败/取消和任务当前状态可从业务表恢复入队，使用稳定来源标识去重；不会重发 `unknown`，也不会重新执行智能体。修复范围和验证见 [可靠性加固记录](popo-integration-hardening.md)。
 
 ### 8.8 Bind existing robot
 

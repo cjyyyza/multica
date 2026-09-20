@@ -11,6 +11,34 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const canDeliverPopoBridgeCommand = `-- name: CanDeliverPopoBridgeCommand :one
+WITH renewed AS (
+  UPDATE popo_bridge_command cmd SET status = 'leased',
+    lease_expires_at = now() + interval '60 seconds', updated_at = now()
+  WHERE cmd.id = $1 AND cmd.bridge_id = $2 AND cmd.status IN ('pending', 'leased')
+    AND cmd.type = 'send'
+    AND EXISTS (SELECT 1 FROM popo_bridge b WHERE b.id = cmd.bridge_id AND b.status = 'active')
+    AND EXISTS (SELECT 1 FROM channel_installation ci
+      WHERE ci.id = cmd.installation_id AND ci.status = 'active'
+        AND ci.channel_type = 'popo' AND ci.workspace_id = cmd.workspace_id
+        AND ci.config->>'bridge_id' = cmd.bridge_id::text)
+  RETURNING cmd.id
+)
+SELECT EXISTS (SELECT 1 FROM renewed) AS allowed
+`
+
+type CanDeliverPopoBridgeCommandParams struct {
+	ID       pgtype.UUID `json:"id"`
+	BridgeID pgtype.UUID `json:"bridge_id"`
+}
+
+func (q *Queries) CanDeliverPopoBridgeCommand(ctx context.Context, arg CanDeliverPopoBridgeCommandParams) (bool, error) {
+	row := q.db.QueryRow(ctx, canDeliverPopoBridgeCommand, arg.ID, arg.BridgeID)
+	var allowed bool
+	err := row.Scan(&allowed)
+	return allowed, err
+}
+
 const cancelPopoBridgeOpenCommands = `-- name: CancelPopoBridgeOpenCommands :execrows
 UPDATE popo_bridge_command
 SET status = 'cancelled',
@@ -32,6 +60,33 @@ func (q *Queries) CancelPopoBridgeOpenCommands(ctx context.Context, arg CancelPo
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const cancelPopoInstallationCommands = `-- name: CancelPopoInstallationCommands :exec
+UPDATE popo_bridge_command SET status = 'cancelled', lease_expires_at = NULL, updated_at = now()
+WHERE installation_id = $1 AND status IN ('pending', 'leased')
+`
+
+func (q *Queries) CancelPopoInstallationCommands(ctx context.Context, installationID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, cancelPopoInstallationCommands, installationID)
+	return err
+}
+
+const cancelRevokedPopoBridgeCommands = `-- name: CancelRevokedPopoBridgeCommands :exec
+UPDATE popo_bridge_command AS cmd
+SET status = 'cancelled', lease_expires_at = NULL, updated_at = now()
+WHERE cmd.bridge_id = $1 AND cmd.status IN ('pending', 'leased')
+  AND (NOT EXISTS (SELECT 1 FROM popo_bridge b WHERE b.id = cmd.bridge_id AND b.status = 'active')
+    OR (cmd.type = 'send' AND NOT EXISTS (
+      SELECT 1 FROM channel_installation ci
+      WHERE ci.id = cmd.installation_id AND ci.status = 'active'
+        AND ci.channel_type = 'popo' AND ci.workspace_id = cmd.workspace_id
+        AND ci.config->>'bridge_id' = cmd.bridge_id::text)))
+`
+
+func (q *Queries) CancelRevokedPopoBridgeCommands(ctx context.Context, bridgeID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, cancelRevokedPopoBridgeCommands, bridgeID)
+	return err
 }
 
 const consumePopoBridgePairing = `-- name: ConsumePopoBridgePairing :one
@@ -188,6 +243,7 @@ INSERT INTO popo_bridge_command (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, 'pending'
 )
+ON CONFLICT (delivery_id) DO NOTHING
 RETURNING id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at
 `
 
@@ -265,6 +321,26 @@ func (q *Queries) ExpirePopoRegistrationIfStale(ctx context.Context, arg ExpireP
 	return i, err
 }
 
+const getLatestPopoIssueStatus = `-- name: GetLatestPopoIssueStatus :one
+SELECT COALESCE(payload->>'issue_status', '')::text AS issue_status
+FROM popo_bridge_command
+WHERE installation_id = $1 AND payload->>'issue_id' = $2::text
+  AND payload->>'outbound_kind' IN ('issue_status', 'issue_created')
+ORDER BY created_at DESC, id DESC LIMIT 1
+`
+
+type GetLatestPopoIssueStatusParams struct {
+	InstallationID pgtype.UUID `json:"installation_id"`
+	Column2        string      `json:"column_2"`
+}
+
+func (q *Queries) GetLatestPopoIssueStatus(ctx context.Context, arg GetLatestPopoIssueStatusParams) (string, error) {
+	row := q.db.QueryRow(ctx, getLatestPopoIssueStatus, arg.InstallationID, arg.Column2)
+	var issue_status string
+	err := row.Scan(&issue_status)
+	return issue_status, err
+}
+
 const getPopoBridgeByTokenHash = `-- name: GetPopoBridgeByTokenHash :one
 SELECT id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by FROM popo_bridge
 WHERE token_hash = $1
@@ -284,6 +360,31 @@ func (q *Queries) GetPopoBridgeByTokenHash(ctx context.Context, tokenHash string
 		&i.CreatedAt,
 		&i.RevokedAt,
 		&i.RevokedBy,
+	)
+	return i, err
+}
+
+const getPopoBridgeCommandByDeliveryID = `-- name: GetPopoBridgeCommandByDeliveryID :one
+SELECT id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at FROM popo_bridge_command WHERE delivery_id = $1
+`
+
+func (q *Queries) GetPopoBridgeCommandByDeliveryID(ctx context.Context, deliveryID pgtype.UUID) (PopoBridgeCommand, error) {
+	row := q.db.QueryRow(ctx, getPopoBridgeCommandByDeliveryID, deliveryID)
+	var i PopoBridgeCommand
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BridgeID,
+		&i.InstallationID,
+		&i.Type,
+		&i.DeliveryID,
+		&i.Payload,
+		&i.Status,
+		&i.LeaseExpiresAt,
+		&i.RemoteMessageID,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -471,11 +572,13 @@ func (q *Queries) GetPopoMediaStagingForBridge(ctx context.Context, arg GetPopoM
 }
 
 const getPopoOutboundMediaGrant = `-- name: GetPopoOutboundMediaGrant :one
-SELECT id, workspace_id, bridge_id, installation_id, command_id, attachment_id, created_at, expires_at FROM popo_outbound_media_grant
-WHERE bridge_id = $1
-  AND attachment_id = $2
-  AND expires_at > now()
-ORDER BY created_at DESC
+SELECT g.id, g.workspace_id, g.bridge_id, g.installation_id, g.command_id, g.attachment_id, g.created_at, g.expires_at FROM popo_outbound_media_grant g
+JOIN channel_installation ci ON ci.id = g.installation_id AND ci.status = 'active'
+JOIN popo_bridge_command cmd ON cmd.id = g.command_id AND cmd.status IN ('pending', 'leased')
+WHERE g.bridge_id = $1
+  AND g.attachment_id = $2
+  AND g.expires_at > now()
+ORDER BY g.created_at DESC
 LIMIT 1
 `
 
@@ -870,15 +973,23 @@ const leasePopoBridgeCommands = `-- name: LeasePopoBridgeCommands :many
 WITH picked AS (
     SELECT cmd.id
     FROM popo_bridge_command AS cmd
-    WHERE cmd.bridge_id = $2
+    WHERE cmd.bridge_id = $3
       AND cmd.status = 'pending'
+      AND EXISTS (SELECT 1 FROM popo_bridge b WHERE b.id = cmd.bridge_id AND b.status = 'active')
+      AND (cmd.type <> 'send' OR EXISTS (
+        SELECT 1 FROM channel_installation ci
+        WHERE ci.id = cmd.installation_id AND ci.status = 'active'
+          AND ci.workspace_id = cmd.workspace_id AND ci.channel_type = 'popo'
+          AND ci.config->>'bridge_id' = cmd.bridge_id::text))
     ORDER BY cmd.created_at ASC
-    LIMIT $3
+    LIMIT $4
     FOR UPDATE SKIP LOCKED
 )
 UPDATE popo_bridge_command AS c
 SET status = 'leased',
-    lease_expires_at = $1,
+    lease_expires_at = CASE WHEN c.type = 'register_qr'
+      THEN $1::timestamptz
+      ELSE $2::timestamptz END,
     updated_at = now()
 FROM picked
 WHERE c.id = picked.id
@@ -886,13 +997,19 @@ RETURNING c.id, c.workspace_id, c.bridge_id, c.installation_id, c.type, c.delive
 `
 
 type LeasePopoBridgeCommandsParams struct {
-	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
-	LeaseBridgeID  pgtype.UUID        `json:"lease_bridge_id"`
-	MaxN           int32              `json:"max_n"`
+	RegistrationLeaseExpiresAt pgtype.Timestamptz `json:"registration_lease_expires_at"`
+	LeaseExpiresAt             pgtype.Timestamptz `json:"lease_expires_at"`
+	LeaseBridgeID              pgtype.UUID        `json:"lease_bridge_id"`
+	MaxN                       int32              `json:"max_n"`
 }
 
 func (q *Queries) LeasePopoBridgeCommands(ctx context.Context, arg LeasePopoBridgeCommandsParams) ([]PopoBridgeCommand, error) {
-	rows, err := q.db.Query(ctx, leasePopoBridgeCommands, arg.LeaseExpiresAt, arg.LeaseBridgeID, arg.MaxN)
+	rows, err := q.db.Query(ctx, leasePopoBridgeCommands,
+		arg.RegistrationLeaseExpiresAt,
+		arg.LeaseExpiresAt,
+		arg.LeaseBridgeID,
+		arg.MaxN,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1010,6 +1127,132 @@ func (q *Queries) ListPopoMediaStagingByBridgeEvent(ctx context.Context, arg Lis
 		return nil, err
 	}
 	return items, nil
+}
+
+const listPopoRecoveryCandidates = `-- name: ListPopoRecoveryCandidates :many
+WITH sources AS (
+    SELECT d.installation_id, 'task_reply:' || t.id::text AS source_key,
+           'chat_done'::text AS kind, t.id AS entity_id, m.created_at AS occurred_at
+    FROM channel_task_delivery d
+    JOIN agent_task_queue t ON t.id = d.task_id
+    JOIN chat_message m ON m.task_id = t.id AND m.role = 'assistant'
+    WHERE d.channel_type = 'popo' AND t.status = 'completed'
+      AND (btrim(m.content) <> '' OR EXISTS (SELECT 1 FROM attachment a WHERE a.chat_message_id = m.id))
+    UNION ALL
+    SELECT s.installation_id, 'issue_created:' || s.issue_id::text,
+           'issue_created', s.issue_id, s.created_at
+    FROM channel_issue_source s JOIN issue i ON i.id = s.issue_id
+    WHERE s.channel_type = 'popo'
+    UNION ALL
+    SELECT s.installation_id, 'issue_comment:' || c.id::text,
+           'issue_comment', c.id, c.created_at
+    FROM channel_issue_source s JOIN comment c ON c.issue_id = s.issue_id
+    JOIN issue i ON i.id = s.issue_id
+    WHERE s.channel_type = 'popo' AND c.created_at >= s.created_at AND c.deleted_at IS NULL
+      AND (btrim(c.content) <> '' OR EXISTS (SELECT 1 FROM attachment a WHERE a.comment_id = c.id))
+      AND NOT EXISTS (SELECT 1 FROM channel_inbound_write w WHERE w.comment_id = c.id AND w.channel_type = 'popo')
+    UNION ALL
+    SELECT COALESCE(d.installation_id, s.installation_id),
+           CASE WHEN t.status IN ('failed', 'cancelled') THEN 'task_' || t.status || ':' || t.id::text
+             ELSE 'task_card:task:' || t.id::text || ':attempt:' || t.attempt::text || ':' ||
+               CASE WHEN t.status = 'completed' THEN '9007199254740991'
+                 ELSE GREATEST(1, COALESCE((SELECT max(m.seq)::bigint + 2 FROM task_message m WHERE m.task_id = t.id), 1))::text END
+           END,
+           CASE WHEN t.status = 'running' THEN 'task_progress' ELSE 'task_' || t.status END,
+           t.id, COALESCE(t.completed_at, t.created_at)
+    FROM agent_task_queue t
+    LEFT JOIN channel_task_delivery d ON d.task_id = t.id
+    LEFT JOIN channel_issue_source s ON s.issue_id = t.issue_id AND t.created_at >= s.created_at
+    WHERE COALESCE(d.channel_type, s.channel_type) = 'popo'
+      AND (t.status IN ('running', 'failed', 'cancelled') OR (t.status = 'completed' AND t.chat_session_id IS NULL))
+    UNION ALL
+    SELECT s.installation_id, 'issue_status:' || i.id::text || ':' || i.revision::text,
+           'issue_status', i.id, i.updated_at
+    FROM channel_issue_source s JOIN issue i ON i.id = s.issue_id
+    WHERE s.channel_type = 'popo' AND i.status IS DISTINCT FROM COALESCE((
+      SELECT cmd.payload->>'issue_status' FROM popo_bridge_command cmd
+      WHERE cmd.installation_id = s.installation_id AND cmd.payload->>'issue_id' = i.id::text
+        AND cmd.payload->>'outbound_kind' IN ('issue_status', 'issue_created')
+      ORDER BY cmd.created_at DESC, cmd.id DESC LIMIT 1
+    ), 'todo')
+)
+SELECT sources.installation_id, sources.source_key::text AS source_key,
+       sources.kind::text AS kind, sources.entity_id, sources.occurred_at
+FROM sources
+JOIN channel_installation ci ON ci.id = sources.installation_id
+  AND ci.channel_type = 'popo' AND ci.status = 'active'
+JOIN popo_bridge b ON b.id::text = ci.config->>'bridge_id' AND b.status = 'active'
+WHERE NOT EXISTS (
+  SELECT 1 FROM popo_bridge_command cmd
+  WHERE cmd.delivery_id = md5(sources.installation_id::text || ':' || sources.source_key)::uuid
+)
+ORDER BY sources.occurred_at, sources.source_key LIMIT $1
+`
+
+type ListPopoRecoveryCandidatesRow struct {
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	SourceKey      string             `json:"source_key"`
+	Kind           string             `json:"kind"`
+	EntityID       pgtype.UUID        `json:"entity_id"`
+	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
+}
+
+// The business rows survive a crash before event-bus publication. A stable
+// delivery id fences both the event fast path and this bounded recovery pass.
+func (q *Queries) ListPopoRecoveryCandidates(ctx context.Context, limit int32) ([]ListPopoRecoveryCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listPopoRecoveryCandidates, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPopoRecoveryCandidatesRow{}
+	for rows.Next() {
+		var i ListPopoRecoveryCandidatesRow
+		if err := rows.Scan(
+			&i.InstallationID,
+			&i.SourceKey,
+			&i.Kind,
+			&i.EntityID,
+			&i.OccurredAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockPopoBridgeCommandForReceipt = `-- name: LockPopoBridgeCommandForReceipt :one
+SELECT id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at FROM popo_bridge_command WHERE id = $1 AND bridge_id = $2 FOR UPDATE
+`
+
+type LockPopoBridgeCommandForReceiptParams struct {
+	ID       pgtype.UUID `json:"id"`
+	BridgeID pgtype.UUID `json:"bridge_id"`
+}
+
+func (q *Queries) LockPopoBridgeCommandForReceipt(ctx context.Context, arg LockPopoBridgeCommandForReceiptParams) (PopoBridgeCommand, error) {
+	row := q.db.QueryRow(ctx, lockPopoBridgeCommandForReceipt, arg.ID, arg.BridgeID)
+	var i PopoBridgeCommand
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.BridgeID,
+		&i.InstallationID,
+		&i.Type,
+		&i.DeliveryID,
+		&i.Payload,
+		&i.Status,
+		&i.LeaseExpiresAt,
+		&i.RemoteMessageID,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const markPopoMediaStagingFailed = `-- name: MarkPopoMediaStagingFailed :one

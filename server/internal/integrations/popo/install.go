@@ -36,6 +36,7 @@ type installQueries interface {
 	ListChannelInstallationsByWorkspace(ctx context.Context, arg db.ListChannelInstallationsByWorkspaceParams) ([]db.ChannelInstallation, error)
 	GetChannelInstallationInWorkspace(ctx context.Context, arg db.GetChannelInstallationInWorkspaceParams) (db.ChannelInstallation, error)
 	SetChannelInstallationStatus(ctx context.Context, arg db.SetChannelInstallationStatusParams) error
+	CancelPopoInstallationCommands(ctx context.Context, installationID pgtype.UUID) error
 	GetPopoBridgeInWorkspace(ctx context.Context, arg db.GetPopoBridgeInWorkspaceParams) (db.PopoBridge, error)
 }
 
@@ -244,8 +245,20 @@ func (s *InstallService) GetInWorkspace(ctx context.Context, id, wsID pgtype.UUI
 }
 
 func (s *InstallService) Revoke(ctx context.Context, id pgtype.UUID) error {
-	return s.q.SetChannelInstallationStatus(ctx, db.SetChannelInstallationStatusParams{
+	tx, err := s.tx.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	qtx := s.q.WithTx(tx)
+	if err := qtx.SetChannelInstallationStatus(ctx, db.SetChannelInstallationStatusParams{
 		ID:     id,
 		Status: "revoked",
-	})
+	}); err != nil {
+		return err
+	}
+	if err := qtx.CancelPopoInstallationCommands(ctx, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

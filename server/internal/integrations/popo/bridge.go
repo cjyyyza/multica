@@ -62,7 +62,10 @@ type SendPayload struct {
 	BindingID        string           `json:"binding_id,omitempty"`
 	RouteRevision    int64            `json:"route_revision,omitempty"`
 	OutboundKind     string           `json:"outbound_kind,omitempty"`
+	SourceKey        string           `json:"source_key,omitempty"`
+	IssueStatus      string           `json:"issue_status,omitempty"`
 	Attachments      []SendAttachment `json:"attachments,omitempty"`
+	Reply            *ReplySnapshot   `json:"reply,omitempty"`
 }
 
 // SendAttachment is one file the Windows bridge should fetch and deliver.

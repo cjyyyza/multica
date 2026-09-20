@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -23,11 +24,13 @@ import (
 
 // Outbound enqueues the agent's final chat reply as a bridge send command.
 type Outbound struct {
-	q       outboundQueries
-	queue   Enqueuer
-	storage mediaStorage
-	appURL  string
-	logger  *slog.Logger
+	q          outboundQueries
+	queue      Enqueuer
+	storage    mediaStorage
+	appURL     string
+	logger     *slog.Logger
+	durable    *db.Queries
+	recoveryMu sync.Mutex
 }
 
 type outboundQueries interface {
@@ -49,7 +52,7 @@ func NewOutbound(q *db.Queries, queue Enqueuer, logger *slog.Logger) *Outbound {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Outbound{q: q, queue: queue, logger: logger}
+	return &Outbound{q: q, queue: queue, logger: logger, durable: q}
 }
 
 func (o *Outbound) WithDelivery(store mediaStorage, appURL string) *Outbound {
@@ -62,6 +65,10 @@ func (o *Outbound) WithDelivery(store mediaStorage, appURL string) *Outbound {
 }
 
 func (o *Outbound) Register(bus *events.Bus) {
+	bus.Subscribe(protocol.EventTaskRunning, o.handleTaskReplyProgress)
+	bus.Subscribe(protocol.EventTaskMessage, o.handleTaskReplyProgress)
+	bus.Subscribe(protocol.EventTaskProgress, o.handleTaskReplyProgress)
+	bus.Subscribe(protocol.EventTaskCompleted, o.handleTaskReplyProgress)
 	bus.Subscribe(protocol.EventChatDone, o.handleChatDone)
 	bus.Subscribe(protocol.EventCommentCreated, o.handleCommentCreated)
 	bus.Subscribe(protocol.EventTaskFailed, o.handleTaskTerminal)
@@ -70,8 +77,11 @@ func (o *Outbound) Register(bus *events.Bus) {
 }
 
 func (o *Outbound) handleChatDone(e events.Event) {
+	o.enqueueChatDone(context.Background(), e)
+}
+
+func (o *Outbound) enqueueChatDone(ctx context.Context, e events.Event) {
 	content := chatDoneContent(e.Payload)
-	ctx := context.Background()
 	taskID, ok := eventTaskID(e)
 	if !ok {
 		return
@@ -84,6 +94,10 @@ func (o *Outbound) handleChatDone(e events.Event) {
 		return
 	}
 	if delivery.ChannelType != string(TypePopo) {
+		return
+	}
+	sourceKey := "task_reply:" + uuidString(taskID)
+	if o.sourceQueued(ctx, delivery.InstallationID, sourceKey) {
 		return
 	}
 	inst, err := o.q.GetChannelInstallation(ctx, db.GetChannelInstallationParams{
@@ -128,6 +142,16 @@ func (o *Outbound) handleChatDone(e events.Event) {
 	}
 	link := o.chatWebLink(ctx, inst.WorkspaceID, task.ChatSessionID)
 	text, atts := o.prepareOutbound(ctx, inst, content, link, existing, messageID, task.ChatSessionID, task.ID, task.AgentID, "agent")
+	var steps []ReplyStep
+	if reader, ok := o.q.(taskReplyReader); ok && task.ID.Valid {
+		messages, readErr := reader.ListTaskMessages(ctx, task.ID)
+		if readErr != nil {
+			return // Recovery will retry without closing a card with missing history.
+		}
+		_, progress := taskReplyProgress(task, messages)
+		steps = progress.Steps
+		steps[0].Status = "completed"
+	}
 	if err := o.queue.Enqueue(ctx, OutboundItem{
 		WorkspaceID:    inst.WorkspaceID,
 		InstallationID: inst.ID,
@@ -141,7 +165,9 @@ func (o *Outbound) handleChatDone(e events.Event) {
 		BindingID:      delivery.BindingID,
 		RouteRevision:  delivery.RouteRevision,
 		OutboundKind:   "task_reply",
+		SourceKey:      sourceKey,
 		Attachments:    atts,
+		Reply:          taskReplySnapshot(task, replyTerminalSequence, "completed", steps),
 	}); err != nil {
 		o.logger.WarnContext(ctx, "popo outbound: enqueue failed",
 			"installation_id", util.UUIDToString(inst.ID), "error", err)
@@ -153,8 +179,15 @@ func eventTaskID(e events.Event) (pgtype.UUID, bool) {
 	switch p := e.Payload.(type) {
 	case protocol.ChatDonePayload:
 		raw = p.TaskID
+	case protocol.TaskMessagePayload:
+		raw = p.TaskID
+	case protocol.TaskProgressPayload:
+		raw = p.TaskID
 	case map[string]any:
 		raw, _ = p["task_id"].(string)
+	}
+	if raw == "" {
+		raw = e.TaskID
 	}
 	id, err := util.ParseUUID(raw)
 	return id, err == nil && id.Valid

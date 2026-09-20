@@ -185,6 +185,10 @@ func (r *OutboundReplier) postIssue(ctx context.Context, inst engine.ResolvedIns
 	if chatType == "" {
 		chatType = string(channel.ChatTypeP2P)
 	}
+	sourceKey, issueStatus := "", ""
+	if kind == "issue_created" && !res.IssueDuplicate {
+		sourceKey, issueStatus = "issue_created:"+uuidString(res.IssueID), "todo"
+	}
 	return r.queue.Enqueue(ctx, OutboundItem{
 		WorkspaceID:    inst.WorkspaceID,
 		InstallationID: inst.ID,
@@ -198,6 +202,8 @@ func (r *OutboundReplier) postIssue(ctx context.Context, inst engine.ResolvedIns
 		BindingID:      res.ChannelBindingID,
 		RouteRevision:  res.ChannelRouteRevision,
 		OutboundKind:   kind,
+		SourceKey:      sourceKey,
+		IssueStatus:    issueStatus,
 	})
 }
 

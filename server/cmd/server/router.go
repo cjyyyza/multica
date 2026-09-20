@@ -1157,6 +1157,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		channelRouter.Register(popo.TypePopo, popo.NewPopoResolverSet(queries, pool, popoReplier, popoMedia))
 		popoOutbound := popo.NewOutbound(queries, popoBridge, slog.Default()).WithDelivery(store, appURLFromEnv())
 		popoOutbound.Register(bus)
+		h.PopoOutbound = popoOutbound
 		popo.RegisterPopo(channelRegistry, popo.ChannelDeps{
 			Queue:  popoBridge,
 			Lookup: queries,
@@ -1474,6 +1475,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Get("/media/outbound/{attachmentId}", h.GetPopoBridgeOutboundMedia)
 		r.Get("/commands", h.ListPopoBridgeCommands)
 		r.Post("/commands/{id}/receipt", h.AckPopoBridgeCommand)
+		r.Post("/commands/{id}/authorize", h.AuthorizePopoBridgeCommand)
 		r.Post("/registrations/{id}/progress", h.ProgressPopoRegistration)
 	})
 	// GitHub App webhook (no Multica auth — requests are authenticated via

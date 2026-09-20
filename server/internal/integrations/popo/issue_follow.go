@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -13,10 +14,13 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func (o *Outbound) handleCommentCreated(e events.Event) {
+	o.enqueueComment(context.Background(), e)
+}
+
+func (o *Outbound) enqueueComment(ctx context.Context, e events.Event) {
 	var envelope struct {
 		Comment struct {
 			ID         string `json:"id"`
@@ -33,23 +37,27 @@ func (o *Outbound) handleCommentCreated(e events.Event) {
 		return
 	}
 	content := strings.TrimSpace(envelope.Comment.Content)
-	if content == "" {
-		return
-	}
 	commentID, _ := parsePayloadUUID(envelope.Comment.ID)
 	authorType := envelope.Comment.AuthorType
 	if commentID.Valid && strings.EqualFold(authorType, "member") {
-		if write, err := o.q.GetChannelInboundWriteByComment(context.Background(), commentID); err == nil && write.ChannelType == string(TypePopo) {
+		if write, err := o.q.GetChannelInboundWriteByComment(ctx, commentID); err == nil && write.ChannelType == string(TypePopo) {
 			return
 		}
 	}
-	ctx := context.Background()
 	source, err := o.q.GetChannelIssueSourceByIssue(ctx, issueID)
 	if err != nil {
 		return
 	}
 	if source.ChannelType != string(TypePopo) {
 		return
+	}
+	if content == "" {
+		attachments, err := o.q.ListAttachmentsByComment(ctx, db.ListAttachmentsByCommentParams{
+			CommentID: commentID, WorkspaceID: source.WorkspaceID,
+		})
+		if err != nil || len(attachments) == 0 {
+			return
+		}
 	}
 	author := strings.TrimSpace(authorType)
 	if author == "" {
@@ -60,28 +68,11 @@ func (o *Outbound) handleCommentCreated(e events.Event) {
 }
 
 func (o *Outbound) handleTaskTerminal(e events.Event) {
-	ctx := context.Background()
-	taskID, ok := eventTaskID(e)
-	if !ok {
-		return
-	}
-	task, err := o.q.GetAgentTask(ctx, taskID)
-	if err != nil || !task.IssueID.Valid {
-		return
-	}
-	source, err := o.q.GetChannelIssueSourceByIssue(ctx, task.IssueID)
-	if err != nil || source.ChannelType != string(TypePopo) {
-		return
-	}
-	kind := "task_failed"
-	label := "failed"
-	if e.Type == protocol.EventTaskCancelled {
-		kind = "task_cancelled"
-		label = "cancelled"
-	}
-	ident := o.issueIdentifier(ctx, task.IssueID)
-	text := fmt.Sprintf("Run %s on %s. Issue status is unchanged.", label, ident)
-	o.enqueueSource(ctx, source, task.IssueID, pgtype.UUID{}, task.ID, text, kind)
+	o.enqueueTaskTerminal(context.Background(), e)
+}
+
+func (o *Outbound) enqueueTaskTerminal(ctx context.Context, e events.Event) {
+	o.enqueueTaskReply(ctx, e)
 }
 
 func (o *Outbound) handleIssueUpdated(e events.Event) {
@@ -136,6 +127,35 @@ func (o *Outbound) enqueueSource(ctx context.Context, source db.ChannelIssueSour
 	if err != nil || inst.Status != "active" {
 		return
 	}
+	sourceKey := kind + ":" + uuidString(issueID)
+	issueStatus := ""
+	if commentID.Valid {
+		sourceKey = kind + ":" + uuidString(commentID)
+	}
+	if taskID.Valid {
+		sourceKey = kind + ":" + uuidString(taskID)
+	}
+	if kind == "issue_created" {
+		issueStatus = "todo"
+	}
+	if kind == "issue_status" {
+		issue, err := o.q.GetIssue(ctx, issueID)
+		if err != nil {
+			return
+		}
+		issueStatus = issue.Status
+		sourceKey += ":" + strconv.FormatInt(issue.Revision, 10)
+		if o.durable != nil {
+			previous, err := o.durable.GetLatestPopoIssueStatus(ctx, db.GetLatestPopoIssueStatusParams{InstallationID: inst.ID, Column2: uuidString(issueID)})
+			if err == nil && previous == issueStatus {
+				return
+			}
+		}
+		text = fmt.Sprintf("%s status is now %s. Run status is tracked separately.", o.issueIdentifier(ctx, issueID), issueStatus)
+	}
+	if o.sourceQueued(ctx, inst.ID, sourceKey) {
+		return
+	}
 	info := DecodePublicConfig(inst.Config)
 	var bridgeID pgtype.UUID
 	if parsed, err := util.ParseUUID(info.BridgeID); err == nil {
@@ -168,6 +188,8 @@ func (o *Outbound) enqueueSource(ctx context.Context, source db.ChannelIssueSour
 		BindingID:      source.BindingID,
 		RouteRevision:  source.RouteRevision,
 		OutboundKind:   kind,
+		SourceKey:      sourceKey,
+		IssueStatus:    issueStatus,
 		Attachments:    atts,
 	}); err != nil {
 		o.logger.WarnContext(ctx, "popo issue follow: enqueue failed",

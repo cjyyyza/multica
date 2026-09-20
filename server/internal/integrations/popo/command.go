@@ -2,6 +2,7 @@ package popo
 
 import (
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,7 +32,7 @@ func (s *BridgeService) Enqueue(ctx context.Context, item OutboundItem) error {
 	wsID := item.WorkspaceID
 	bridgeID := item.BridgeID
 	robotID := strings.TrimSpace(item.RobotID)
-	if (!bridgeID.Valid || !wsID.Valid || robotID == "") && item.InstallationID.Valid {
+	if item.InstallationID.Valid {
 		row, err := s.q.GetChannelInstallation(ctx, db.GetChannelInstallationParams{
 			ID:          item.InstallationID,
 			ChannelType: string(TypePopo),
@@ -39,10 +40,16 @@ func (s *BridgeService) Enqueue(ctx context.Context, item OutboundItem) error {
 		if err != nil {
 			return fmt.Errorf("popo: load installation: %w", err)
 		}
+		if row.Status != "active" || (wsID.Valid && wsID != row.WorkspaceID) {
+			return ErrInstallationWrong
+		}
 		if !wsID.Valid {
 			wsID = row.WorkspaceID
 		}
 		info := DecodePublicConfig(row.Config)
+		if (bridgeID.Valid && uuidString(bridgeID) != info.BridgeID) || (robotID != "" && robotID != info.RobotID) {
+			return ErrInstallationWrong
+		}
 		if !bridgeID.Valid {
 			parsed, err := util.ParseUUID(info.BridgeID)
 			if err != nil {
@@ -77,10 +84,22 @@ func (s *BridgeService) Enqueue(ctx context.Context, item OutboundItem) error {
 		BindingID:        uuidString(item.BindingID),
 		RouteRevision:    item.RouteRevision,
 		OutboundKind:     strings.TrimSpace(item.OutboundKind),
+		SourceKey:        item.SourceKey,
+		IssueStatus:      item.IssueStatus,
 		Attachments:      item.Attachments,
+		Reply:            item.Reply,
 	})
 	if err != nil {
 		return fmt.Errorf("encode send payload: %w", err)
+	}
+	deliveryID := dbid.NewV7()
+	if item.SourceKey != "" {
+		deliveryID = sourceDeliveryID(item.InstallationID, item.SourceKey)
+		if _, err := s.q.GetPopoBridgeCommandByDeliveryID(ctx, deliveryID); err == nil {
+			return nil
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
 	}
 	if len(item.Attachments) == 0 {
 		row, err := s.q.EnqueuePopoBridgeCommand(ctx, db.EnqueuePopoBridgeCommandParams{
@@ -88,9 +107,12 @@ func (s *BridgeService) Enqueue(ctx context.Context, item OutboundItem) error {
 			BridgeID:       bridgeID,
 			InstallationID: item.InstallationID,
 			Type:           CommandTypeSend,
-			DeliveryID:     dbid.NewV7(),
+			DeliveryID:     deliveryID,
 			Payload:        payload,
 		})
+		if errors.Is(err, pgx.ErrNoRows) && item.SourceKey != "" {
+			return nil
+		}
 		if err != nil {
 			return fmt.Errorf("enqueue popo command: %w", err)
 		}
@@ -119,9 +141,12 @@ func (s *BridgeService) Enqueue(ctx context.Context, item OutboundItem) error {
 		BridgeID:       bridgeID,
 		InstallationID: item.InstallationID,
 		Type:           CommandTypeSend,
-		DeliveryID:     dbid.NewV7(),
+		DeliveryID:     deliveryID,
 		Payload:        payload,
 	})
+	if errors.Is(err, pgx.ErrNoRows) && item.SourceKey != "" {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("enqueue popo command: %w", err)
 	}
@@ -167,13 +192,17 @@ func (s *BridgeService) LeaseCommands(ctx context.Context, bridgeID pgtype.UUID,
 	}
 	deadline := s.now().Add(wait)
 	for {
+		if err := s.q.CancelRevokedPopoBridgeCommands(ctx, bridgeID); err != nil {
+			return nil, err
+		}
 		if err := s.q.ReclaimExpiredPopoBridgeCommandLeases(ctx, bridgeID); err != nil {
 			return nil, fmt.Errorf("reclaim command leases: %w", err)
 		}
 		rows, err := s.q.LeasePopoBridgeCommands(ctx, db.LeasePopoBridgeCommandsParams{
-			LeaseExpiresAt: pgtype.Timestamptz{Time: s.now().Add(CommandLease), Valid: true},
-			LeaseBridgeID:  bridgeID,
-			MaxN:           MaxLeaseCommands,
+			LeaseExpiresAt:             pgtype.Timestamptz{Time: s.now().Add(CommandLease), Valid: true},
+			RegistrationLeaseExpiresAt: pgtype.Timestamptz{Time: s.now().Add(RegistrationTTL + 2*CommandLease), Valid: true},
+			LeaseBridgeID:              bridgeID,
+			MaxN:                       MaxLeaseCommands,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("lease commands: %w", err)
@@ -213,10 +242,13 @@ func (s *BridgeService) RecordReceipt(ctx context.Context, commandID, bridgeID p
 		return db.PopoBridgeCommand{}, ErrInvalidReceipt
 	}
 	remoteID := strings.TrimSpace(receipt.RemoteMessageID)
-	if status == CommandStatusDelivered && remoteID == "" {
-		return db.PopoBridgeCommand{}, ErrInvalidReceipt
+	tx, err := s.tx.Begin(ctx)
+	if err != nil {
+		return db.PopoBridgeCommand{}, err
 	}
-	row, err := s.q.GetPopoBridgeCommandForBridge(ctx, db.GetPopoBridgeCommandForBridgeParams{
+	defer tx.Rollback(ctx)
+	qtx := s.q.WithTx(tx)
+	row, err := qtx.LockPopoBridgeCommandForReceipt(ctx, db.LockPopoBridgeCommandForReceiptParams{
 		ID:       commandID,
 		BridgeID: bridgeID,
 	})
@@ -226,14 +258,22 @@ func (s *BridgeService) RecordReceipt(ctx context.Context, commandID, bridgeID p
 		}
 		return db.PopoBridgeCommand{}, err
 	}
+	if status == CommandStatusDelivered && row.Type == CommandTypeSend && remoteID == "" {
+		return db.PopoBridgeCommand{}, ErrInvalidReceipt
+	}
 	switch row.Status {
 	case CommandStatusDelivered, CommandStatusFailed, CommandStatusUnknown, CommandStatusCancelled:
 		if receiptMatches(row, status, remoteID) {
-			return row, nil
+			if status == CommandStatusDelivered {
+				if err := s.recordOutboundLedger(ctx, qtx, row, remoteID); err != nil {
+					return db.PopoBridgeCommand{}, err
+				}
+			}
+			return row, tx.Commit(ctx)
 		}
 		return db.PopoBridgeCommand{}, ErrReceiptConflict
 	}
-	updated, err := s.q.SetPopoBridgeCommandReceipt(ctx, db.SetPopoBridgeCommandReceiptParams{
+	updated, err := qtx.SetPopoBridgeCommandReceipt(ctx, db.SetPopoBridgeCommandReceiptParams{
 		ID:              commandID,
 		BridgeID:        bridgeID,
 		Status:          status,
@@ -244,7 +284,12 @@ func (s *BridgeService) RecordReceipt(ctx context.Context, commandID, bridgeID p
 		return db.PopoBridgeCommand{}, err
 	}
 	if status == CommandStatusDelivered {
-		s.recordOutboundLedger(ctx, updated, remoteID)
+		if err := s.recordOutboundLedger(ctx, qtx, updated, remoteID); err != nil {
+			return db.PopoBridgeCommand{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.PopoBridgeCommand{}, err
 	}
 	var payload SendPayload
 	_ = json.Unmarshal(updated.Payload, &payload)
@@ -260,13 +305,13 @@ func (s *BridgeService) RecordReceipt(ctx context.Context, commandID, bridgeID p
 	return updated, nil
 }
 
-func (s *BridgeService) recordOutboundLedger(ctx context.Context, row db.PopoBridgeCommand, remoteID string) {
-	if s.q == nil || remoteID == "" || !row.InstallationID.Valid {
-		return
+func (s *BridgeService) recordOutboundLedger(ctx context.Context, q *db.Queries, row db.PopoBridgeCommand, remoteID string) error {
+	if row.Type != CommandTypeSend || remoteID == "" || !row.InstallationID.Valid {
+		return nil
 	}
 	var payload SendPayload
 	if err := json.Unmarshal(row.Payload, &payload); err != nil {
-		return
+		return err
 	}
 	kind := strings.TrimSpace(payload.OutboundKind)
 	if kind == "" {
@@ -274,12 +319,12 @@ func (s *BridgeService) recordOutboundLedger(ctx context.Context, row db.PopoBri
 	}
 	bindingID, _ := util.ParseUUID(payload.BindingID)
 	if !bindingID.Valid {
-		return
+		return nil
 	}
 	issueID, _ := util.ParseUUID(payload.IssueID)
 	commentID, _ := util.ParseUUID(payload.CommentID)
 	taskID, _ := util.ParseUUID(payload.TaskID)
-	_ = s.q.RecordChannelOutboundMessage(ctx, db.RecordChannelOutboundMessageParams{
+	return q.RecordChannelOutboundMessage(ctx, db.RecordChannelOutboundMessageParams{
 		OutboundInstallationID: row.InstallationID,
 		OutboundChannelType:    string(TypePopo),
 		OutboundMessageID:      remoteID,
@@ -290,6 +335,15 @@ func (s *BridgeService) recordOutboundLedger(ctx context.Context, row db.PopoBri
 		OutboundIssueID:        issueID,
 		OutboundCommentID:      commentID,
 	})
+}
+
+// This hash is a stable deduplication coordinate, not an authentication secret.
+func sourceDeliveryID(installationID pgtype.UUID, sourceKey string) pgtype.UUID {
+	return pgtype.UUID{Bytes: md5.Sum([]byte(uuidString(installationID) + ":" + sourceKey)), Valid: true}
+}
+
+func (s *BridgeService) CanDeliver(ctx context.Context, commandID, bridgeID pgtype.UUID) (bool, error) {
+	return s.q.CanDeliverPopoBridgeCommand(ctx, db.CanDeliverPopoBridgeCommandParams{ID: commandID, BridgeID: bridgeID})
 }
 
 func uuidString(id pgtype.UUID) string {

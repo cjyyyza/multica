@@ -395,6 +395,23 @@ type popoCommandReceiptRequest struct {
 	Error           string `json:"error"`
 }
 
+func (h *Handler) AuthorizePopoBridgeCommand(w http.ResponseWriter, r *http.Request) {
+	bridge, ok := h.popoBridgeFromRequest(w, r)
+	if !ok {
+		return
+	}
+	id, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "command id")
+	if !ok {
+		return
+	}
+	allowed, err := h.PopoBridge.CanDeliver(r.Context(), id, bridge.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to authorize delivery")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"allowed": allowed})
+}
+
 func (h *Handler) AckPopoBridgeCommand(w http.ResponseWriter, r *http.Request) {
 	bridge, ok := h.popoBridgeFromRequest(w, r)
 	if !ok {
