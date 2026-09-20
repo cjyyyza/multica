@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 // TestHermesMemoryProfileSegment covers the store segment derived from a
@@ -53,7 +56,7 @@ func TestHermesMemoryProfileSegment(t *testing.T) {
 // one-off import depends on: <profile dir>/hermes-state/<agent>/<profile>.
 func TestHermesMemoryStorePathLayout(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("USERPROFILE", home)
 
 	agent := "11111111-2222-3333-4444-555555555555"
@@ -68,7 +71,7 @@ func TestHermesMemoryStorePathLayout(t *testing.T) {
 // store on: memory has to stay task-local rather than land in a shared segment.
 func TestHermesMemoryStorePathDisabled(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("USERPROFILE", home)
 
 	if got := HermesMemoryStorePath("", "", ""); got != "" {
@@ -111,7 +114,7 @@ func TestPrepareHermesHomeMemoryStorePersistsAcrossTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lstat memories: %v", err)
 	}
-	if fi.Mode()&os.ModeSymlink == 0 {
+	if fi.Mode()&(os.ModeSymlink|os.ModeIrregular) == 0 {
 		t.Fatalf("memories is not a link (mode %v)", fi.Mode())
 	}
 }
@@ -231,6 +234,9 @@ func TestPrepareHermesHomeWithoutStoreKeepsTaskLocalMemories(t *testing.T) {
 // survive and the overlay must fail, because the caller deletes the source
 // directory as soon as migration reports success.
 func TestMigrateHermesTaskMemoriesFailureKeepsSource(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("requires POSIX read permissions; native Windows lock failures have separate coverage")
+	}
 	t.Parallel()
 	taskDir := t.TempDir()
 	storeDir := t.TempDir()
@@ -276,8 +282,8 @@ func TestMigrateHermesTaskMemoriesFailureKeepsSource(t *testing.T) {
 // caller deletes the source directory the moment migration reports success.
 func TestMountHermesMemoriesUnreadableStoreKeepsSource(t *testing.T) {
 	t.Parallel()
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores directory permissions")
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("requires POSIX directory permissions and an unprivileged user")
 	}
 	hermesHome := t.TempDir()
 	memories := filepath.Join(hermesHome, "memories")
@@ -431,8 +437,8 @@ func TestPromoteHermesMemoryStagingClassifiesRemoveFailures(t *testing.T) {
 
 	// An empty store that cannot be removed is an I/O failure, not a race.
 	t.Run("unremovable empty store fails closed", func(t *testing.T) {
-		if os.Geteuid() == 0 {
-			t.Skip("root ignores directory permissions")
+		if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+			t.Skip("requires POSIX directory permissions and an unprivileged user")
 		}
 		parent := t.TempDir()
 		storeDir := filepath.Join(parent, "default")
@@ -544,7 +550,7 @@ func TestPrepareHermesHomeMigrationKeepsExistingStore(t *testing.T) {
 // never removed.
 func TestPruneHermesMemoryStores(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("USERPROFILE", home)
 
 	root := filepath.Join(home, ".multica", hermesMemoryStoreRoot)
@@ -595,7 +601,7 @@ func TestPruneHermesMemoryStores(t *testing.T) {
 // pruner off entirely, matching the Codex store knob.
 func TestPruneHermesMemoryStoresDisabled(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("USERPROFILE", home)
 
 	store := filepath.Join(home, ".multica", hermesMemoryStoreRoot, "agent-1", "default")

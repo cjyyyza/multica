@@ -3,6 +3,7 @@ package execenv
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -74,8 +75,21 @@ func TestPrepareHermesHomeOverlay(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s not mirrored into overlay: %v", name, err)
 		}
-		if fi.Mode()&os.ModeSymlink == 0 {
+		if runtime.GOOS != "windows" && fi.Mode()&os.ModeSymlink == 0 {
 			t.Errorf("%s should be a symlink into the shared home", name)
+		}
+		if name == "plugins" {
+			assertIsLink(t, filepath.Join(hermesHome, name))
+		}
+	}
+	for _, name := range []string{"auth.json", "oauth_state.json"} {
+		actual, err := os.ReadFile(filepath.Join(hermesHome, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected, err := os.ReadFile(filepath.Join(sharedHome, name))
+		if err != nil || string(actual) != string(expected) {
+			t.Fatalf("mirrored %s lost content: %v", name, err)
 		}
 	}
 
@@ -152,8 +166,9 @@ func TestHermesDisablesExternalMemoryProvider(t *testing.T) {
 func TestHermesDerivedConfigRebasesRelativeExternalDirs(t *testing.T) {
 	t.Parallel()
 	sharedHome := t.TempDir()
+	externalRoot := filepath.Join(t.TempDir(), "external-skills")
 	mustWrite(t, filepath.Join(sharedHome, "config.yaml"),
-		"model: hermes-4\nskills:\n  external_dirs:\n    - team-skills\n    - /opt/shared/skills\n")
+		"model: hermes-4\nskills:\n  external_dirs:\n    - team-skills\n    - '"+externalRoot+"'\n")
 
 	hermesHome := filepath.Join(t.TempDir(), "hermes-home")
 	skills := []SkillContextForEnv{{Name: "Review Helper", Content: "x"}}
@@ -164,7 +179,7 @@ func TestHermesDerivedConfigRebasesRelativeExternalDirs(t *testing.T) {
 	got := hermesExternalDirs(t, filepath.Join(hermesHome, "config.yaml"))
 	want := []string{
 		filepath.Join(sharedHome, "team-skills"),
-		"/opt/shared/skills",
+		externalRoot,
 		filepath.Join(sharedHome, "skills"),
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -183,7 +198,8 @@ func TestHermesExternalDirsExpandsSanitizedEnv(t *testing.T) {
 		"skills:\n  external_dirs:\n    - ${TEAM_SKILLS}/reviews\n    - ${MYSTERY_VAR}/x\n")
 
 	hermesHome := filepath.Join(t.TempDir(), "hermes-home")
-	env := map[string]string{"TEAM_SKILLS": "/srv/team"} // MYSTERY_VAR set nowhere
+	teamRoot := filepath.Join(t.TempDir(), "team")
+	env := map[string]string{"TEAM_SKILLS": teamRoot} // MYSTERY_VAR set nowhere
 	skills := []SkillContextForEnv{{Name: "Review Helper", Content: "x"}}
 	if _, err := prepareHermesHome(hermesHome, sharedHome, false, skills, env, "", "", testLogger()); err != nil {
 		t.Fatalf("prepareHermesHome failed: %v", err)
@@ -191,8 +207,8 @@ func TestHermesExternalDirsExpandsSanitizedEnv(t *testing.T) {
 
 	got := hermesExternalDirs(t, filepath.Join(hermesHome, "config.yaml"))
 	want := []string{
-		"/srv/team/reviews", // known var expanded
-		"${MYSTERY_VAR}/x",  // unknown var preserved verbatim, NOT absolutized
+		filepath.Join(teamRoot, "reviews"), // known var expanded
+		"${MYSTERY_VAR}/x",                 // unknown var preserved verbatim, NOT absolutized
 		filepath.Join(sharedHome, "skills"),
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -372,17 +388,17 @@ func TestHermesOverlayPermissions(t *testing.T) {
 
 	if fi, err := os.Stat(hermesHome); err != nil {
 		t.Fatalf("stat home: %v", err)
-	} else if fi.Mode().Perm() != 0o700 {
+	} else if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o700 {
 		t.Errorf("task home perms = %o, want 0700", fi.Mode().Perm())
 	}
 	if fi, err := os.Stat(filepath.Join(hermesHome, "config.yaml")); err != nil {
 		t.Fatalf("stat config: %v", err)
-	} else if fi.Mode().Perm() != 0o600 {
+	} else if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Errorf("derived config perms = %o, want 0600", fi.Mode().Perm())
 	}
 	if fi, err := os.Stat(filepath.Join(hermesHome, hermesTaskLocalStateMarker)); err != nil {
 		t.Fatalf("stat task-local state marker: %v", err)
-	} else if fi.Mode().Perm() != 0o600 {
+	} else if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Errorf("task-local state marker perms = %o, want 0600", fi.Mode().Perm())
 	}
 }
@@ -589,7 +605,7 @@ func TestHermesOverlayEnvPinsHomeAfterDotenvOverride(t *testing.T) {
 	envPath := filepath.Join(hermesHome, ".env")
 	if fi, err := os.Stat(envPath); err != nil {
 		t.Fatalf(".env missing: %v", err)
-	} else if perm := fi.Mode().Perm(); perm != 0o600 {
+	} else if perm := fi.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o600 {
 		t.Errorf(".env perms = %o, want 600 (holds credentials)", perm)
 	}
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -248,7 +249,7 @@ func TestPrepareQwenpawWorkspacePermissions(t *testing.T) {
 
 	if fi, err := os.Stat(workspaceDir); err != nil {
 		t.Fatalf("stat workspace: %v", err)
-	} else if fi.Mode().Perm() != 0o700 {
+	} else if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o700 {
 		t.Errorf("workspace perms = %o, want 0700", fi.Mode().Perm())
 	}
 }

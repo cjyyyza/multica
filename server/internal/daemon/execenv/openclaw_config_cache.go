@@ -37,7 +37,8 @@ const (
 	// openclawDiscoveryCacheFile is the per-profile cache file name. It sits
 	// in the profile directory (~/.multica[/profiles/<name>]) so every task on
 	// this daemon shares one entry.
-	openclawDiscoveryCacheFile = "openclaw-discovery-cache.json"
+	openclawDiscoveryCacheFile     = "openclaw-discovery-cache.json"
+	openclawDiscoveryCacheLockFile = "openclaw-discovery-cache.lock"
 
 	// openclawDiscoveryCacheVersion guards the on-disk shape. A daemon that
 	// reads an entry written by a different version treats it as a miss.
@@ -203,7 +204,12 @@ func loadOpenclawDiscoveryCache(cachePath, bin string, now time.Time) (openclawD
 	if cachePath == "" {
 		return openclawDiscoveryCacheEntry{}, false
 	}
-	raw, err := os.ReadFile(cachePath)
+	release, err := lockDiscoveryCache(cachePath)
+	if err != nil {
+		return openclawDiscoveryCacheEntry{}, false
+	}
+	defer release()
+	raw, err := readReplaceableFile(cachePath)
 	if err != nil {
 		return openclawDiscoveryCacheEntry{}, false
 	}
@@ -288,6 +294,11 @@ func storeOpenclawDiscoveryCache(cachePath, bin, activeConfigPath string, agents
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create openclaw discovery cache dir: %w", err)
 	}
+	release, err := lockDiscoveryCache(cachePath)
+	if err != nil {
+		return fmt.Errorf("lock openclaw discovery cache: %w", err)
+	}
+	defer release()
 	tmp, err := os.CreateTemp(dir, openclawDiscoveryCacheFile+".*")
 	if err != nil {
 		return fmt.Errorf("create openclaw discovery cache temp: %w", err)
@@ -310,7 +321,7 @@ func storeOpenclawDiscoveryCache(cachePath, bin, activeConfigPath string, agents
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close openclaw discovery cache temp: %w", err)
 	}
-	if err := os.Rename(tmpName, cachePath); err != nil {
+	if err := replaceFile(tmpName, cachePath); err != nil {
 		return fmt.Errorf("commit openclaw discovery cache: %w", err)
 	}
 	return nil

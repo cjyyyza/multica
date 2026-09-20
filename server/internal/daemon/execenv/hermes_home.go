@@ -50,8 +50,8 @@ import (
 //     overlay-owned: the host's conversation history is never linked or copied.
 //     state.db is then linked to the conversation's own persistent store
 //     (hermes_sessions.go) so a multi-turn conversation survives the task; it
-//     stays a task-local file only when there is no store to key on, or on a
-//     host that cannot create the link;
+//     stays a task-local file only when there is no store to key on. A host
+//     unable to link the persistent store fails preparation and keeps history;
 //   - disables the external `memory.provider` in the derived config so a
 //     host-configured Supermemory/Hindsight/etc. backend isn't shared across
 //     tasks. This is the on-disk + external-backend memory isolation; a managed,

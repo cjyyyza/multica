@@ -246,7 +246,8 @@ func TestPrepareOpenclawConfigWorstCaseCLIBudgets(t *testing.T) {
 	}
 
 	var invocations []string
-	deadlines := map[time.Time]bool{}
+	// Distinct budgets may have identical clock values on Windows.
+	deadlines := map[context.Context]bool{}
 	for _, call := range stub.calls {
 		invocation := strings.Join(call.args, " ")
 		invocations = append(invocations, invocation)
@@ -254,7 +255,7 @@ func TestPrepareOpenclawConfigWorstCaseCLIBudgets(t *testing.T) {
 			t.Errorf("`openclaw %s` ran without a deadline; every CLI step must be bounded", invocation)
 			continue
 		}
-		deadlines[call.deadline] = true
+		deadlines[call.ctx] = true
 	}
 
 	// The call graph itself, so a new invocation stays visible here even when it
@@ -276,7 +277,7 @@ func TestPrepareOpenclawConfigWorstCaseCLIBudgets(t *testing.T) {
 
 	// And specifically that the shared budget is path resolution's, since that is
 	// the pairing the ceiling now depends on.
-	if len(stub.calls) >= 2 && stub.calls[0].deadline != stub.calls[1].deadline {
+	if len(stub.calls) >= 2 && stub.calls[0].ctx != stub.calls[1].ctx {
 		t.Errorf("`config validate --json` and its `config file` fallback ran under "+
 			"separate deadlines (%v vs %v); they answer the same question and must "+
 			"share one budget",

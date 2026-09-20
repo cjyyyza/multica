@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 const preparationHelperTestMode = "execenv-preparation-helper"
@@ -45,7 +47,7 @@ const preparationHelperTestMode = "execenv-preparation-helper"
 func TestMain(m *testing.M) {
 	os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	os.Unsetenv(cli.TaskConfigRootEnv)
-	code := m.Run()
+	code := testenv.RunIsolated(m.Run)
 	if testRepoTemplate.dir != "" {
 		os.RemoveAll(testRepoTemplate.dir)
 	}

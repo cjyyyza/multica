@@ -461,7 +461,10 @@ func dirHasEntries(dir string) (hasEntries bool, ok bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return false, true
+			// Windows ReadDir can report PATH_NOT_FOUND for an existing regular
+			// file. Only a missing path is safe to classify as an empty directory.
+			_, statErr := os.Lstat(dir)
+			return false, errors.Is(statErr, fs.ErrNotExist)
 		}
 		return false, false
 	}

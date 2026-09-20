@@ -506,7 +506,7 @@ func TestPrepareDirectoryMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat MulticaConfigRoot: %v", err)
 	}
-	if got := info.Mode().Perm(); got != 0o700 {
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o700 {
 		t.Fatalf("MulticaConfigRoot mode = %o, want 700", got)
 	}
 
@@ -3231,6 +3231,13 @@ func TestVerifyCodexHomeRootRejectsSwappedDirectory(t *testing.T) {
 
 	// Same path, different directory — what a swap looks like after the open.
 	if err := os.Rename(codexHome, filepath.Join(base, "moved-aside")); err != nil {
+		if rootSwapBlockedByOS(err) {
+			if err := verifyCodexHomeRoot(root, codexHome, "model_instructions_file"); err != nil {
+				t.Fatal(err)
+			}
+			t.Log("the OS kept the pinned root from being replaced")
+			return
+		}
 		t.Fatalf("move original codex home: %v", err)
 	}
 	if err := os.Mkdir(codexHome, 0o755); err != nil {
@@ -3262,6 +3269,13 @@ func TestVerifyCodexHomeRootRejectsSymlinkedHome(t *testing.T) {
 
 	outside := t.TempDir()
 	if err := os.Rename(codexHome, filepath.Join(base, "moved-aside")); err != nil {
+		if rootSwapBlockedByOS(err) {
+			if err := verifyCodexHomeRoot(root, codexHome, "model_instructions_file"); err != nil {
+				t.Fatal(err)
+			}
+			t.Log("the OS kept the pinned root from being replaced")
+			return
+		}
 		t.Fatalf("move original codex home: %v", err)
 	}
 	if err := os.Symlink(outside, codexHome); err != nil {
@@ -4242,8 +4256,8 @@ func TestResolveWindowsSandboxStateFailsClosed(t *testing.T) {
 // startup on both paths (fresh Prepare fails the task; Reuse declines the
 // reuse and falls back to Prepare, which re-runs this check on a fresh home).
 func TestPrepareCodexHomeFailsClosedWhenSandboxWriteFails(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("running as root bypasses the read-only permissions this test relies on")
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("requires POSIX read-only permissions and an unprivileged user")
 	}
 	// Cannot use t.Parallel() with t.Setenv.
 
@@ -4367,7 +4381,7 @@ func TestReuseRestoresCodexHome(t *testing.T) {
 	}
 	if info, err := os.Stat(reused.MulticaConfigRoot); err != nil {
 		t.Fatalf("stat restored MulticaConfigRoot: %v", err)
-	} else if got := info.Mode().Perm(); got != 0o700 {
+	} else if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o700 {
 		t.Fatalf("restored MulticaConfigRoot mode = %o, want 700", got)
 	}
 
@@ -6864,9 +6878,17 @@ func TestWriteEnvRootOwnerAtomicallyReplacesMarker(t *testing.T) {
 	if err := os.WriteFile(ownerPath, []byte(taskID), 0o644); err != nil {
 		t.Fatalf("seed legacy owner: %v", err)
 	}
-	before, err := os.Stat(ownerPath)
+	reader, err := openReplaceableFile(ownerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := reader.Stat()
+	closeErr := reader.Close()
 	if err != nil {
 		t.Fatalf("stat legacy owner: %v", err)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	if err := writeEnvRootOwner(envRoot, "ws-authoritative", taskID); err != nil {

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 // openclawCLIStub captures one or more (subcommand, response) pairs and
@@ -34,6 +36,7 @@ type openclawCall struct {
 	// shared deadline, and a test that counted calls could not tell that apart
 	// from a fifth budget. See TestPrepareOpenclawConfigWorstCaseCLIBudgets.
 	deadline time.Time
+	ctx      context.Context
 }
 
 type openclawResponse struct {
@@ -56,7 +59,7 @@ func installOpenclawStub(t *testing.T, responses map[string]openclawResponse) *o
 
 func (s *openclawCLIStub) exec(ctx context.Context, bin string, args ...string) (string, error) {
 	deadline, _ := ctx.Deadline()
-	s.calls = append(s.calls, openclawCall{bin: bin, args: append([]string(nil), args...), deadline: deadline})
+	s.calls = append(s.calls, openclawCall{bin: bin, args: append([]string(nil), args...), deadline: deadline, ctx: ctx})
 	key := strings.Join(args, " ")
 	if resp, ok := s.responses[key]; ok {
 		return resp.stdout, resp.err
@@ -358,7 +361,7 @@ func TestOpenclawActiveConfigPathFallbackSources(t *testing.T) {
 			setup: func(t *testing.T) string {
 				home := t.TempDir()
 				path := filepath.Join(home, ".openclaw", "openclaw.json")
-				t.Setenv("HOME", home)
+				testenv.SetHome(t, home)
 				return path
 			},
 		},
@@ -366,7 +369,7 @@ func TestOpenclawActiveConfigPathFallbackSources(t *testing.T) {
 			setup: func(t *testing.T) string {
 				home := t.TempDir()
 				path := filepath.Join(home, ".clawdbot", "clawdbot.json")
-				t.Setenv("HOME", home)
+				testenv.SetHome(t, home)
 				return path
 			},
 		},
@@ -374,7 +377,7 @@ func TestOpenclawActiveConfigPathFallbackSources(t *testing.T) {
 			setup: func(t *testing.T) string {
 				home := t.TempDir()
 				path := filepath.Join(home, ".moltbot", "moltbot.json")
-				t.Setenv("HOME", home)
+				testenv.SetHome(t, home)
 				return path
 			},
 		},
@@ -382,7 +385,7 @@ func TestOpenclawActiveConfigPathFallbackSources(t *testing.T) {
 			setup: func(t *testing.T) string {
 				home := t.TempDir()
 				path := filepath.Join(home, ".moldbot", "moldbot.json")
-				t.Setenv("HOME", home)
+				testenv.SetHome(t, home)
 				return path
 			},
 		},
@@ -419,7 +422,7 @@ func TestOpenclawActiveConfigPathFallbackSources(t *testing.T) {
 func TestOpenclawActiveConfigPathFallbackFreshInstallUsesCanonicalPath(t *testing.T) {
 	clearOpenclawPathEnv(t)
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	stub := installOpenclawStub(t, map[string]openclawResponse{
 		"config file": {err: openclawConfigFileUnsupportedErr()},
 	})
@@ -440,7 +443,7 @@ func TestOpenclawActiveConfigPathFallbackFreshInstallUsesCanonicalPath(t *testin
 func TestOpenclawActiveConfigPathFallbackOpenclawConfigPathHardOverride(t *testing.T) {
 	clearOpenclawPathEnv(t)
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	explicitPath := filepath.Join(t.TempDir(), "missing-openclaw.json")
 	t.Setenv("OPENCLAW_CONFIG_PATH", explicitPath)
 	legacyPath := filepath.Join(home, ".clawdbot", "clawdbot.json")
@@ -654,7 +657,7 @@ func TestPrepareOpenclawConfigExpandsTilde(t *testing.T) {
 	}
 
 	fakeHome := t.TempDir()
-	t.Setenv("HOME", fakeHome)
+	testenv.SetHome(t, fakeHome)
 	if err := os.MkdirAll(filepath.Join(fakeHome, ".openclaw"), 0o755); err != nil {
 		t.Fatalf("mkdir home/.openclaw: %v", err)
 	}
@@ -2127,7 +2130,7 @@ func TestPrepareOpenclawConfigNewSchemaEmptyRegistry(t *testing.T) {
 // (issue #6630).
 func TestExpandOpenclawPathTildeSeparators(t *testing.T) {
 	fakeHome := t.TempDir()
-	t.Setenv("HOME", fakeHome)
+	testenv.SetHome(t, fakeHome)
 	t.Setenv("USERPROFILE", fakeHome)
 
 	cases := []struct {
@@ -2269,7 +2272,7 @@ func TestPrepareOpenclawConfigExpandsOpenclawHome(t *testing.T) {
 // reached through the branch itself.
 func TestExpandOpenclawPathOpenclawHomeIsItselfATilde(t *testing.T) {
 	osHome := t.TempDir()
-	t.Setenv("HOME", osHome)
+	testenv.SetHome(t, osHome)
 	t.Setenv("USERPROFILE", osHome)
 
 	cases := []struct {
@@ -2369,7 +2372,7 @@ func TestPrepareOpenclawConfigExpandsTildeValuedOpenclawHome(t *testing.T) {
 	}
 
 	osHome := t.TempDir()
-	t.Setenv("HOME", osHome)
+	testenv.SetHome(t, osHome)
 	t.Setenv("USERPROFILE", osHome)
 	t.Setenv("OPENCLAW_HOME", "~/svc")
 
@@ -2415,7 +2418,7 @@ func TestPrepareOpenclawConfigExpandsWindowsTilde(t *testing.T) {
 	}
 
 	fakeHome := t.TempDir()
-	t.Setenv("HOME", fakeHome)
+	testenv.SetHome(t, fakeHome)
 	t.Setenv("USERPROFILE", fakeHome)
 
 	// filepath.Join normalizes the reported remainder to the host separator,

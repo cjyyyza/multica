@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 // Real-CLI coverage for the managed-MCP include chain. Opt-in twice over: the
@@ -75,7 +77,7 @@ func realOpenclawConfig(t *testing.T) (bin, activeConfig string, sibling mcpSibl
 		t.Fatalf("create isolated OpenClaw state: %v", err)
 	}
 	activeConfig = filepath.Join(stateDir, "openclaw.json")
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("OPENCLAW_HOME", home)
 	t.Setenv("OPENCLAW_STATE_DIR", stateDir)

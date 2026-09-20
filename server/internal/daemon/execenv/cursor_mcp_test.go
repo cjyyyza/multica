@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
@@ -120,7 +121,7 @@ func TestPrepareCursorMcpConfigWritesProjectConfigAndApprovals(t *testing.T) {
 	if len(cfg.McpServers) != 2 {
 		t.Fatalf("mcpServers length = %d, want 2: %s", len(cfg.McpServers), rawConfig)
 	}
-	if mode := filePerm(t, filepath.Join(workDir, ".cursor", "mcp.json")); mode != 0o600 {
+	if mode := filePerm(t, filepath.Join(workDir, ".cursor", "mcp.json")); runtime.GOOS != "windows" && mode != 0o600 {
 		t.Fatalf(".cursor/mcp.json mode = %#o, want 0600", mode)
 	}
 
@@ -141,7 +142,7 @@ func TestPrepareCursorMcpConfigWritesProjectConfigAndApprovals(t *testing.T) {
 	if !reflect.DeepEqual(approvals, wantApprovals) {
 		t.Fatalf("approvals = %v, want %v", approvals, wantApprovals)
 	}
-	if mode := filePerm(t, filepath.Join(projectDataDir, "mcp-approvals.json")); mode != 0o600 {
+	if mode := filePerm(t, filepath.Join(projectDataDir, "mcp-approvals.json")); runtime.GOOS != "windows" && mode != 0o600 {
 		t.Fatalf("mcp-approvals.json mode = %#o, want 0600", mode)
 	}
 	if _, err := os.Stat(filepath.Join(projectDataDir, cursorWorkspaceTrustedFile)); err != nil {

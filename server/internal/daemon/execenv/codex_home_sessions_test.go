@@ -307,6 +307,36 @@ func TestExposeResumeRollout_FindsCompressedAndFlatLayouts(t *testing.T) {
 	}
 }
 
+func TestCodexSessionHistoryPersistsAcrossTaskHomes(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	shared := filepath.Join(root, "shared")
+	first, second := filepath.Join(root, "first"), filepath.Join(root, "second")
+	opts := CodexHomeOptions{IsLocalDirectory: true, SessionStoreKey: filepath.Join("agent", "issue")}
+	for _, home := range []string{first, second} {
+		if err := os.MkdirAll(home, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := prepareCodexSessionsDir(home, shared, opts, testLogger()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	name := filepath.Join("sessions", "rollout-history.jsonl")
+	if err := os.WriteFile(filepath.Join(first, name), []byte("first turn\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(second, name)); err != nil || string(got) != "first turn\n" {
+		t.Fatalf("next task lost persisted history: %q %v", got, err)
+	}
+	if err := os.WriteFile(filepath.Join(second, name), []byte("second turn\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := codexSessionStoreDir(shared, opts.SessionStoreKey)
+	if got, err := os.ReadFile(filepath.Join(store, "rollout-history.jsonl")); err != nil || string(got) != "second turn\n" {
+		t.Fatalf("task writes did not reach the durable store: %q %v", got, err)
+	}
+}
+
 func TestCodexResumeRolloutPresent(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -735,16 +765,16 @@ func assertSessionsLinkedToStore(t *testing.T, sessions, storeDir string) {
 			t.Errorf("sessions link target = %q, want store %q", target, storeDir)
 		}
 	}
-	realSessions, err := filepath.EvalSymlinks(sessions)
+	realSessions, err := os.Stat(sessions)
 	if err != nil {
 		t.Fatalf("eval sessions link: %v", err)
 	}
-	realStore, err := filepath.EvalSymlinks(storeDir)
+	realStore, err := os.Stat(storeDir)
 	if err != nil {
 		t.Fatalf("eval store: %v", err)
 	}
-	if realSessions != realStore {
-		t.Errorf("sessions resolves to %q, want store %q", realSessions, realStore)
+	if !os.SameFile(realSessions, realStore) {
+		t.Errorf("sessions %q does not reach store %q", sessions, storeDir)
 	}
 }
 

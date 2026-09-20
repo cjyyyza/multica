@@ -68,6 +68,7 @@ func buildTestRepoTemplate() (string, error) {
 		{"init", "-b", "main"},
 		{"config", "user.name", "Test User"},
 		{"config", "user.email", "test@test.com"},
+		{"config", "core.autocrlf", "false"},
 		{"add", "."},
 		{"commit", "-m", "initial"},
 	} {
@@ -242,7 +243,7 @@ func TestFinalizeCommitsLeftoversAboveTheUserBaseline(t *testing.T) {
 	if _, err := os.Stat(wt.Path); !os.IsNotExist(err) {
 		t.Errorf("worktree directory still present after Finalize: %v", err)
 	}
-	if list := gitRun(t, repo, "worktree", "list"); strings.Contains(list, wt.Path) {
+	if list := gitRun(t, repo, "worktree", "list"); strings.Contains(list, filepath.ToSlash(wt.Path)) {
 		t.Errorf("worktree still registered in user's repo:\n%s", list)
 	}
 	// The user's own checkout must be untouched by any of it.
@@ -477,13 +478,13 @@ func TestPrepareLocalWorktreePrunesStaleRegistrations(t *testing.T) {
 	if err := os.RemoveAll(orphan); err != nil {
 		t.Fatalf("remove orphan worktree dir: %v", err)
 	}
-	if list := gitRun(t, repo, "worktree", "list"); !strings.Contains(list, orphan) {
+	if list := gitRun(t, repo, "worktree", "list"); !strings.Contains(list, filepath.ToSlash(orphan)) {
 		t.Fatalf("precondition failed: orphan not registered:\n%s", list)
 	}
 
 	prepareForTest(t, repo)
 
-	if list := gitRun(t, repo, "worktree", "list"); strings.Contains(list, orphan) {
+	if list := gitRun(t, repo, "worktree", "list"); strings.Contains(list, filepath.ToSlash(orphan)) {
 		t.Errorf("stale registration not pruned:\n%s", list)
 	}
 }
@@ -529,7 +530,7 @@ func TestFinalizeKeepsWorktreeWhenCommitFails(t *testing.T) {
 		t.Errorf("agent work was destroyed despite the commit failure, got %q", got)
 	}
 	// And it stays discoverable through git rather than only a log line.
-	if list := gitRun(t, repo, "worktree", "list"); !strings.Contains(list, wt.Path) {
+	if list := gitRun(t, repo, "worktree", "list"); !strings.Contains(list, filepath.ToSlash(wt.Path)) {
 		t.Errorf("preserved worktree is no longer registered, so the user cannot find it:\n%s", list)
 	}
 	if !strings.Contains(err.Error(), wt.Path) {
@@ -643,9 +644,9 @@ func TestPrepareWorktreeModeUsesPerIssueCodexSessionStore(t *testing.T) {
 	first := prepareTurn("aaaa1111-2222-3333-4444-5555666677aa")
 	second := prepareTurn("bbbb1111-2222-3333-4444-5555666677bb")
 
-	sessionsOf := func(env *Environment) string {
+	sessionsOf := func(env *Environment) os.FileInfo {
 		t.Helper()
-		target, err := filepath.EvalSymlinks(filepath.Join(env.CodexHome, "sessions"))
+		target, err := os.Stat(filepath.Join(env.CodexHome, "sessions"))
 		if err != nil {
 			t.Fatalf("resolve sessions dir: %v", err)
 		}
@@ -654,13 +655,13 @@ func TestPrepareWorktreeModeUsesPerIssueCodexSessionStore(t *testing.T) {
 
 	firstSessions := sessionsOf(first)
 	secondSessions := sessionsOf(second)
-	if firstSessions != secondSessions {
-		t.Errorf("each turn got its own sessions dir, so Codex cannot resume:\n first  %s\n second %s",
-			firstSessions, secondSessions)
+	if !os.SameFile(firstSessions, secondSessions) {
+		t.Error("each turn got its own sessions dir, so Codex cannot resume")
 	}
 	// And it must be the stable per-issue store, not a task-local directory.
-	if strings.Contains(firstSessions, taskKey("aaaa1111-2222-3333-4444-5555666677aa")) {
-		t.Errorf("sessions dir is task-scoped (%s); it will not survive the next turn", firstSessions)
+	store, err := os.Stat(codexSessionStoreDir(codexHome, filepath.Join("default", "agent-1", "issue-1")))
+	if err != nil || !os.SameFile(firstSessions, store) {
+		t.Errorf("sessions dir does not reach the stable issue store: %v", err)
 	}
 }
 
@@ -708,7 +709,7 @@ func TestFinalizeAbortRefusesToCommitAndKeepsWorktree(t *testing.T) {
 	if got := readFile(t, filepath.Join(wt.Path, "agent-output.txt")); got != "real work\n" {
 		t.Errorf("agent work was destroyed: %q", got)
 	}
-	if list := gitRun(t, repo, "worktree", "list"); !strings.Contains(list, wt.Path) {
+	if list := gitRun(t, repo, "worktree", "list"); !strings.Contains(list, filepath.ToSlash(wt.Path)) {
 		t.Errorf("preserved worktree is no longer registered:\n%s", list)
 	}
 }
@@ -754,7 +755,7 @@ func TestDiscardRemovesWorktreeAndBranch(t *testing.T) {
 	if _, err := os.Stat(wt.Path); !os.IsNotExist(err) {
 		t.Errorf("worktree directory survived Discard: %v", err)
 	}
-	if list := gitRun(t, repo, "worktree", "list"); strings.Contains(list, wt.Path) {
+	if list := gitRun(t, repo, "worktree", "list"); strings.Contains(list, filepath.ToSlash(wt.Path)) {
 		t.Errorf("worktree still registered after Discard:\n%s", list)
 	}
 	if out, err := gitTry(t, repo, "rev-parse", "--verify", wt.Branch); err == nil {

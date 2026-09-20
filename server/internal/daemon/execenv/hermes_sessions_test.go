@@ -5,9 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 // TestHermesSessionStorePathLayout pins the on-disk layout an operator (and
@@ -15,7 +18,7 @@ import (
 // <profile dir>/hermes-sessions/<agent>/<hermes profile>/<conversation>.
 func TestHermesSessionStorePathLayout(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("USERPROFILE", home)
 
 	agent := "11111111-2222-3333-4444-555555555555"
@@ -32,7 +35,7 @@ func TestHermesSessionStorePathLayout(t *testing.T) {
 // that two conversations of one agent never share one.
 func TestHermesSessionStorePathScoping(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("USERPROFILE", home)
 
 	const agent = "agent-1"
@@ -259,7 +262,7 @@ func TestPrepareHermesHomeSessionMountIsIdempotent(t *testing.T) {
 
 func TestPruneHermesSessionStores(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("USERPROFILE", home)
 
 	root := filepath.Join(home, ".multica", hermesSessionStoreRoot)
@@ -308,7 +311,7 @@ func TestPruneHermesSessionStores(t *testing.T) {
 
 func TestPruneHermesSessionStoresDisabled(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("USERPROFILE", home)
 
 	store := filepath.Join(home, ".multica", hermesSessionStoreRoot, "agent-1", "default", "issue-1")
@@ -352,8 +355,8 @@ func TestPrepareHermesHomeLinkFailureKeepsTaskLocalDB(t *testing.T) {
 	})
 
 	sessions, err := prepareHermesHome(hermesHome, sharedHome, false, skills, nil, "", store, testLogger())
-	if err != nil {
-		t.Fatalf("prepare with unlinkable store: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "file symlink support") {
+		t.Fatalf("unavailable persistence must block startup with a next step: %v", err)
 	}
 	if sessions.Mounted || sessions.HistoryPresent {
 		t.Fatalf("mount = %+v, want both false when the link could not be created", sessions)
@@ -381,17 +384,20 @@ func TestPrepareHermesHomeLinkFailureKeepsTaskLocalDB(t *testing.T) {
 	// And once the host can link again, the same overlay mounts and carries the
 	// database over — nothing was lost in between.
 	restore()
-	sessions, err = prepareHermesHome(hermesHome, sharedHome, false, skills, nil, "", store, testLogger())
-	if err != nil {
-		t.Fatalf("prepare after link support returns: %v", err)
-	}
-	if !sessions.Mounted || !sessions.HistoryPresent {
-		t.Fatalf("mount = %+v, want mounted with history after recovery", sessions)
-	}
-	got, err := os.ReadFile(filepath.Join(store, "state.db"))
-	if err != nil || string(got) != "transcript" {
-		t.Fatalf("store db = %q (err %v), want the preserved transcript", got, err)
-	}
+	t.Run("recovery when symlinks are available", func(t *testing.T) {
+		requireSymlinks(t)
+		sessions, err = prepareHermesHome(hermesHome, sharedHome, false, skills, nil, "", store, testLogger())
+		if err != nil {
+			t.Fatalf("prepare after link support returns: %v", err)
+		}
+		if !sessions.Mounted || !sessions.HistoryPresent {
+			t.Fatalf("mount = %+v, want mounted with history after recovery", sessions)
+		}
+		got, err := os.ReadFile(filepath.Join(store, "state.db"))
+		if err != nil || string(got) != "transcript" {
+			t.Fatalf("store db = %q (err %v), want the preserved transcript", got, err)
+		}
+	})
 }
 
 // TestPrepareHermesHomeMigrationIsAtomic covers a migration that dies between
@@ -403,6 +409,9 @@ func TestPrepareHermesHomeLinkFailureKeepsTaskLocalDB(t *testing.T) {
 func TestPrepareHermesHomeMigrationIsAtomic(t *testing.T) {
 	sharedHome := t.TempDir()
 	store := filepath.Join(t.TempDir(), "issue-1")
+	if err := os.MkdirAll(store, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	skills := []SkillContextForEnv{{Name: "deploy", Content: "# Deploy"}}
 	hermesHome := filepath.Join(t.TempDir(), "hermes-home")
 
@@ -419,7 +428,7 @@ func TestPrepareHermesHomeMigrationIsAtomic(t *testing.T) {
 		return copyFile(src, dst)
 	})
 
-	if _, err := prepareHermesHome(hermesHome, sharedHome, false, skills, nil, "", store, testLogger()); err == nil {
+	if err := migrateHermesTaskSessionDB(hermesHome, store, testLogger()); err == nil {
 		t.Fatal("prepare succeeded despite a failed migration, want an error")
 	}
 
@@ -434,7 +443,7 @@ func TestPrepareHermesHomeMigrationIsAtomic(t *testing.T) {
 	}
 
 	restore()
-	if _, err := prepareHermesHome(hermesHome, sharedHome, false, skills, nil, "", store, testLogger()); err != nil {
+	if err := migrateHermesTaskSessionDB(hermesHome, store, testLogger()); err != nil {
 		t.Fatalf("retry after a failed migration: %v", err)
 	}
 	for name, want := range map[string]string{

@@ -134,9 +134,9 @@ var hermesSessionCopy = copyFile
 // existing database happens until the link has actually been created (under a
 // staging name), because the alternative — migrate, delete, then discover this
 // host cannot symlink — turns a working task-local conversation into an empty
-// one on exactly the hosts the degradation path exists to protect. A false
-// Mounted with a nil error therefore means "nothing was touched; keep the
-// database task-local", which is the pre-existing behaviour.
+// one on exactly the hosts that cannot create file symlinks. Such a host must
+// fail preparation with an actionable error while retaining the local database;
+// it must not start a fresh task that merely appears to have durable history.
 //
 // Idempotent across Reuse: a link already pointing at the store is left alone.
 // A real state.db left by an older daemon — or by a task that ran before this
@@ -175,11 +175,7 @@ func mountHermesSessionDB(hermesHome, storeDir string, logger *slog.Logger) (her
 		return hermesSessionMount{}, fmt.Errorf("clear stale session link staging %s: %w", staged, err)
 	}
 	if err := hermesSessionLink(target, staged); err != nil {
-		logger.Warn("execenv: hermes session store not mounted; conversation history stays task-local",
-			"store", storeDir,
-			"error", err,
-		)
-		return hermesSessionMount{}, nil
+		return hermesSessionMount{}, fmt.Errorf("cannot mount Hermes session store; existing history was preserved. This runtime needs file symlink support (Windows Developer Mode or the Create symbolic links permission) before running persistent Hermes conversations: %w", err)
 	}
 	defer os.RemoveAll(staged) // no-op once the staging link has been renamed into place
 

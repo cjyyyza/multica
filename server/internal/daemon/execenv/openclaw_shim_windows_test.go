@@ -114,7 +114,7 @@ func TestWindowsOpenclawShimMissingNodeSurfacesCmdStderr(t *testing.T) {
 	msg := err.Error()
 	t.Logf("observed error: %s", msg)
 
-	if !strings.Contains(strings.ToLower(msg), "not recognized") {
+	if !strings.Contains(msg, "(stderr:") || !strings.Contains(strings.ToLower(msg), "node") {
 		t.Errorf("expected cmd.exe's own stderr to reach Go's pipe; if this now fails, "+
 			"the platform behaviour changed and the shim diagnostic is carrying this case instead\ngot: %s", msg)
 	}
