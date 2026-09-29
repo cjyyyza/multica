@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 // TestMain intercepts when the test binary is re-executed as a fake
@@ -55,9 +57,17 @@ func TestMain(m *testing.M) {
 		// -race the runtime sleeps atexit_sleep_ms (1s by default) before every
 		// exit, which each of those fake CLIs would otherwise add to its test.
 		os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
-		os.Exit(m.Run())
+		// Only explicitly enabled integration builds may use host profiles.
+		// Default fixtures must never scan real agent histories or credentials.
+		if agentIntegrationBuild && os.Getenv("MULTICA_RUN_REAL_AGENT_SMOKE") == "1" {
+			os.Exit(m.Run())
+		}
+		os.Exit(testenv.RunIsolated(m.Run))
 	case "usage_fixture":
 		runFakeClaudeUsageFixture()
+		os.Exit(0)
+	case "supplement":
+		runFakeClaudeSupplement()
 		os.Exit(0)
 	case "startup_stdout_burst":
 		runFakeClaudeStartupStdoutBurst()

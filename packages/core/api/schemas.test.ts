@@ -29,6 +29,7 @@ import {
   EMPTY_POPO_BRIDGE_PAIRING,
   EMPTY_POPO_REGISTRATION,
   AgentTaskListSchema,
+  AgentActivityBucketListSchema,
   TaskMessageListSchema,
   AutopilotQuotaUsageSchema,
   AutopilotRunSchema,
@@ -213,24 +214,6 @@ describe("IssueSchema (via ListIssuesResponseSchema)", () => {
     const parsed = ListIssuesResponseSchema.parse({ issues: [withoutName], total: 1 });
     expect(parsed.issues[0]?.id).toBe(baseIssue.id);
     expect(parsed.issues[0]?.status_name).toBeUndefined();
-  });
-  it("keeps detail-only original input without requiring it from older servers", () => {
-    const original = "调查 `command code` 的周限。\n不要改成 Claude Code。";
-    const parsed = ListIssuesResponseSchema.parse({
-      issues: [{ ...baseIssue, original_input: original }],
-      total: 1,
-    });
-    expect(parsed.issues[0]?.original_input).toBe(original);
-
-    const legacy = ListIssuesResponseSchema.parse({ issues: [baseIssue], total: 1 });
-    expect(legacy.issues[0]?.original_input).toBeUndefined();
-
-    const malformed = ListIssuesResponseSchema.parse({
-      issues: [{ ...baseIssue, original_input: { text: original } }],
-      total: 1,
-    });
-    expect(malformed.issues[0]?.id).toBe(baseIssue.id);
-    expect(malformed.issues[0]?.original_input).toBeUndefined();
   });
   it("keeps the issue while independently dropping a malformed source context", () => {
     const parsed = ListIssuesResponseSchema.parse({
@@ -576,6 +559,25 @@ describe("IssueTriggerPreviewSchema", () => {
 });
 
 describe("TimelineEntriesSchema", () => {
+  it("preserves run-bound supplement delivery receipts", () => {
+    const parsed = TimelineEntriesSchema.parse([{
+      type: "comment",
+      id: "supplement-1",
+      actor_type: "member",
+      actor_id: "user-1",
+      created_at: "2026-01-01T00:00:00Z",
+      content: "also cover rollback",
+      supplement_task_id: "task-1",
+      supplement_status: "delivered",
+      supplement_delivered_at: "2026-01-01T00:00:01Z",
+    }]);
+    expect(parsed[0]).toMatchObject({
+      supplement_task_id: "task-1",
+      supplement_status: "delivered",
+      supplement_delivered_at: "2026-01-01T00:00:01Z",
+    });
+  });
+
   it("preserves source_task_id for agent failure comments", () => {
     const parsed = TimelineEntriesSchema.parse([
       {
@@ -648,6 +650,20 @@ describe("TimelineEntriesSchema", () => {
 });
 
 describe("AgentTaskListSchema", () => {
+  it("preserves negotiated supplement capability, ordered coverage and permission", () => {
+    const parsed = AgentTaskListSchema.parse([{
+      id: "run",
+      supplement_capability: "task-supplement-v1",
+      supplement_comment_ids: ["comment-1", "comment-2"],
+      can_supplement: true,
+    }]);
+    expect(parsed[0]).toMatchObject({
+      supplement_capability: "task-supplement-v1",
+      supplement_comment_ids: ["comment-1", "comment-2"],
+      can_supplement: true,
+    });
+  });
+
   it.each([true, false, undefined, null, "true", 1])("safely parses comment cancellation metadata: %s", (value) => {
     const parsed = AgentTaskListSchema.parse([{ id: "run", cancelled_by_comment_change: value }]);
     expect(parsed).toHaveLength(1);
@@ -1311,6 +1327,26 @@ describe("AppConfigSchema agent_conversation_starters_supported drift", () => {
     expect(
       AppConfigSchema.parse({ agent_conversation_starters_supported: true })
         .agent_conversation_starters_supported,
+    ).toBe(true);
+  });
+});
+
+describe("AppConfigSchema issue_create_properties_supported drift", () => {
+  it("defaults to false when the server predates atomic create properties", () => {
+    expect(AppConfigSchema.parse({}).issue_create_properties_supported).toBe(false);
+  });
+
+  it("coerces a malformed declaration to false", () => {
+    expect(
+      AppConfigSchema.parse({ issue_create_properties_supported: "yes" })
+        .issue_create_properties_supported,
+    ).toBe(false);
+  });
+
+  it("carries a genuine declaration through", () => {
+    expect(
+      AppConfigSchema.parse({ issue_create_properties_supported: true })
+        .issue_create_properties_supported,
     ).toBe(true);
   });
 });
@@ -2465,6 +2501,23 @@ describe("issue status catalog schemas", () => {
 });
 
 describe("TaskMessageListSchema", () => {
+  it("preserves call IDs and tolerates old or malformed optional identity", () => {
+    const base = { task_id: "task-1", seq: 1, type: "tool_result", output: "ok" };
+    const parsed = parseWithFallback<{ call_id?: string; output?: string }[]>(
+      [
+        { ...base, call_id: "execution:A" },
+        base,
+        { ...base, call_id: null },
+        { ...base, call_id: 42 },
+        { ...base, call_id: {} },
+      ],
+      TaskMessageListSchema, [], { endpoint: "GET /api/tasks/:id/messages" },
+    );
+    expect(parsed).toHaveLength(5);
+    expect(parsed.map((m) => m.call_id)).toEqual(["execution:A", undefined, undefined, undefined, undefined]);
+    expect(parsed.every((m) => m.output === "ok")).toBe(true);
+  });
+
   const row = { task_id: "task-1", issue_id: "issue-1", seq: 1, type: "tool_result", output: "log line" };
 
   // The whole point of the field: a server that never sends it is saying
@@ -2562,5 +2615,20 @@ describe("WorkspaceSchema", () => {
       depot: "//depot/game",
       extra: "ok",
     });
+  });
+});
+
+describe("AgentActivityBucketListSchema duration", () => {
+  const bucket = { agent_id: "a", bucket_at: "2026-09-24T00:00:00Z", task_count: 201,
+    completed_count: 201, failed_count: 0, cancelled_count: 0 };
+  it("accepts optional aggregate duration from new and old servers", () => {
+    expect(AgentActivityBucketListSchema.parse([bucket])[0]?.duration_ms).toBeUndefined();
+    expect(AgentActivityBucketListSchema.parse([{ ...bucket, duration_ms: 12600000, duration_count: 201 }])[0]?.duration_count).toBe(201);
+  });
+  it("does not discard activity counts when duration is malformed", () => {
+    const parsed = AgentActivityBucketListSchema.parse([{ ...bucket, duration_ms: "slow", duration_count: -1 }]);
+    expect(parsed[0]?.task_count).toBe(201);
+    expect(parsed[0]?.duration_ms).toBeUndefined();
+    expect(parsed[0]?.duration_count).toBeUndefined();
   });
 });

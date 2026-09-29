@@ -24,6 +24,7 @@ const (
 	msgIssueDisabled    = "This POPO bot isn't connected to Multica (or was disconnected). Ask a workspace admin to reconnect it."
 	msgAgentOffline     = "This agent is offline right now. Try again when a runtime is connected."
 	msgAgentArchived    = "This agent has been archived, so it can't reply."
+	msgInvokeDenied     = "You don't have permission to run this agent. Ask its owner if you need to use it."
 	msgBindingGroupHint = "Please message this bot in a private chat first so I can send you a Multica account link."
 )
 
@@ -81,6 +82,20 @@ func (r *OutboundReplier) Reply(ctx context.Context, inst engine.ResolvedInstall
 		_ = r.post(ctx, inst, msg, msgAgentOffline)
 	case engine.OutcomeAgentArchived:
 		_ = r.post(ctx, inst, msg, msgAgentArchived)
+	case engine.OutcomeInvokeDenied:
+		// A group must not learn which member was refused access. The sender
+		// already has a bound identity, so deliver the refusal to their DM.
+		if msg.Source.ChatType == channel.ChatTypeGroup {
+			if strings.TrimSpace(msg.Source.SenderID) == "" {
+				r.logger.WarnContext(ctx, "popo replier: invoke refusal has no sender")
+				return
+			}
+			msg.Source.ChatID = msg.Source.SenderID
+			msg.Source.ChatType = channel.ChatTypeP2P
+		}
+		if err := r.post(ctx, inst, msg, msgInvokeDenied); err != nil {
+			r.logger.WarnContext(ctx, "popo replier: invoke refusal failed", "error", err)
+		}
 	case engine.OutcomeFreshPending:
 		_ = r.post(ctx, inst, msg, msgFreshPending)
 	case engine.OutcomeChatStarted:

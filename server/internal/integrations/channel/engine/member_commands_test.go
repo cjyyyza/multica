@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -40,7 +41,7 @@ func TestMemberCommandReplayDoesNotEnableIssueCommandsWithoutFollow(t *testing.T
 }
 
 func TestMemberCommandsRequireIdentityAndNeverStartChatRuns(t *testing.T) {
-	for _, scenario := range []string{"normal", "replay", "unbound", "non-member", "unaddressed-group"} {
+	for _, scenario := range []string{"normal", "replay", "unbound", "non-member", "unaddressed-group", "invoke-denied", "replay-invoke-denied", "invoke-error", "replay-invoke-error"} {
 		t.Run(scenario, func(t *testing.T) {
 			h := newHarness(t)
 			commands := &fakeMemberCommands{}
@@ -53,6 +54,18 @@ func TestMemberCommandsRequireIdentityAndNeverStartChatRuns(t *testing.T) {
 			switch scenario {
 			case "replay":
 				h.dedup.claimErr = ErrDuplicate
+			case "invoke-denied", "replay-invoke-denied":
+				h.tasks.denyInvoke = true
+				wantCalls = 0
+				if scenario == "replay-invoke-denied" {
+					h.dedup.claimErr = ErrDuplicate
+				}
+			case "invoke-error", "replay-invoke-error":
+				h.tasks.invokeErr = errors.New("permission lookup unavailable")
+				wantCalls = 0
+				if scenario == "replay-invoke-error" {
+					h.dedup.claimErr = ErrDuplicate
+				}
 			case "unbound":
 				h.ident.err = ErrSenderUnbound
 				wantCalls = 0
@@ -64,8 +77,9 @@ func TestMemberCommandsRequireIdentityAndNeverStartChatRuns(t *testing.T) {
 				msg.AddressedToBot = false
 				wantCalls = 0
 			}
-			if err := h.router.Handle(context.Background(), msg); err != nil {
-				t.Fatal(err)
+			wantError := scenario == "invoke-error" || scenario == "replay-invoke-error"
+			if err := h.router.Handle(context.Background(), msg); (err != nil) != wantError {
+				t.Fatalf("Handle error = %v, want error = %v", err, wantError)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()

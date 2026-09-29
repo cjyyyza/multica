@@ -84,6 +84,9 @@ cleared_channel_issue_sources AS (
 cleared_channel_inbound_writes AS (
     DELETE FROM channel_inbound_write WHERE workspace_id = $1
 ),
+cleared_channel_reply_deliveries AS (
+    DELETE FROM channel_reply_delivery WHERE installation_id IN (SELECT id FROM ws_installations)
+),
 cleared_chat_sessions AS (
     DELETE FROM channel_chat_session_binding WHERE installation_id IN (SELECT id FROM ws_installations)
     RETURNING chat_session_id

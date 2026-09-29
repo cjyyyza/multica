@@ -426,9 +426,15 @@ func TestPropertyOptionRemovalGuard(t *testing.T) {
 // TestListIssuesPropertyFilterAndSort covers the server-side list support:
 // containment filtering (select / multi_select / checkbox) beyond the first
 // page window, and typed property sort expressions with missing-last
-// semantics. The shared workspace fixture may hold foreign issues, so
-// assertions check relative order / membership rather than exact lists.
+// semantics. A dedicated project keeps foreign issues in the shared workspace
+// from pushing this test's rows outside the requested page.
 func TestListIssuesPropertyFilterAndSort(t *testing.T) {
+	// Keep the pagination window independent of issues left in the shared
+	// workspace by other tests. The target still sits behind 54 padding rows.
+	projectID := dbfx.Project(t, "Property filter window")
+	seedIssue := func(title string) string {
+		return dbfx.Issue(t, title, testutil.Cols{"project_id": projectID})
+	}
 	sel := createTestProperty(t, map[string]any{
 		"name": "FS" + uuid.NewString()[:8], "type": "select",
 		"config": map[string]any{"options": []map[string]any{
@@ -460,9 +466,9 @@ func TestListIssuesPropertyFilterAndSort(t *testing.T) {
 		}
 	}
 	for i := 0; i < 54; i++ {
-		setPosition(createPropertyTestIssue(t, fmt.Sprintf("filter pad %02d", i)), float64(i))
+		setPosition(seedIssue(fmt.Sprintf("filter pad %02d", i)), float64(i))
 	}
-	target := createPropertyTestIssue(t, "filter target beyond page one")
+	target := seedIssue("filter target beyond page one")
 	setPosition(target, 1000)
 	if w := setIssuePropertyRaw(t, target, sel.ID, hitID); w.Code != http.StatusOK {
 		t.Fatalf("seed select: %d %s", w.Code, w.Body.String())
@@ -474,8 +480,8 @@ func TestListIssuesPropertyFilterAndSort(t *testing.T) {
 		t.Fatalf("seed checkbox: %d %s", w.Code, w.Body.String())
 	}
 
-	numLow := createPropertyTestIssue(t, "sort low")
-	numHigh := createPropertyTestIssue(t, "sort high")
+	numLow := seedIssue("sort low")
+	numHigh := seedIssue("sort high")
 	if w := setIssuePropertyRaw(t, numLow, num.ID, 1); w.Code != http.StatusOK {
 		t.Fatalf("seed low: %d %s", w.Code, w.Body.String())
 	}
@@ -486,7 +492,7 @@ func TestListIssuesPropertyFilterAndSort(t *testing.T) {
 	listIssues := func(query string) []IssueResponse {
 		t.Helper()
 		w := httptest.NewRecorder()
-		testHandler.ListIssues(w, newRequest("GET", "/api/issues"+query, nil))
+		testHandler.ListIssues(w, newRequest("GET", "/api/issues"+query+"&project_id="+projectID, nil))
 		if w.Code != http.StatusOK {
 			t.Fatalf("ListIssues%s: expected 200, got %d: %s", query, w.Code, w.Body.String())
 		}

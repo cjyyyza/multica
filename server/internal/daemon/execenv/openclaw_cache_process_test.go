@@ -22,7 +22,7 @@ func TestOpenclawDiscoveryCacheProcessHelper(t *testing.T) {
 	}
 	cache, bin, config := os.Args[index+1], os.Args[index+2], os.Args[index+3]
 	for i := 0; i < 20; i++ {
-		if err := storeOpenclawDiscoveryCache(cache, bin, config, []any{map[string]any{"id": "worker"}}, false, time.Now()); err != nil {
+		if err := storeOpenclawDiscoveryCache(cache, bin, config, []any{map[string]any{"id": "worker"}}, openclawAgentsSourceList, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 		if _, ok := loadOpenclawDiscoveryCache(cache, bin, time.Now()); !ok {

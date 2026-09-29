@@ -126,9 +126,9 @@ func (h *Handler) CreateMemberComment(ctx context.Context, in engine.MemberComme
 		}
 	}
 	if h.TaskService != nil {
-		h.TaskService.AutoUnresolveThreadOnReply(ctx, rootComment, util.UUIDToString(issue.WorkspaceID), "member", authorID)
+		h.TaskService.AutoUnresolveThreadOnReply(ctx, rootComment, util.UUIDToString(issue.WorkspaceID), "member", authorID, pgtype.UUID{})
 	}
-	h.triggerTasksForComment(ctx, issue, comment, parentComment, "member", authorID, authorID, nil)
+	h.triggerTasksForComment(ctx, issue, comment, parentComment, "member", authorID, authorID, nil, nil)
 	return engine.MemberCommentResult{Comment: comment}, nil
 }
 
