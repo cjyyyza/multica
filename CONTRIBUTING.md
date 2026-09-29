@@ -28,6 +28,38 @@ other work — you agree to condition 2 of the [Multica License](LICENSE):
 
 See the [LICENSE](LICENSE) file for the full terms.
 
+## Synchronizing this fork with upstream
+
+Keep `origin` pointing at this fork and `upstream` pointing at
+`https://github.com/multica-ai/multica.git`. Fetch upstream and merge it on a
+dedicated branch based on the fork's current `main`:
+
+```bash
+git fetch upstream
+git switch -c codex/sync-upstream-YYYY-MM-DD main
+git merge --no-ff --no-commit upstream/main
+```
+
+Resolve overlapping behavior before committing. Preserve the fork's POPO,
+易协作, Perforce/Swarm, and Windows support while adapting their callers to new
+upstream APIs and UI locations. Review automatically merged files as well as
+text conflicts. Regenerate sqlc after combining SQL changes; retain the full
+names of already published migrations because those names identify applied
+versions in `schema_migrations`. The published fork migrations and the exact
+upstream names sharing their numbers are frozen in
+`server/internal/migrations/fork_history_test.go`; new migrations remain subject
+to the unique-number check.
+
+Run the relevant checks below and `pnpm exec playwright test
+e2e/fork-integrations.spec.ts` against the checkout's managed environment. The
+browser test covers settings navigation and local Perforce configuration; real
+POPO, 易协作, P4 servers, and agent CLIs require separate integration acceptance.
+
+Submit the branch as a PR to this fork. Merge synchronization PRs with a **merge
+commit**, preserving the upstream ancestry so later synchronizations can find
+the correct common base. Do not squash or rebase these PRs. Ordinary feature
+PRs can continue to follow the repository's usual policy.
+
 ## Development Model
 
 Local development uses one shared PostgreSQL container and one database per checkout.

@@ -133,6 +133,7 @@ export function PerforceDepotsSection() {
     <>
       <SettingsSection
         title={t(($) => $.perforce.section_title)}
+        anchor="perforce"
         description={t(($) => $.perforce.description)}
         action={
           <SettingsSaveState

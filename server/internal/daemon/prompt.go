@@ -51,7 +51,7 @@ func backendResumeContinuityNotice(task Task) string {
 // in the runtime brief (CLAUDE.md / AGENTS.md).
 //
 // Every value here changes from one run to the next on the same issue — the
-// initiator differs whenever another person comments, the continuity notice is
+// authorization human differs between runs, the continuity notice is
 // true of one run and false of the next, and the connected-app set is resolved
 // per run from the runtime MCP overlay. Claude Code loads the brief into
 // messages[0], ahead of the entire conversation, so rendering these there threw
@@ -67,9 +67,20 @@ func perTurnContextBlocks(task Task, opts promptOpts) string {
 	if task.PriorSessionResumeUnavailable {
 		b.WriteString(sessionContinuityNoticeFor(task))
 	}
-	b.WriteString(execenv.BuildTaskInitiatorBlock(task.InitiatorType, task.InitiatorName, task.InitiatorEmail))
+	b.WriteString(execenv.BuildOnBehalfOfBlock(task.InitiatorName, task.InitiatorEmail))
 	b.WriteString(execenv.BuildConnectedAppsBlock(task.ConnectedApps))
+	b.WriteString(buildJoinedWakeupsBlock(task.WakeupJoined))
 	return b.String()
+}
+
+// buildJoinedWakeupsBlock carries wakeups that fired while this run was
+// waiting to start. The server folded them into this run instead of queuing a
+// second run of the same agent on the issue, so this run handles them too.
+func buildJoinedWakeupsBlock(notes string) string {
+	if strings.TrimSpace(notes) == "" {
+		return ""
+	}
+	return "[WAKEUP — joined this run]\n" + strings.TrimSpace(notes) + "\n\n"
 }
 
 // promptOpts carries per-run facts the claimed Task does not: things only the
@@ -199,6 +210,22 @@ func BuildPrompt(task Task, provider string, options ...PromptOption) string {
 }
 
 func buildPromptBody(task Task, provider string) string {
+	if task.WakeupID != "" {
+		var b strings.Builder
+		fmt.Fprintf(&b, "You are running as a local coding agent for a Multica workspace.\n\nYour assigned issue ID is: %s\n\n[WAKEUP]\n%s\n\n", task.IssueID, task.HandoffNote)
+		fmt.Fprintf(&b, "Start by running `multica issue get %s --output json`, then read current run/comment state. Decide whether the instruction's goal is met; the trigger reports a fact, not business completion. This is an ordinary run with normal result delivery, except where the [WAKEUP] block offers a check-in.\n", task.IssueID)
+		fmt.Fprintf(&b, "Scan comment threads with `multica issue comment list %s --roots-only --summary --compact --output json`, then expand relevant threads with `--thread <id> --tail 30`.\n", task.IssueID)
+		if task.WakeupSystemRule != "" {
+			// Platform rules belong to the issue, not to a run; members manage them.
+			fmt.Fprintf(&b, "This wakeup is the platform's sub-issue rule for this issue. Do not try to change or disable it; members manage it on the issue.\n")
+		} else {
+			fmt.Fprintf(&b, "Inspect this configuration with `multica issue wakeup get %s %s --output json`. If recurring work is no longer needed, disable it with `multica issue wakeup disable %s %s`.\n", task.IssueID, task.WakeupID, task.IssueID, task.WakeupID)
+		}
+		if task.TriggerCommentID != "" {
+			fmt.Fprintf(&b, "Post your result using `multica issue comment add %s --parent %s --content-file ./reply.md --output table && rm ./reply.md`. This is the original delivery thread, not a new comment trigger.\n", task.IssueID, task.TriggerCommentID)
+		}
+		return b.String()
+	}
 	if task.ChatSessionID != "" {
 		return buildChatPrompt(task)
 	}
@@ -255,16 +282,14 @@ func buildQuickCreatePrompt(task Task) string {
 	b.WriteString("Field rules:\n\n")
 
 	// title
-	b.WriteString("- **title**: required. A concise but semantically rich summary. Preserve user-supplied product names, tool names, commands, identifiers, and technical terms verbatim; never normalize an unfamiliar term to a likely alternative. If the input references external resources (PRs, issues, URLs), use your judgment on whether fetching the resource would produce a meaningfully better title — e.g. \"review PR #123\" → \"Review PR #123: Refactor auth module to OAuth2\". Strip filler words but preserve key semantic information.\n\n")
+	b.WriteString("- **title**: required. A concise but semantically rich summary. If the input references external resources (PRs, issues, URLs), use your judgment on whether fetching the resource would produce a meaningfully better title — e.g. \"review PR #123\" → \"Review PR #123: Refactor auth module to OAuth2\". Strip filler words but preserve key semantic information.\n\n")
 
-	// description — a derived summary, never the source of truth. The server
-	// exposes QuickCreatePrompt separately as the resulting issue's immutable
-	// original_input, so the model no longer has to reproduce raw wording.
-	b.WriteString("- **description**: Write a concise Agent summary that helps the executing agent act on the request. The platform separately exposes the user's raw input as the issue's immutable `original_input`; the description is derived context and must never replace or correct it. Use a two-section structure:\n\n")
-	b.WriteString("  1. **Agent summary** — Summarize what the user wants without normalizing their terminology. Preserve every user-supplied product name, tool name, account name, command, identifier, file path, code snippet, and technical term verbatim. If a term looks mistaken or is ambiguous, keep the original term and state the uncertainty instead of substituting a likely alternative. Strip non-spec material before writing it (this is removal, not paraphrasing): verbal routing wrappers about creating the issue or routing it (e.g. \"create an issue\", \"分配给 X\", \"让 @X 处理\") and pure conversational fillers (e.g. \"对吧？\"). When in doubt, keep it.\n\n")
-	b.WriteString("     CC exception: `multica issue create` has no `--subscriber` flag, and the platform auto-subscribes members whose `[@Name](mention://member/<uuid>)` link appears in the description. When the user wrote \"cc @Y\", strip the verbal \"cc\" wrapper from the Agent summary body and append a final `CC: <mention link(s)>` line to the description so the cc routing still fires.\n\n")
+	// description — the core optimization
+	b.WriteString("- **description**: The description is the executing agent's primary context. Aim for high fidelity — they should grasp the user's intent as if they had read the raw input themselves. Use a two-section structure:\n\n")
+	b.WriteString("  1. **User request** — Faithfully restate what the user wants in their own words. Preserve specific names, identifiers, file paths, code snippets, and technical terms verbatim. Strip non-spec material before writing it (this is removal, not paraphrasing): verbal routing wrappers about creating the issue or routing it (e.g. \"create an issue\", \"分配给 X\", \"让 @X 处理\") and pure conversational fillers (e.g. \"对吧？\"). When in doubt, keep it.\n\n")
+	b.WriteString("     CC exception: `multica issue create` has no `--subscriber` flag, and the platform auto-subscribes members whose `[@Name](mention://member/<uuid>)` link appears in the description. When the user wrote \"cc @Y\", strip the verbal \"cc\" wrapper from the User request body and append a final `CC: <mention link(s)>` line to the description so the cc routing still fires.\n\n")
 	b.WriteString("  2. **Context** — include ONLY when the input cited external resources AND you successfully fetched them AND they produced verifiable facts worth recording. Summarize facts only (e.g. \"PR #45 changes auth to JWT\"), not interpretation or unsolicited reference implementations. If you have nothing factual to add, omit the section entirely — never use it as an apology log for resources you could not fetch.\n\n")
-	b.WriteString("  Hard rules: never invent requirements, implementation details, or acceptance criteria the user did not express; never rename or normalize user-supplied terms; never reduce multi-sentence input to a single vague sentence; never echo the title.\n\n")
+	b.WriteString("  Hard rules: never invent requirements, implementation details, or acceptance criteria the user did not express; never reduce multi-sentence input to a single vague sentence; never echo the title.\n\n")
 
 	// priority
 	if task.QuickCreatePriority != "" {

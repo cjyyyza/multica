@@ -12,15 +12,33 @@ import (
 
 func TestMigrationNumericPrefixesAreUnique(t *testing.T) {
 	files := migrationFilesForLint(t, "*.up.sql")
-
-	// Migrations through 128 contain historical duplicate numeric prefixes.
-	// From 129 onward, keep the numeric sequence unique so release tooling and
-	// operators can identify one schema change unambiguously by its number.
-	const firstUniqueMigrationNumber = 129
-	stemByNumber := make(map[int]string)
+	verifyPublishedForkMigrations(t)
+	var stems []string
 	for _, file := range files {
 		stem, _, ok := splitMigrationFilename(filepath.Base(file))
-		if !ok {
+		if ok {
+			stems = append(stems, stem)
+		}
+	}
+	for _, conflict := range migrationNumberConflicts(stems) {
+		t.Error(conflict)
+	}
+}
+
+func migrationNumberConflicts(stems []string) []string {
+	// Upstream migrations through 128 contain historical duplicate numbers.
+	// The separately published fork history has exact names and SQL checked
+	// above. Neither historical exception may admit a new collision.
+	const firstUniqueMigrationNumber = 129
+	stemByNumber := make(map[int]string)
+	for version := range publishedForkMigrationDigests {
+		prefix, _, _ := strings.Cut(version, "_")
+		number, _ := strconv.Atoi(prefix)
+		stemByNumber[number] = "published fork history"
+	}
+	var conflicts []string
+	for _, stem := range stems {
+		if _, published := publishedForkMigrationDigests[stem]; published {
 			continue
 		}
 		prefix, _, ok := strings.Cut(stem, "_")
@@ -31,11 +49,33 @@ func TestMigrationNumericPrefixesAreUnique(t *testing.T) {
 		if err != nil || number < firstUniqueMigrationNumber {
 			continue
 		}
-		if previous, exists := stemByNumber[number]; exists {
-			t.Errorf("migrations %s and %s share numeric prefix %s", previous, stem, prefix)
+		if previous, exists := stemByNumber[number]; exists &&
+			!(previous == "published fork history" && upstreamVersionsSharingForkNumbers[number] == stem) {
+			conflicts = append(conflicts, fmt.Sprintf("migrations %s and %s share numeric prefix %s", previous, stem, prefix))
 			continue
 		}
 		stemByNumber[number] = stem
+	}
+	return conflicts
+}
+
+func TestMigrationNumberHistoryDoesNotAdmitNewCollisions(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		stems         []string
+		wantConflicts int
+	}{
+		{"published collision", []string{"500_issue_origin_popo_chat", "500_workspace_p4_depots", "500_task_message_call_id"}, 0},
+		{"new fork collision", []string{"500_new_feature"}, 1},
+		{"new collision beside upstream", []string{"500_task_message_call_id", "500_new_feature"}, 1},
+		{"new ordinary collision", []string{"900_first", "900_second"}, 1},
+		{"new unique migration", []string{"900_first"}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := migrationNumberConflicts(tc.stems); len(got) != tc.wantConflicts {
+				t.Fatalf("conflicts = %v, want %d", got, tc.wantConflicts)
+			}
+		})
 	}
 }
 

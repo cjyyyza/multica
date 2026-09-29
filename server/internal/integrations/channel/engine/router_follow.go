@@ -298,32 +298,45 @@ func (r *Router) followIssueResult(inst ResolvedInstallation, msg channel.Inboun
 	return res
 }
 
-func (r *Router) recoverDuplicateCommand(ctx context.Context, set ResolverSet, inst ResolvedInstallation, msg channel.InboundMessage) (Result, bool) {
+func (r *Router) recoverDuplicateCommand(ctx context.Context, set ResolverSet, inst ResolvedInstallation, msg channel.InboundMessage) (Result, bool, error) {
 	if strings.TrimSpace(msg.MessageID) == "" || (r.follow == nil && set.Commands == nil) {
-		return Result{}, false
+		return Result{}, false, nil
 	}
 	if r.follow != nil {
 		for _, kind := range []string{InboundWriteKindIssue, InboundWriteKindComment, InboundWriteKindCancel} {
 			if _, err := r.follow.LoadInboundWrite(ctx, inst.ID, msg.MessageID, kind); err == nil {
-				return r.drop(ctx, set, msg, inst.ID, DropReasonDuplicate), true
+				return r.drop(ctx, set, msg, inst.ID, DropReasonDuplicate), true, nil
 			}
 		}
 	}
 
 	identity, err := set.Identity.ResolveSender(ctx, inst, msg)
 	if err != nil {
-		return Result{}, false
+		return Result{}, false, nil
 	}
 	if msg.Source.ChatType == channel.ChatTypeGroup && !msg.AddressedToBot {
-		return Result{}, false
+		return Result{}, false, nil
+	}
+	// Replays must apply the current invocation policy before recovering a
+	// member command or creating a missing issue from an earlier delivery.
+	allowed, err := r.tasks.MemberMayInvokeAgent(ctx, inst.AgentID, identity.UserID)
+	if err != nil {
+		return Result{}, false, fmt.Errorf("check replay invoke permission: %w", err)
+	}
+	if !allowed {
+		_ = set.Audit.RecordDrop(ctx, inst.ID, msg, DropReasonInvokeDenied)
+		return Result{
+			Outcome: OutcomeInvokeDenied, DropReason: DropReasonInvokeDenied,
+			InstallationID: inst.ID, Sender: msg.Source.SenderID,
+		}, true, nil
 	}
 	if set.Commands != nil {
 		if result, handled, err := set.Commands.HandleMemberCommand(ctx, inst, identity, msg); handled {
-			return result, err == nil
+			return result, err == nil, nil
 		}
 	}
 	if r.follow == nil {
-		return Result{}, false
+		return Result{}, false, nil
 	}
 
 	if parsed, ok := ParseIssueCommand(msg.CommandText); ok && parsed.Title != "" {
@@ -331,12 +344,12 @@ func (r *Router) recoverDuplicateCommand(ctx context.Context, set ResolverSet, i
 			Installation: inst, Sender: identity.UserID, Message: msg,
 		})
 		if sessErr != nil {
-			return Result{}, false
+			return Result{}, false, nil
 		}
 		prefix, _ := r.issueWorkspaceIdentity(ctx, inst.WorkspaceID)
 		issueRes, createErr := r.createIssue(ctx, inst, set.OriginType, identity.UserID, sessionID, *parsed, prefix, time.Time{}, msg, pgtype.UUID{}, 0)
 		if createErr != nil && !errors.Is(createErr, service.ErrActiveDuplicate) {
-			return Result{}, false
+			return Result{}, false, nil
 		}
 		issue := issueRes.Issue
 		if issueRes.DuplicateIssue != nil {
@@ -353,13 +366,13 @@ func (r *Router) recoverDuplicateCommand(ctx context.Context, set ResolverSet, i
 			IssueIdentifier: service.IssueIdentifier(prefix, issue.Number),
 			IssueDuplicate:  issueRes.DuplicateIssue != nil && !issueRes.IdempotentReplay,
 		}
-		return res, true
+		return res, true, nil
 	}
 
 	if followRes, handled, followErr := r.handleFollow(ctx, set, inst, identity, msg); handled && followErr == nil {
-		return followRes, true
+		return followRes, true, nil
 	}
-	return Result{}, false
+	return Result{}, false, nil
 }
 
 // ErrQuoteNotFound means the quoted platform message did not resolve under

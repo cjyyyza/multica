@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/entitlement"
@@ -17,6 +19,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/integrations/yixiezuo"
 	"github.com/multica-ai/multica/server/internal/issueguard"
 	"github.com/multica-ai/multica/server/internal/issueposition"
+	"github.com/multica-ai/multica/server/internal/issueproperty"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -82,10 +85,14 @@ type IssueCreateParams struct {
 	// so the issue is never committed with a partial or wrong label set. An
 	// unknown or non-issue label id fails the whole create with
 	// ErrIssueLabelNotFound rather than being silently dropped.
-	LabelIDs       []pgtype.UUID
+	LabelIDs []pgtype.UUID
+	// Properties is keyed only by property-definition UUID. Create validates
+	// and canonicalizes every value while holding the same per-definition locks
+	// used by the standalone PUT path, then inserts the complete bag atomically.
+	Properties     map[pgtype.UUID]json.RawMessage
 	AllowDuplicate bool
 	// Stage groups this issue into an ordered barrier group under its parent
-	// (NULL = unstaged). See issue_child_done.go for the staged-barrier wake.
+	// (NULL = unstaged). See issue_wakeup_system.go for the staged-barrier wake.
 	Stage pgtype.Int4
 	// SourceContext is set only by the comment-scoped manual create endpoint.
 	// Its immutable snapshot and cloned attachment rows commit in the same
@@ -189,6 +196,21 @@ var ErrProjectNotFound = errors.New("project not found in this workspace")
 // label set. Callers translate this into their transport's 400.
 var ErrIssueLabelNotFound = errors.New("issue label not found in this workspace")
 
+// ErrIssuePropertiesTooLarge is the existing row-level 16KB properties-bag
+// constraint surfaced as a client error. The same database constraint applies
+// to standalone PUT and atomic create writes.
+var ErrIssuePropertiesTooLarge = errors.New("issue properties exceed the 16KB size limit")
+
+// IssuePropertyValidationError identifies the definition whose value made an
+// atomic create invalid. Unknown and foreign-workspace IDs intentionally share
+// the same message so the API does not expose tenant existence.
+type IssuePropertyValidationError struct {
+	PropertyID string
+	Message    string
+}
+
+func (e *IssuePropertyValidationError) Error() string { return e.Message }
+
 // ErrIssueStatusUnavailable signals that the requested custom status was
 // archived between the caller's pre-flight validation and the create
 // transaction. Callers translate this into a 409 — the request was valid when
@@ -196,21 +218,6 @@ var ErrIssueLabelNotFound = errors.New("issue label not found in this workspace"
 var ErrIssueStatusUnavailable = errors.New("issue status is no longer available")
 
 var ErrSourceContextAlreadyAttached = errors.New("source context is already attached")
-
-// ErrInvalidQuickCreateOrigin signals that a caller supplied a quick-create
-// origin that cannot authoritatively back the new issue. Callers translate it
-// into a 400 because rejecting the create is safe and immediately recoverable.
-var ErrInvalidQuickCreateOrigin = errors.New("invalid quick-create origin")
-
-// ErrQuickCreateOriginAlreadyUsed signals that an issue already claims the
-// supplied quick-create task. The task row is locked before this check, so two
-// concurrent creates cannot both commit with the same origin.
-var ErrQuickCreateOriginAlreadyUsed = errors.New("quick-create origin is already attached to an issue")
-
-type validatedQuickCreateOrigin struct {
-	taskID          pgtype.UUID
-	sourceContextID pgtype.UUID
-}
 
 // IssueCreateResult is the typed return from IssueService.Create.
 //
@@ -239,24 +246,22 @@ type IssueCreateResult struct {
 // Create runs the full issue-creation pipeline atomically end-to-end:
 //
 //  1. Begin transaction.
-//  2. Lock and validate any quick-create origin before writes.
-//  3. Resolve & validate parent / project belong to the same workspace.
-//  4. Lock & check the duplicate guard.
-//  5. Increment the workspace issue counter.
-//  6. Insert the issue row (with optional origin stamping).
-//  7. Commit.
-//  8. Link any pre-uploaded attachments (post-commit, idempotent).
-//  9. For a media-gated channel issue, persist its deferred assigned-agent
+//  2. Resolve & validate parent / project belong to the same workspace.
+//  3. Lock & check the duplicate guard.
+//  4. Increment the workspace issue counter.
+//  5. Insert the issue row (with optional origin stamping).
+//  6. Commit.
+//  7. Link any pre-uploaded attachments (post-commit, idempotent).
+//  8. For a media-gated channel issue, persist its deferred assigned-agent
 //     task in the issue transaction so both rows become visible atomically.
 //     Ordinary creates keep their existing event-before-enqueue ordering.
-//  10. Publish EventIssueCreated to the bus (payload via opts.BroadcastPayload).
-//  11. Capture the IssueCreated analytics event.
-//  12. Enqueue the ordinary agent task or trigger the squad leader when the
+//  9. Publish EventIssueCreated to the bus (payload via opts.BroadcastPayload).
+//  10. Capture the IssueCreated analytics event.
+//  11. Enqueue the ordinary agent task or trigger the squad leader when the
 //     issue is assigned and not in `backlog`.
 //
-// Validation that lives in the service (quick-create provenance, parent
-// existence, project workspace membership, parent → project back-fill) is
-// enforced here so
+// Validation that lives in the service (parent existence, project
+// workspace membership, parent → project back-fill) is enforced here so
 // every create entry — HTTP `POST /issues`, Lark `/issue`, future
 // MCP/API-key callers — shares the same workspace boundary semantics.
 // Caller-owned validation is limited to transport-shaped checks: title
@@ -311,16 +316,9 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		return IssueCreateResult{Issue: replay, IdempotentReplay: true}, nil
 	}
 
-	// A quick-create origin is authoritative user input, so validate and claim
-	// it before any issue counter or issue row write. Locking the task makes the
-	// lookup-and-create sequence concurrency-safe without a schema migration:
-	// a second creator waits here, then observes the first committed issue.
-	var quickCreateOrigin *validatedQuickCreateOrigin
-	if p.OriginType.Valid && p.OriginType.String == QuickCreateContextType {
-		quickCreateOrigin, err = validateQuickCreateIssueOrigin(ctx, qtx, p)
-		if err != nil {
-			return IssueCreateResult{}, err
-		}
+	properties, err := validateIssueCreateProperties(ctx, tx, qtx, p.WorkspaceID, p.Properties)
+	if err != nil {
+		return IssueCreateResult{}, err
 	}
 
 	if p.SourceContext != nil {
@@ -460,6 +458,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 			OriginType:    p.OriginType,
 			OriginID:      p.OriginID,
 			Stage:         p.Stage,
+			Properties:    properties,
 		})
 	} else {
 		issue, err = qtx.CreateIssue(ctx, db.CreateIssueParams{
@@ -480,9 +479,14 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 			Number:        issueNumber,
 			ProjectID:     projectID,
 			Stage:         p.Stage,
+			Properties:    properties,
 		})
 	}
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.ConstraintName == "issue_properties_size_limit" {
+			return IssueCreateResult{}, ErrIssuePropertiesTooLarge
+		}
 		return IssueCreateResult{}, fmt.Errorf("create issue: %w", err)
 	}
 
@@ -514,15 +518,56 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		if _, err := PersistSourceContext(ctx, qtx, *p.SourceContext, issue.ID, pgtype.UUID{}); err != nil {
 			return IssueCreateResult{}, fmt.Errorf("persist source context: %w", err)
 		}
-	} else if quickCreateOrigin != nil && quickCreateOrigin.sourceContextID.Valid {
-		if _, attachErr := qtx.AttachIssueSourceContext(ctx, db.AttachIssueSourceContextParams{
-			IssueID: issue.ID, WorkspaceID: p.WorkspaceID,
-			ID: quickCreateOrigin.sourceContextID, OriginTaskID: quickCreateOrigin.taskID,
-		}); attachErr != nil {
-			if errors.Is(attachErr, pgx.ErrNoRows) {
-				return IssueCreateResult{}, ErrInvalidQuickCreateOrigin
+	} else if p.OriginType.Valid && p.OriginType.String == "quick_create" && p.OriginID.Valid {
+		task, taskErr := qtx.GetAgentTaskInWorkspace(ctx, db.GetAgentTaskInWorkspaceParams{
+			ID: p.OriginID, WorkspaceID: p.WorkspaceID,
+		})
+		if taskErr != nil {
+			return IssueCreateResult{}, fmt.Errorf("load quick-create origin task: %w", taskErr)
+		}
+		if p.CreatorType != "agent" || !p.CreatorID.Valid || p.CreatorID != task.AgentID {
+			return IssueCreateResult{}, errors.New("quick-create origin task does not belong to the creating agent")
+		}
+		var quickCreate QuickCreateContext
+		if err := json.Unmarshal(task.Context, &quickCreate); err != nil {
+			return IssueCreateResult{}, fmt.Errorf("decode quick-create origin context: %w", err)
+		}
+		if quickCreate.Type != QuickCreateContextType {
+			return IssueCreateResult{}, errors.New("quick-create origin task has invalid context type")
+		}
+		contextWorkspaceID, parseErr := util.ParseUUID(quickCreate.WorkspaceID)
+		if parseErr != nil || contextWorkspaceID != p.WorkspaceID {
+			return IssueCreateResult{}, errors.New("quick-create origin context has invalid workspace")
+		}
+		if quickCreate.SourceContextID != "" {
+			contextID, parseErr := util.ParseUUID(quickCreate.SourceContextID)
+			if parseErr != nil {
+				return IssueCreateResult{}, fmt.Errorf("invalid quick-create source context id: %w", parseErr)
 			}
-			return IssueCreateResult{}, fmt.Errorf("attach quick-create source context: %w", attachErr)
+			requesterID, parseErr := util.ParseUUID(quickCreate.RequesterID)
+			if parseErr != nil || !task.OriginatorUserID.Valid || requesterID != task.OriginatorUserID {
+				return IssueCreateResult{}, errors.New("quick-create source context has invalid requester")
+			}
+			pending, pendingErr := qtx.GetPendingIssueSourceContextByOriginTask(ctx, db.GetPendingIssueSourceContextByOriginTaskParams{
+				WorkspaceID: p.WorkspaceID, OriginTaskID: task.ID,
+			})
+			if pendingErr != nil {
+				if errors.Is(pendingErr, pgx.ErrNoRows) {
+					return IssueCreateResult{}, ErrSourceContextAlreadyAttached
+				}
+				return IssueCreateResult{}, fmt.Errorf("load pending quick-create source context: %w", pendingErr)
+			}
+			if pending.ID != contextID || pending.CapturedByUserID != requesterID {
+				return IssueCreateResult{}, errors.New("quick-create source context ownership mismatch")
+			}
+			if _, attachErr := qtx.AttachIssueSourceContext(ctx, db.AttachIssueSourceContextParams{
+				IssueID: issue.ID, WorkspaceID: p.WorkspaceID, ID: contextID, OriginTaskID: task.ID,
+			}); attachErr != nil {
+				if errors.Is(attachErr, pgx.ErrNoRows) {
+					return IssueCreateResult{}, ErrSourceContextAlreadyAttached
+				}
+				return IssueCreateResult{}, fmt.Errorf("attach quick-create source context: %w", attachErr)
+			}
 		}
 	}
 
@@ -604,71 +649,75 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	return IssueCreateResult{Issue: issue, Attachments: attachments, Labels: labels, AssignedTaskID: assignedTaskID}, nil
 }
 
-func validateQuickCreateIssueOrigin(ctx context.Context, qtx *db.Queries, p IssueCreateParams) (*validatedQuickCreateOrigin, error) {
-	if !p.OriginID.Valid || p.CreatorType != "agent" || !p.CreatorID.Valid {
-		return nil, ErrInvalidQuickCreateOrigin
+// validateIssueCreateProperties returns the canonical JSONB bag to put on the
+// issue row. Locks are acquired for every definition in UUID order before any
+// definition is read, matching definition updates and preventing two
+// multi-property creates from choosing opposite lock orders.
+func validateIssueCreateProperties(ctx context.Context, tx pgx.Tx, qtx *db.Queries, workspaceID pgtype.UUID, values map[pgtype.UUID]json.RawMessage) ([]byte, error) {
+	if len(values) == 0 {
+		return []byte(`{}`), nil
 	}
 
-	task, err := qtx.GetAgentTaskInWorkspaceForUpdate(ctx, db.GetAgentTaskInWorkspaceForUpdateParams{
-		ID: p.OriginID, WorkspaceID: p.WorkspaceID,
+	ids := make([]pgtype.UUID, 0, len(values))
+	for id := range values {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(left, right int) bool {
+		return util.UUIDToString(ids[left]) < util.UUIDToString(ids[right])
 	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrInvalidQuickCreateOrigin
+	for _, id := range ids {
+		key := "prop:" + util.UUIDToString(id)
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", key); err != nil {
+			return nil, fmt.Errorf("lock issue property: %w", err)
 		}
-		return nil, fmt.Errorf("lock quick-create origin task: %w", err)
-	}
-	if p.CreatorID != task.AgentID {
-		return nil, ErrInvalidQuickCreateOrigin
 	}
 
-	var quickCreate QuickCreateContext
-	if err := json.Unmarshal(task.Context, &quickCreate); err != nil {
-		return nil, ErrInvalidQuickCreateOrigin
-	}
-	if quickCreate.Type != QuickCreateContextType || quickCreate.Prompt == "" {
-		return nil, ErrInvalidQuickCreateOrigin
-	}
-	contextWorkspaceID, err := util.ParseUUID(quickCreate.WorkspaceID)
-	if err != nil || contextWorkspaceID != p.WorkspaceID {
-		return nil, ErrInvalidQuickCreateOrigin
-	}
-
-	if _, err := qtx.GetIssueByOrigin(ctx, db.GetIssueByOriginParams{
-		WorkspaceID: p.WorkspaceID, OriginType: p.OriginType, OriginID: p.OriginID,
-	}); err == nil {
-		return nil, ErrQuickCreateOriginAlreadyUsed
-	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("check quick-create origin reuse: %w", err)
-	}
-
-	validated := &validatedQuickCreateOrigin{taskID: task.ID}
-	if quickCreate.SourceContextID == "" {
-		return validated, nil
-	}
-
-	contextID, err := util.ParseUUID(quickCreate.SourceContextID)
-	if err != nil {
-		return nil, ErrInvalidQuickCreateOrigin
-	}
-	requesterID, err := util.ParseUUID(quickCreate.RequesterID)
-	if err != nil || !task.OriginatorUserID.Valid || requesterID != task.OriginatorUserID {
-		return nil, ErrInvalidQuickCreateOrigin
-	}
-	pending, err := qtx.GetPendingIssueSourceContextByOriginTask(ctx, db.GetPendingIssueSourceContextByOriginTaskParams{
-		WorkspaceID: p.WorkspaceID, OriginTaskID: task.ID,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrInvalidQuickCreateOrigin
+	canonical := make(map[string]json.RawMessage, len(ids))
+	for _, id := range ids {
+		propertyID := util.UUIDToString(id)
+		definition, err := qtx.GetIssueProperty(ctx, db.GetIssuePropertyParams{
+			ID: id, WorkspaceID: workspaceID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: "property not found in this workspace"}
+			}
+			return nil, fmt.Errorf("get issue property: %w", err)
 		}
-		return nil, fmt.Errorf("load pending quick-create source context: %w", err)
+		if definition.ArchivedAt.Valid {
+			return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: fmt.Sprintf("property %q is archived and cannot receive new values", definition.Name)}
+		}
+		value, err := issueproperty.ValidateValue(definition, values[id])
+		if err != nil {
+			return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: err.Error()}
+		}
+		if issueproperty.IsActor(definition.Type) {
+			refs, err := issueproperty.ActorRefsInValue(definition.Type, value)
+			if err != nil {
+				return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: err.Error()}
+			}
+			for _, ref := range refs {
+				actorID, parseErr := util.ParseUUID(ref.ID)
+				if parseErr != nil {
+					return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: fmt.Sprintf("actor id in %q must be a UUID", ref)}
+				}
+				if _, lookupErr := qtx.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
+					UserID: actorID, WorkspaceID: workspaceID,
+				}); lookupErr != nil {
+					if errors.Is(lookupErr, pgx.ErrNoRows) {
+						return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: fmt.Sprintf("%q does not refer to a member of this workspace", ref)}
+					}
+					return nil, fmt.Errorf("resolve issue property actor: %w", lookupErr)
+				}
+			}
+		}
+		canonical[propertyID] = value
 	}
-	if pending.ID != contextID || pending.CapturedByUserID != requesterID {
-		return nil, ErrInvalidQuickCreateOrigin
+	encoded, err := json.Marshal(canonical)
+	if err != nil {
+		return nil, fmt.Errorf("encode issue properties: %w", err)
 	}
-	validated.sourceContextID = contextID
-	return validated, nil
+	return encoded, nil
 }
 
 // validateIssueLabels checks that every requested label exists in the
