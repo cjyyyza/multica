@@ -241,6 +241,57 @@ describe("derivePullRequestVerdict", () => {
     ).toEqual({ kind: "unknown" });
     expect(derivePullRequestVerdict({ state: "open" })).toEqual({ kind: "unknown" });
   });
+
+  // Helix Swarm stores the API state string. The handler collapses the card
+  // state and keeps the raw value on swarm_state. There is no open-rejected
+  // state in the daemon or the upsert handler: rejected and archived close.
+  it.each([
+    ["needsReview", "open", "needs_review"],
+    ["pending", "open", "needs_review"],
+    ["approved", "open", "approved"],
+    ["Approved", "open", "approved"],
+    ["needsRevision", "open", "needs_revision"],
+    ["committed", "merged", "merged"],
+    ["rejected", "closed", "closed"],
+    ["archived", "closed", "closed"],
+    ["custom", "open", "needs_review"],
+  ] as const)("maps Swarm state %s on a %s card to %s", (swarm_state, state, kind) => {
+    expect(
+      derivePullRequestVerdict({
+        provider: "swarm",
+        state,
+        swarm_state,
+        snapshot_available: true,
+        checks_rollup: "failure",
+        checks_failed: 2,
+        checks_total: 4,
+        failed_check_names: ["backend"],
+      }),
+    ).toEqual({ kind });
+  });
+
+  it("keeps an older Swarm row off no_checks when swarm_state is omitted", () => {
+    expect(
+      derivePullRequestVerdict({
+        provider: "swarm",
+        state: "open",
+        snapshot_available: true,
+        checks_rollup: null,
+      }).kind,
+    ).toBe("needs_review");
+    expect(
+      derivePullRequestVerdict({ provider: "swarm", state: "merged" }),
+    ).toEqual({ kind: "merged" });
+    expect(
+      derivePullRequestVerdict({ provider: "swarm", state: "closed" }),
+    ).toEqual({ kind: "closed" });
+  });
+
+  it("does not let an empty swarm_state change a GitHub no_checks verdict", () => {
+    expect(
+      derivePullRequestVerdict({ ...open, provider: "github", swarm_state: "", checks_rollup: null }).kind,
+    ).toBe("no_checks");
+  });
 });
 
 describe("stripIssueKeyFromTitle", () => {

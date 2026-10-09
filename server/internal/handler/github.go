@@ -64,16 +64,21 @@ type GitHubInstallationResponse struct {
 
 type GitHubPullRequestResponse struct {
 	ID string `json:"id"`
-	// Provider is the Git provider this PR was mirrored from: "github", "forgejo",
-	// "gitea", or "gitlab". The frontend uses it to pick the host icon and
-	// label (e.g. GitLab "merge request").
-	Provider        string  `json:"provider"`
-	WorkspaceID     string  `json:"workspace_id"`
-	RepoOwner       string  `json:"repo_owner"`
-	RepoName        string  `json:"repo_name"`
-	Number          int32   `json:"number"`
-	Title           string  `json:"title"`
-	State           string  `json:"state"`
+	// Provider is where this row came from: "github", "forgejo", "gitea",
+	// "gitlab", or "swarm" for a Helix Swarm review. The frontend uses it to
+	// pick the host label (e.g. GitLab "merge request", Swarm review).
+	Provider    string `json:"provider"`
+	WorkspaceID string `json:"workspace_id"`
+	RepoOwner   string `json:"repo_owner"`
+	RepoName    string `json:"repo_name"`
+	Number      int32  `json:"number"`
+	Title       string `json:"title"`
+	State       string `json:"state"`
+	// SwarmState is the raw Helix Swarm review state (needsReview, approved,
+	// needsRevision, committed, rejected, archived). Omitted for Git rows and
+	// by servers that predate the field. State stays the collapsed card state
+	// (open / merged / closed) so older clients keep working.
+	SwarmState      *string `json:"swarm_state,omitempty"`
 	HtmlURL         string  `json:"html_url"`
 	Branch          *string `json:"branch"`
 	AuthorLogin     *string `json:"author_login"`
@@ -1011,6 +1016,8 @@ func (h *Handler) ListPullRequestsForIssue(w http.ResponseWriter, r *http.Reques
 		resp.LinkSource = prLinkSource(row.LinkedByType, identifier, row.Title, row.Branch.String)
 		out = append(out, resp)
 	}
+	// Swarm reviews join this list with no GitHub installation. They are not
+	// pull requests for the auto-complete decision below.
 	out = append(out, h.listSwarmReviewsForIssue(r.Context(), issue)...)
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].PRCreatedAt > out[j].PRCreatedAt

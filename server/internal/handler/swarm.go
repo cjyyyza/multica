@@ -75,6 +75,8 @@ func (h *Handler) UpsertSwarmReviewForIssue(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// close_intent stays on the link. A Swarm review is not a pull request for
+	// auto-complete, so approving or committing one does not move the issue.
 	closeIntent := closingIdentifierRe.MatchString(desc)
 	linked := map[string]struct{}{uuidToString(issue.ID): {}}
 	if err := h.Queries.LinkIssueSwarmReview(r.Context(), db.LinkIssueSwarmReviewParams{
@@ -162,6 +164,14 @@ func swarmReviewTitle(description string, reviewID int) string {
 	return line
 }
 
+func swarmStatePtr(state string) *string {
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return nil
+	}
+	return &state
+}
+
 func swarmCardState(state string) string {
 	switch strings.ToLower(strings.TrimSpace(state)) {
 	case "committed":
@@ -201,6 +211,7 @@ func swarmReviewToPRResponse(r db.SwarmReview) GitHubPullRequestResponse {
 		Number:       r.ReviewNumber,
 		Title:        r.Title,
 		State:        swarmCardState(r.State),
+		SwarmState:   swarmStatePtr(r.State),
 		HtmlURL:      r.HtmlUrl,
 		Branch:       branch,
 		AuthorLogin:  author,

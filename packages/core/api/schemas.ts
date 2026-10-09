@@ -409,6 +409,7 @@ export const GitHubPullRequestSchema = z.object({
   number: z.number(),
   title: z.string(),
   state: z.string(),
+  swarm_state: z.string().optional().catch("").default(""),
   html_url: z.string(),
   branch: z.string().nullable(),
   author_login: z.string().nullable(),

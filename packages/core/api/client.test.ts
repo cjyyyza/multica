@@ -250,6 +250,21 @@ describe("ApiClient pull-request response schema", () => {
     });
   });
 
+  it("defaults a missing swarm_state and keeps a Swarm review state", async () => {
+    stubPullRequests({
+      pull_requests: [
+        validPR,
+        { ...validPR, id: "swarm-1", provider: "swarm", swarm_state: "needsReview", branch: "cl/1001" },
+        { ...validPR, id: "bad-swarm", swarm_state: 12 },
+      ],
+    });
+    const result = await new ApiClient("https://api.example.test").listIssuePullRequests("issue-1");
+    expect(result.pull_requests).toHaveLength(3);
+    expect(result.pull_requests[0]?.swarm_state).toBe("");
+    expect(result.pull_requests[1]?.swarm_state).toBe("needsReview");
+    expect(result.pull_requests[2]?.swarm_state).toBe("");
+  });
+
   it("treats a missing auto-complete block (older backend) as null", async () => {
     stubPullRequests({ pull_requests: [validPR] });
     const result = await new ApiClient("https://api.example.test").listIssuePullRequests("issue-1");
