@@ -186,9 +186,25 @@ func (h *Handler) CompleteYixiezuoOperation(w http.ResponseWriter, r *http.Reque
 		if row.Kind == "publish" {
 			err = q.RecordYixiezuoPublication(r.Context(), db.RecordYixiezuoPublicationParams{WorkspaceID: ws, IssueID: row.IssueID, Snapshot: result, PublishedRevision: payload.Revision})
 		} else {
+			var previous yixiezuo.Snapshot
+			if row.Kind == "refresh" {
+				link, loadErr := q.GetYixiezuoImportByIssue(r.Context(), db.GetYixiezuoImportByIssueParams{WorkspaceID: ws, IssueID: row.IssueID})
+				if loadErr != nil || json.Unmarshal(link.Snapshot, &previous) != nil {
+					writeError(w, http.StatusInternalServerError, "failed to record source receipt")
+					return
+				}
+			}
 			err = q.UpdateYixiezuoImportSnapshot(r.Context(), db.UpdateYixiezuoImportSnapshotParams{WorkspaceID: ws, IssueID: row.IssueID, Snapshot: result})
+			if err == nil && row.Kind == "refresh" {
+				err = h.IssueService.ApplyYixiezuoRefresh(r.Context(), tx, ws, row.IssueID, previous, *req.Snapshot)
+			}
 		}
 		if err != nil {
+			var prop *service.IssuePropertyValidationError
+			if errors.As(err, &prop) {
+				writeError(w, http.StatusBadRequest, prop.Error())
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "failed to record source receipt")
 			return
 		}

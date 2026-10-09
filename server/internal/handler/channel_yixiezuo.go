@@ -217,7 +217,7 @@ func (h *Handler) runSourceCommand(ctx context.Context, inst engine.ResolvedInst
 			}
 			result.ReplyText, err = h.sourceReviewReply(ctx, row, payload)
 		} else {
-			result.ReplyText = sourceOperationReply(row) + "\nOnly the source snapshot will change; local task fields are preserved."
+			result.ReplyText = sourceOperationReply(row) + "\nOnly the source snapshot, its properties, and its dates will change; the task title, description, status, and assignee stay as they are."
 		}
 		return err
 	case "confirm":

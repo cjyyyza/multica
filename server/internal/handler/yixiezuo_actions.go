@@ -33,6 +33,11 @@ func writeSourceError(w http.ResponseWriter, err error) {
 		writeError(w, action.status, action.message)
 		return
 	}
+	var prop *service.IssuePropertyValidationError
+	if errors.As(err, &prop) {
+		writeError(w, http.StatusBadRequest, prop.Error())
+		return
+	}
 	writeError(w, http.StatusInternalServerError, "failed to process the source operation")
 }
 

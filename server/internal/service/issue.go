@@ -307,13 +307,18 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 			}
 			p.Yixiezuo.Attachments[i].LocalURL = attachment.Url
 		}
-		p.Description = pgtype.Text{String: p.Yixiezuo.Markdown(), Valid: true}
 	}
 
 	if replay, ok, replayErr := s.loadChannelIssueReplay(ctx, qtx, opts.ChannelIdempotency); replayErr != nil {
 		return IssueCreateResult{}, replayErr
 	} else if ok {
 		return IssueCreateResult{Issue: replay, IdempotentReplay: true}, nil
+	}
+
+	if p.Yixiezuo != nil {
+		if err := s.prepareYixiezuoIssue(ctx, tx, qtx, &p); err != nil {
+			return IssueCreateResult{}, err
+		}
 	}
 
 	properties, err := validateIssueCreateProperties(ctx, tx, qtx, p.WorkspaceID, p.Properties)

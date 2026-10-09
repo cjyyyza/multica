@@ -156,6 +156,16 @@ func (s Snapshot) Fingerprint() string {
 }
 
 func (s Snapshot) Markdown() string {
+	return s.markdown(s.Fields)
+}
+
+// MarkdownRetaining renders the source description, attachments, and comments,
+// plus only the fields that were not stored as issue properties or dates.
+func (s Snapshot) MarkdownRetaining(fields []SourceField) string {
+	return s.markdown(fields)
+}
+
+func (s Snapshot) markdown(fields []SourceField) string {
 	var b strings.Builder
 	description := s.Description
 	for _, a := range s.Attachments {
@@ -165,7 +175,7 @@ func (s Snapshot) Markdown() string {
 		}
 	}
 	fmt.Fprintf(&b, "[易协作 #%s](%s) · %s\n\n%s", s.Source.ID, s.Source.URL, s.Status, description)
-	for _, field := range s.Fields {
+	for _, field := range fields {
 		fmt.Fprintf(&b, "\n\n%s: %s", field.Name, field.Value)
 	}
 	if len(s.Attachments) > 0 {
