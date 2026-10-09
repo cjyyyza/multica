@@ -16,17 +16,19 @@ import (
 )
 
 const (
-	msgFollowReplyUsage    = "Please include an issue key and comment. Use:\n\n/reply ISSUE-123 <comment>"
-	msgFollowStatusUsage   = "Please include an issue key. Use:\n\n/status ISSUE-123"
-	msgFollowStopUsage     = "Please include an issue key, or quote a specific run message. Use:\n\n/stop ISSUE-123"
-	msgFollowStopNone      = "There is no cancellable run on that issue."
-	msgFollowStopAmbiguous = "I couldn't tell which run to cancel. Quote a specific run message, or use /stop ISSUE-123."
-	msgFollowStopConflict  = "The issue key and quoted run refer to different tasks. Send /stop with the intended issue key without that quote."
-	msgFollowQuoteUnknown  = "I couldn't match that quoted message to an issue in this chat."
-	msgFollowIssueMissing  = "I couldn't find that issue in this workspace."
-	msgFollowCommentAck    = "✅ Commented on %s"
-	msgFollowStopAck       = "✅ Cancelled the current run on %s. Issue status is unchanged (%s)."
-	msgFollowReassigned    = "This issue is now assigned to %s. I won't keep running it."
+	msgFollowReplyUsage        = "Please include an issue key and comment. Use:\n\n/reply ISSUE-123 <comment>"
+	msgFollowStatusUsage       = "Please include an issue key. Use:\n\n/status ISSUE-123"
+	msgFollowStopUsage         = "Please include an issue key, or quote a specific run message. Use:\n\n/stop ISSUE-123"
+	msgFollowStopNone          = "There is no cancellable run on that issue."
+	msgFollowStopAmbiguous     = "I couldn't tell which run to cancel. Quote a specific run message, or use /stop ISSUE-123."
+	msgFollowStopConflict      = "The issue key and quoted run refer to different tasks. Send /stop with the intended issue key without that quote."
+	msgFollowQuoteUnknown      = "I couldn't match that quoted message to an issue in this chat."
+	msgFollowIssueMissing      = "I couldn't find that issue in this workspace."
+	msgFollowCommentAck        = "✅ Commented on %s"
+	msgFollowCommentSteeredAck = "✅ Added your comment to the current run on %s."
+	msgFollowCommentWaitingAck = "✅ Commented on %s. It will wait for the next run."
+	msgFollowStopAck           = "✅ Cancelled the current run on %s. Issue status is unchanged (%s)."
+	msgFollowReassigned        = "This issue is now assigned to %s. I won't keep running it."
 )
 
 func (r *Router) handleFollow(ctx context.Context, set ResolverSet, inst ResolvedInstallation, identity ResolvedIdentity, msg channel.InboundMessage) (Result, bool, error) {
@@ -140,7 +142,7 @@ func (r *Router) createFollowComment(ctx context.Context, set ResolverSet, inst 
 	if err != nil {
 		return Result{}, err
 	}
-	res := r.followIssueResult(inst, msg, issue, fmt.Sprintf(msgFollowCommentAck, issue.Identifier))
+	res := r.followIssueResult(inst, msg, issue, followCommentAck(issue.Identifier, created.Delivery))
 	res.CommentID = created.Comment.ID
 	if created.IdempotentReplay {
 		res.Outcome = OutcomeDropped
@@ -148,6 +150,17 @@ func (r *Router) createFollowComment(ctx context.Context, set ResolverSet, inst 
 		res.ReplyText = ""
 	}
 	return res, nil
+}
+
+func followCommentAck(identifier string, delivery CommentDelivery) string {
+	switch delivery {
+	case CommentDeliveryInjected:
+		return fmt.Sprintf(msgFollowCommentSteeredAck, identifier)
+	case CommentDeliveryWaiting:
+		return fmt.Sprintf(msgFollowCommentWaitingAck, identifier)
+	default:
+		return fmt.Sprintf(msgFollowCommentAck, identifier)
+	}
 }
 
 func (r *Router) followStatus(ctx context.Context, inst ResolvedInstallation, msg channel.InboundMessage, cmd FollowCommand) (Result, error) {

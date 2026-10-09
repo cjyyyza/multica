@@ -97,11 +97,31 @@ type MemberCommentInput struct {
 	MessageID      string
 }
 
+// CommentDelivery is how a stored channel comment should be acknowledged.
+// It is the result of triggerTasksForComment, not a prediction from the run
+// list taken before that call.
+type CommentDelivery uint8
+
+const (
+	// CommentDeliveryNote keeps the historic comment ack. /note comments never
+	// steer and never wait on a later run.
+	CommentDeliveryNote CommentDelivery = iota
+	// CommentDeliveryInjected means the comment was bound to the single
+	// steerable run.
+	CommentDeliveryInjected
+	// CommentDeliveryWaiting means the comment is a normal follow-up: no
+	// steerable run, more than one, or the steer was refused. The comment
+	// itself is already stored.
+	CommentDeliveryWaiting
+)
+
 // MemberCommentResult is the durable comment plus whether this call was a
 // replay of an already-persisted inbound write.
 type MemberCommentResult struct {
 	Comment          db.Comment
 	IdempotentReplay bool
+	// Delivery is unset on an idempotent replay, which stays silent.
+	Delivery CommentDelivery
 }
 
 // FollowIssue is the issue snapshot follow commands need.
