@@ -1563,6 +1563,8 @@
     "target_status": "反映後の状態",
     "keep_status": "現在の状態を維持",
     "acceptance": "結果、検証の証拠、選択した状態を確認しました。",
+    "evidence_files": "証跡ファイル",
+    "evidence_remove": "削除",
     "confirm_publish": "反映を確認",
     "states": {
       "imported": "取り込み済み・独立して処理",

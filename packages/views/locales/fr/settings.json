@@ -1573,6 +1573,8 @@
     "target_status": "État après publication",
     "keep_status": "Conserver l’état actuel",
     "acceptance": "J’ai vérifié le résultat, les preuves de validation et l’état sélectionné.",
+    "evidence_files": "Fichiers de preuve",
+    "evidence_remove": "Retirer",
     "confirm_publish": "Confirmer la publication",
     "states": {
       "imported": "Importé · traitement indépendant",

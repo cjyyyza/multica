@@ -1563,6 +1563,8 @@
     "target_status": "回写后的来源状态",
     "keep_status": "保持当前状态",
     "acceptance": "我已核对结果、验证证据及所选来源状态。",
+    "evidence_files": "证据文件",
+    "evidence_remove": "移除",
     "confirm_publish": "确认回写",
     "states": {
       "imported": "已导入 · 独立处理",

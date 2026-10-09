@@ -1573,6 +1573,8 @@
     "target_status": "Source status after publication",
     "keep_status": "Keep current status",
     "acceptance": "I have reviewed the result, validation evidence and selected source status.",
+    "evidence_files": "Evidence files",
+    "evidence_remove": "Remove",
     "confirm_publish": "Confirm publication",
     "states": {
       "imported": "Imported · local work is independent",

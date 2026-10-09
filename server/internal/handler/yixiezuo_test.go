@@ -77,6 +77,15 @@ func TestYixiezuoPublicationKeepsTheSubmittedRevision(t *testing.T) {
 	testutil.Call(t, testHandler.PublishYixiezuoResult, manualIssueRequest("POST", issue.ID, map[string]any{"summary": "tested", "revision": issue.Revision, "source_digest": digest})).Want(400)
 	var op yixiezuo.Operation
 	testutil.Call(t, testHandler.PublishYixiezuoResult, manualIssueRequest("POST", issue.ID, map[string]any{"summary": "tested", "revision": issue.Revision, "confirmed": true, "source_digest": digest})).Want(201).JSON(&op)
+	// The evidence comment is part of the publication, so the queued revision
+	// includes that activity. A later local edit must still stay outside it.
+	var atQueue int64
+	if err := testPool.QueryRow(context.Background(), `SELECT revision FROM issue WHERE id = $1`, issue.ID).Scan(&atQueue); err != nil {
+		t.Fatal(err)
+	}
+	if atQueue <= issue.Revision {
+		t.Fatalf("queued revision %d, reviewed %d", atQueue, issue.Revision)
+	}
 	var claimed struct {
 		Operation yixiezuo.Operation `json:"operation"`
 	}
@@ -96,7 +105,120 @@ func TestYixiezuoPublicationKeepsTheSubmittedRevision(t *testing.T) {
 		} `json:"import"`
 	}
 	testutil.Call(t, testHandler.GetYixiezuoImport, manualIssueRequest("GET", issue.ID, nil)).Want(200).JSON(&details)
-	if details.Import.State != "needs_review" || details.Import.PublishedRevision != issue.Revision {
+	if details.Import.State != "needs_review" || details.Import.PublishedRevision != atQueue {
 		t.Fatalf("new edit swallowed by old receipt: %+v", details)
+	}
+}
+
+func TestYixiezuoPublishRecordsEvidenceComment(t *testing.T) {
+	_, issue := prepareManualImport(t)
+	var digest string
+	if err := testPool.QueryRow(context.Background(), `SELECT snapshot->>'digest' FROM yixiezuo_import WHERE workspace_id=$1 AND issue_id=$2`, testWorkspaceID, issue.ID).Scan(&digest); err != nil {
+		t.Fatal(err)
+	}
+	const swarmURL = "https://swarm.example.com/reviews/42"
+	reviewID := dbfx.Insert(t, "swarm_review", testutil.Cols{
+		"workspace_id": testWorkspaceID, "swarm_url": "https://swarm.example.com",
+		"review_number": 42, "html_url": swarmURL,
+	})
+	dbfx.InsertNoID(t, "issue_swarm_review", testutil.Cols{
+		"issue_id": issue.ID, "swarm_review_id": reviewID, "workspace_id": testWorkspaceID,
+	}, "issue_id = $1 AND swarm_review_id = $2", issue.ID, reviewID)
+	attachmentID := dbfx.Insert(t, "attachment", testutil.Cols{
+		"workspace_id": testWorkspaceID, "issue_id": issue.ID,
+		"uploader_type": "member", "uploader_id": testUserID,
+		"filename": "shot.png", "url": "https://example.test/shot.png",
+		"content_type": "image/png", "size_bytes": 1,
+	})
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM comment WHERE issue_id = $1`, issue.ID)
+	})
+
+	var op yixiezuo.Operation
+	testutil.Call(t, testHandler.PublishYixiezuoResult, manualIssueRequest("POST", issue.ID, map[string]any{
+		"summary": "Fixed and verified", "revision": issue.Revision, "confirmed": true,
+		"source_digest": digest, "attachment_ids": []string{attachmentID},
+	})).Want(201).JSON(&op)
+	if op.Kind != "publish" || op.State != "pending" || op.Payload.Summary != "Fixed and verified" {
+		t.Fatalf("operation %+v", op)
+	}
+	if dbfx.Count(t, `SELECT count(*) FROM yixiezuo_operation WHERE id = $1 AND state = 'pending'`, op.ID) != 1 {
+		t.Fatal("publish was not queued")
+	}
+
+	var content, kind, authorType, authorID string
+	dbfx.QueryRow(t, `SELECT content, type, author_type, author_id::text FROM comment WHERE issue_id = $1 AND type = 'comment'`, issue.ID).Scan(&content, &kind, &authorType, &authorID)
+	if kind != "comment" || authorType != "member" || authorID != testUserID {
+		t.Fatalf("comment author %s %s type %s", authorType, authorID, kind)
+	}
+	if content != "Fixed and verified\n"+swarmURL {
+		t.Fatalf("content = %q", content)
+	}
+	if dbfx.Count(t, `SELECT count(*) FROM attachment WHERE id = $1 AND comment_id = (SELECT id FROM comment WHERE issue_id = $2 AND type = 'comment')`, attachmentID, issue.ID) != 1 {
+		t.Fatal("attachment was not bound to the evidence comment")
+	}
+	if dbfx.Count(t, `SELECT count(*) FROM attachment WHERE issue_id = $1 AND (url = $2 OR filename = $2)`, issue.ID, swarmURL) != 0 {
+		t.Fatal("swarm URL was stored as an attachment")
+	}
+}
+
+func TestYixiezuoPublishRejectsBadAttachmentBeforeQueue(t *testing.T) {
+	_, issue := prepareManualImport(t)
+	var digest string
+	if err := testPool.QueryRow(context.Background(), `SELECT snapshot->>'digest' FROM yixiezuo_import WHERE workspace_id=$1 AND issue_id=$2`, testWorkspaceID, issue.ID).Scan(&digest); err != nil {
+		t.Fatal(err)
+	}
+	body := func(ids []string) map[string]any {
+		return map[string]any{
+			"summary": "Fixed and verified", "revision": issue.Revision, "confirmed": true,
+			"source_digest": digest, "attachment_ids": ids,
+		}
+	}
+	pending := func() int {
+		t.Helper()
+		return dbfx.Count(t, `SELECT count(*) FROM yixiezuo_operation WHERE workspace_id = $1 AND issue_id = $2 AND kind = 'publish' AND state = 'pending'`, testWorkspaceID, issue.ID)
+	}
+	evidence := func() int {
+		t.Helper()
+		return dbfx.Count(t, `SELECT count(*) FROM comment WHERE issue_id = $1 AND content LIKE 'Fixed and verified%'`, issue.ID)
+	}
+
+	testutil.Call(t, testHandler.PublishYixiezuoResult, manualIssueRequest("POST", issue.ID, body([]string{"not-a-uuid"}))).Want(400)
+	if pending() != 0 || evidence() != 0 {
+		t.Fatal("malformed attachment id queued a publish")
+	}
+
+	testutil.Call(t, testHandler.PublishYixiezuoResult, manualIssueRequest("POST", issue.ID, body([]string{"22222222-2222-4222-8222-222222222222"}))).Want(409)
+	if pending() != 0 || evidence() != 0 {
+		t.Fatal("missing attachment id queued a publish")
+	}
+
+	foreign := dbfx.Insert(t, "attachment", testutil.Cols{
+		"workspace_id": testWorkspaceID, "issue_id": issue.ID,
+		"uploader_type": "member", "uploader_id": "11111111-1111-4111-8111-111111111111",
+		"filename": "other.png", "url": "https://example.test/other.png",
+		"content_type": "image/png", "size_bytes": 1,
+	})
+	testutil.Call(t, testHandler.PublishYixiezuoResult, manualIssueRequest("POST", issue.ID, body([]string{foreign}))).Want(409)
+	if pending() != 0 || evidence() != 0 {
+		t.Fatal("another member's attachment queued a publish")
+	}
+	if dbfx.Count(t, `SELECT count(*) FROM attachment WHERE id = $1 AND comment_id IS NULL`, foreign) != 1 {
+		t.Fatal("foreign attachment was bound")
+	}
+
+	earlier := dbfx.Comment(t, issue.ID, "earlier note")
+	bound := dbfx.Insert(t, "attachment", testutil.Cols{
+		"workspace_id": testWorkspaceID, "issue_id": issue.ID, "comment_id": earlier,
+		"uploader_type": "member", "uploader_id": testUserID,
+		"filename": "bound.png", "url": "https://example.test/bound.png",
+		"content_type": "image/png", "size_bytes": 1,
+	})
+	testutil.Call(t, testHandler.PublishYixiezuoResult, manualIssueRequest("POST", issue.ID, body([]string{bound}))).Want(409)
+	if pending() != 0 || evidence() != 0 {
+		t.Fatal("already-bound attachment queued a publish")
+	}
+	if dbfx.Count(t, `SELECT count(*) FROM attachment WHERE id = $1 AND comment_id = $2`, bound, earlier) != 1 {
+		t.Fatal("already-bound attachment was moved")
 	}
 }

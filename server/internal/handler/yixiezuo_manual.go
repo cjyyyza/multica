@@ -317,6 +317,13 @@ func (h *Handler) queueYixiezuoIssueOperation(w http.ResponseWriter, r *http.Req
 	if !decodeYixiezuoBody(w, r, &req) {
 		return
 	}
+	if kind == "publish" {
+		ids, ok := parseUUIDSliceOrBadRequest(w, req.AttachmentIDs, "attachment_ids")
+		if !ok {
+			return
+		}
+		req.attachmentUUIDs = ids
+	}
 	row, err := h.enqueueYixiezuo(r.Context(), ws, member.UserID, id, kind, req, "", nil)
 	if err != nil {
 		writeSourceError(w, err)
