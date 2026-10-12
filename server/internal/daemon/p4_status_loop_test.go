@@ -92,7 +92,7 @@ func TestFinishReportsShelvedChangelistAndReview(t *testing.T) {
 	t.Setenv("P4_FAKE_FSTAT", "... depotFile //DJ01_Proj/Dev/Game/A.cpp\n... headType text\n... headRev 2\n... haveRev 2\n... action edit\n... change 1001\n")
 
 	var report p4ChangelistReport
-	var linked bool
+	var linkedSeparately bool
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		switch r.URL.Path {
@@ -102,7 +102,7 @@ func TestFinishReportsShelvedChangelistAndReview(t *testing.T) {
 			}
 			w.Write([]byte(`{}`))
 		case "/api/issues/issue-1/swarm-reviews":
-			linked = true
+			linkedSeparately = true
 			w.Write([]byte(`{}`))
 		default:
 			http.NotFound(w, r)
@@ -145,8 +145,13 @@ func TestFinishReportsShelvedChangelistAndReview(t *testing.T) {
 	if report.SwarmReview == nil || report.SwarmReview.Number != 9 || report.SwarmReview.State != "needsReview" {
 		t.Fatalf("swarm = %+v", report.SwarmReview)
 	}
-	if !linked {
-		t.Fatal("the review was not linked to the issue")
+	// The server attaches the review from the changelist report; a separate
+	// swarm-reviews link would show it twice on the issue.
+	if linkedSeparately {
+		t.Fatal("the review was also posted to the issue's swarm-reviews route")
+	}
+	if want := swarm.URL + "/reviews/9"; report.SwarmReview.URL != want {
+		t.Fatalf("swarm review url = %q, want %q", report.SwarmReview.URL, want)
 	}
 }
 

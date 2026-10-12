@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -169,6 +168,9 @@ func (d *Daemon) attachSwarmReview(ctx context.Context, task Task, b *p4TaskBind
 	if review == nil || review.ID <= 0 {
 		return
 	}
+	// The review rides on the changelist report only. Posting it to the issue's
+	// swarm-reviews route as well would link it a second time, and the issue
+	// would show it twice: on the changelist card and in the pull-request list.
 	report.SwarmReview = &p4SwarmReviewBody{
 		Number:      review.ID,
 		URL:         review.URL,
@@ -176,43 +178,14 @@ func (d *Daemon) attachSwarmReview(ctx context.Context, task Task, b *p4TaskBind
 		Author:      review.Author,
 		Description: review.Description,
 	}
-	if err := d.linkSwarmReviewToIssue(ctx, task, swarmURL, change, review); err != nil && d.logger != nil {
-		d.logger.Warn("p4 swarm review link failed", "review", review.ID, "issue_id", task.IssueID, "error", err)
+	if report.SwarmReview.URL == "" {
+		report.SwarmReview.URL = strings.TrimRight(swarmURL, "/") + "/reviews/" + strconv.Itoa(review.ID)
 	}
 }
 
 func swarmAction(params p4cache.SwarmParams, action string) p4cache.SwarmParams {
 	params.Action = action
 	return params
-}
-
-// linkSwarmReviewToIssue is the daemon-side equivalent of the CLI's
-// reportSwarmReviewToIssue: the task token posts the review onto the issue.
-func (d *Daemon) linkSwarmReviewToIssue(ctx context.Context, task Task, swarmURL, changelist string, review *p4cache.SwarmReview) error {
-	if d.client == nil || strings.TrimSpace(task.IssueID) == "" || strings.TrimSpace(task.AuthToken) == "" {
-		return nil
-	}
-	if review == nil || review.ID <= 0 || !p4depot.ValidSwarmURL(swarmURL) {
-		return fmt.Errorf("swarm review is missing an id or a valid swarm url")
-	}
-	path := "/api/issues/" + url.PathEscape(task.IssueID) + "/swarm-reviews"
-	body := map[string]any{
-		"review_id":   review.ID,
-		"swarm_url":   swarmURL,
-		"changelist":  changelist,
-		"description": review.Description,
-		"author":      review.Author,
-		"state":       review.State,
-		"html_url":    review.URL,
-	}
-	err := d.client.postJSONWithToken(ctx, path, task.AuthToken, body, &map[string]any{})
-	if isNotFound(err) {
-		if d.logger != nil {
-			d.logger.Warn("p4 swarm review link skipped; server has no swarm-reviews route", "issue_id", task.IssueID, "review", review.ID)
-		}
-		return nil
-	}
-	return err
 }
 
 // reportTaskP4Changelist tells the server about the task changelist. A 404
