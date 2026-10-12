@@ -381,7 +381,7 @@ func TestRuntimeProfilePathMutationFailsClosedInTaskContext(t *testing.T) {
 }
 
 func TestRunRuntimeProfileCreateOmpTarget(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("MULTICA_TOKEN", "test-token")
 	t.Setenv("MULTICA_WORKSPACE_ID", "ws-123")
 	var body map[string]any

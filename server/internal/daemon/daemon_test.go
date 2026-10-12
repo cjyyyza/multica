@@ -26,6 +26,8 @@ import (
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 func createDaemonTestRepo(t *testing.T) string {
@@ -187,7 +189,7 @@ func TestIsBlockedEnvKey(t *testing.T) {
 
 func TestPrepareReasonixTaskStateHome(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("USERPROFILE", home)
 
 	got, err := prepareReasonixTaskStateHome("work", "runtime-1", "agent_2")
@@ -209,7 +211,7 @@ func TestPrepareReasonixTaskStateHome(t *testing.T) {
 
 func TestPrepareDshTaskSessionRoot(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("USERPROFILE", home)
 
 	got, err := prepareDshTaskSessionRoot("work", "runtime-1", "agent_2")
@@ -546,8 +548,9 @@ func TestTaskMulticaEnvironmentIncludesPrivateConfigRoot(t *testing.T) {
 		ID:          "task-test",
 		AgentID:     "agent-test",
 		WorkspaceID: "workspace-test",
+		IssueID:     "issue-test",
 	}
-	env := taskMulticaEnvironment(task, "agent-name", fakeToken, taskRoot, workspacesRoot, "https://task.example", 19514, 3, "/task/tmp")
+	env := taskMulticaEnvironment(task, "codex", "agent-name", fakeToken, taskRoot, workspacesRoot, "https://task.example", 19514, 3, "/task/tmp")
 
 	want := map[string]string{
 		"MULTICA_TOKEN":                fakeToken,
@@ -556,6 +559,7 @@ func TestTaskMulticaEnvironmentIncludesPrivateConfigRoot(t *testing.T) {
 		"MULTICA_SERVER_URL":           "https://task.example",
 		"MULTICA_DAEMON_PORT":          "19514",
 		"MULTICA_WORKSPACE_ID":         "workspace-test",
+		"MULTICA_ISSUE_ID":             "issue-test",
 		"MULTICA_AGENT_NAME":           "agent-name",
 		"MULTICA_AGENT_ID":             "agent-test",
 		"MULTICA_TASK_ID":              "task-test",
@@ -563,6 +567,11 @@ func TestTaskMulticaEnvironmentIncludesPrivateConfigRoot(t *testing.T) {
 		"TMPDIR":                       "/task/tmp",
 		"TMP":                          "/task/tmp",
 		"TEMP":                         "/task/tmp",
+	}
+	if runtime.GOOS == "windows" {
+		// Windows tasks inherit host TMP/TEMP; see TestTaskMulticaEnvironmentTempPolicy.
+		delete(want, "TMP")
+		delete(want, "TEMP")
 	}
 	if !maps.Equal(env, want) {
 		t.Fatalf("taskMulticaEnvironment() = %#v, want %#v", env, want)
@@ -581,6 +590,62 @@ func TestTaskMulticaEnvironmentIncludesPrivateConfigRoot(t *testing.T) {
 	}
 	if env["MULTICA_TOKEN"] != fakeToken {
 		t.Fatal("custom env replaced task-scoped token")
+	}
+}
+
+func TestTaskMulticaEnvironmentTempPolicy(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_TMPDIR", "")
+	for _, provider := range []string{"claude", "codex", "pi", "opencode", "cursor"} {
+		t.Run(provider, func(t *testing.T) {
+			env := taskMulticaEnvironment(Task{}, provider, "", "", "", "", "", 0, 0, "/task/tmp")
+			if env["TMPDIR"] != "/task/tmp" {
+				t.Fatalf("TMPDIR = %q, want private task temp", env["TMPDIR"])
+			}
+			if runtime.GOOS == "windows" {
+				// Every provider can start Git Bash, whose /tmp mount is shared.
+				for _, key := range []string{"TMP", "TEMP"} {
+					if _, overridden := env[key]; overridden {
+						t.Errorf("%s must inherit the host path for Git Bash's shared /tmp", key)
+					}
+				}
+			} else {
+				for _, key := range []string{"TMP", "TEMP"} {
+					if env[key] != "/task/tmp" {
+						t.Errorf("%s = %q, want existing private task temp", key, env[key])
+					}
+				}
+			}
+			wantClaudeTemp := runtime.GOOS == "windows" && provider == "claude"
+			if got, ok := env["CLAUDE_CODE_TMPDIR"]; wantClaudeTemp && got != "/task/tmp" {
+				t.Errorf("CLAUDE_CODE_TMPDIR = %q, want private task temp", got)
+			} else if !wantClaudeTemp && ok {
+				t.Error("only Windows Claude gets a CLAUDE_CODE_TMPDIR default")
+			}
+		})
+	}
+}
+
+func TestTaskMulticaEnvironmentRespectsClaudeTempOverride(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_TMPDIR", "/user/claude-temp")
+	env := taskMulticaEnvironment(Task{}, "claude", "", "", "", "", "", 0, 0, "/task/tmp")
+	if _, overridden := env["CLAUDE_CODE_TMPDIR"]; overridden {
+		t.Fatal("inherited user CLAUDE_CODE_TMPDIR must remain authoritative")
+	}
+	t.Setenv("CLAUDE_CODE_TMPDIR", "")
+	for _, key := range []string{"CLAUDE_CODE_TMPDIR", "claude_code_tmpdir"} {
+		for _, value := range []string{"/custom/claude-temp", ""} {
+			custom := map[string]string{key: value}
+			env = taskMulticaEnvironment(Task{Agent: &AgentData{CustomEnv: custom}}, "claude", "", "", "", "", "", 0, 0, "/task/tmp")
+			layerCustomEnvAndHermesHome(env, custom, "", nil)
+			if env[key] != value {
+				t.Fatalf("custom %s = %q, want user's %q", key, env[key], value)
+			}
+			for name := range env {
+				if strings.EqualFold(name, key) && name != key {
+					t.Errorf("duplicate Windows temp key %q conflicts with user's %q", name, key)
+				}
+			}
+		}
 	}
 }
 
@@ -2067,7 +2132,7 @@ func TestHermesPreparedSessionReachability(t *testing.T) {
 	// Keep profile/store resolution inside synthetic homes, never the user's.
 	t.Setenv("MULTICA_TASK_CONFIG_ROOT", "")
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("USERPROFILE", home)
 	sourceHome, root := t.TempDir(), t.TempDir()
 	taskNumber := 0
