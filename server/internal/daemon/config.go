@@ -90,7 +90,18 @@ const (
 	// reclaimed on liveness and never touch this knob.
 	DefaultGCTaskTempLegacyTTL     = time.Duration(0)
 	DefaultAutoUpdateCheckInterval = 6 * time.Hour // how often the daemon polls GitHub for a newer CLI release
+	// DefaultP4Timeout bounds a single `p4` invocation. A first sync of a large
+	// UE depot and a shelve of a few hundred binary assets both live here.
+	DefaultP4Timeout = 10 * time.Minute
+	// DefaultP4PollInterval is how often the daemon reconciles the changelists
+	// it reported with the Perforce server and Swarm.
+	DefaultP4PollInterval = 5 * time.Minute
 )
+
+// DefaultP4SyncMaxBytes is the ceiling for the legacy task-scoped client mode.
+// A one-off client that would sync more than this is a depot attached the wrong
+// way — it belongs to a human workspace, not to a per-task checkout.
+const DefaultP4SyncMaxBytes int64 = 20 << 30
 
 // DefaultGCArtifactPatterns lists basename matches that the GC loop treats as
 // regenerable build artifacts. Kept conservative: only directories that are
@@ -153,6 +164,9 @@ type Config struct {
 	OpenCodeIdleWatchdog        time.Duration // OpenCode-specific no-message window; 0 falls back to AgentIdleWatchdog and values above it cannot extend the global bound
 	AgentIdleWatchdog           time.Duration // force-stop a run when the backend goes silent this long with an empty queue (0 = disabled)
 	AgentToolWatchdog           time.Duration // force-stop a run when a single tool call stays in flight (silent) this long (0 = never force-stop during a tool call, which now also covers a live Cursor background shell); defaults to AgentIdleWatchdog, so operators tune one number unless they deliberately want a wider tool budget
+	P4Timeout                   time.Duration // ceiling on one `p4` invocation (MULTICA_P4_TIMEOUT, default 10m)
+	P4SyncMaxBytes              int64         // refuse a task-scoped client sync larger than this (MULTICA_P4_SYNC_MAX_BYTES, default 20GiB; negative disables the check)
+	P4PollInterval              time.Duration // how often reported changelists are reconciled with Perforce and Swarm (MULTICA_P4_POLL_INTERVAL, default 5m; 0 disables the loop)
 	ClaudeArgs                  []string
 	CodexArgs                   []string
 	CodebuddyArgs               []string
@@ -329,6 +343,19 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	}
 	if overrides.AgentTimeout != nil {
 		agentTimeout = *overrides.AgentTimeout
+	}
+
+	p4Timeout, err := durationFromEnv("MULTICA_P4_TIMEOUT", DefaultP4Timeout)
+	if err != nil {
+		return Config{}, err
+	}
+	p4PollInterval, err := durationFromEnv("MULTICA_P4_POLL_INTERVAL", DefaultP4PollInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	p4SyncMaxBytes, err := int64FromEnv("MULTICA_P4_SYNC_MAX_BYTES", DefaultP4SyncMaxBytes)
+	if err != nil {
+		return Config{}, err
 	}
 
 	// MULTICA_AGENT_IDLE_WATCHDOG=0 disables the per-task idle watchdog. We
@@ -663,6 +690,9 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		OpenCodeIdleWatchdog:            openCodeIdleWatchdog,
 		AgentIdleWatchdog:               agentIdleWatchdog,
 		AgentToolWatchdog:               agentToolWatchdog,
+		P4Timeout:                       p4Timeout,
+		P4SyncMaxBytes:                  p4SyncMaxBytes,
+		P4PollInterval:                  p4PollInterval,
 		ClaudeArgs:                      claudeArgs,
 		CodexArgs:                       codexArgs,
 		CodebuddyArgs:                   codebuddyArgs,

@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/multica-ai/multica/server/internal/daemon/p4cache"
 	"github.com/multica-ai/multica/server/internal/p4depot"
@@ -124,6 +125,12 @@ func (d *Daemon) p4RunHandler() http.HandlerFunc {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		if activeTask, authResult := d.activeRepoCheckoutTask(r); authResult == repoCheckoutAuthOK {
+			if binding := d.p4Binding(activeTask.TaskID); binding != nil {
+				d.serveWorkspaceP4Run(w, r, activeTask, binding, req)
+				return
+			}
+		}
 		ref, err := p4depot.Normalize(p4depot.Ref{
 			Port:       req.Port,
 			Depot:      req.Depot,
@@ -244,5 +251,105 @@ func (d *Daemon) p4SwarmHandler() http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
+	}
+}
+
+func writeP4Rejection(w http.ResponseWriter, rej p4Rejection) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+	json.NewEncoder(w).Encode(rej)
+}
+
+func (d *Daemon) serveWorkspaceP4Run(w http.ResponseWriter, r *http.Request, activeTask activeRepoCheckoutTask, binding *p4TaskBinding, req p4MutateRequest) {
+	if req.WorkspaceID != "" && req.WorkspaceID != activeTask.WorkspaceID {
+		http.Error(w, "p4 task context does not match the active task", http.StatusForbidden)
+		return
+	}
+	if req.TaskID != "" && req.TaskID != activeTask.TaskID {
+		http.Error(w, "p4 task context does not match the active task", http.StatusForbidden)
+		return
+	}
+	if port := strings.TrimSpace(req.Port); port != "" && !strings.EqualFold(port, binding.ws.Port) {
+		http.Error(w, "port does not match the workspace this task is bound to", http.StatusBadRequest)
+		return
+	}
+	if depot := strings.TrimSpace(req.Depot); depot != "" && depot != binding.ref.Depot && depot != binding.ref.Stream && depot != binding.ws.Stream {
+		http.Error(w, "depot does not match the workspace this task is bound to", http.StatusBadRequest)
+		return
+	}
+	cwd := binding.ws.Dir
+	if strings.TrimSpace(req.WorkDir) != "" {
+		authorized, err := authorizeRepoCheckoutWorkDir(activeTask.WorkDir, req.WorkDir)
+		if err != nil {
+			http.Error(w, "p4 workdir is not owned by the active task", http.StatusForbidden)
+			return
+		}
+		cwd = authorized
+	}
+	if strings.TrimSpace(req.Cwd) != "" {
+		authorized, err := authorizeRepoCheckoutWorkDir(activeTask.WorkDir, req.Cwd)
+		if err != nil {
+			http.Error(w, "p4 cwd is not owned by the active task", http.StatusForbidden)
+			return
+		}
+		cwd = authorized
+	}
+	if d.p4Cache == nil {
+		http.Error(w, "perforce is not initialized", http.StatusInternalServerError)
+		return
+	}
+	result, rej, err := d.runWorkspaceP4(r.Context(), binding, req, cwd)
+	if rej != nil {
+		writeP4Rejection(w, *rej)
+		return
+	}
+	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		d.logger.Error("p4 workspace run failed", "action", req.Action, "client", binding.ws.Client, "error", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+func (d *Daemon) p4StatusHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		activeTask, authResult := d.activeRepoCheckoutTask(r)
+		if authResult != repoCheckoutAuthOK {
+			d.writeRepoCheckoutAuthError(w, authResult)
+			return
+		}
+		binding := d.p4Binding(activeTask.TaskID)
+		if binding == nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(p4Rejection{
+				Code:    "no_workspace",
+				Message: "this task is not bound to a Perforce workspace",
+			})
+			return
+		}
+		if d.p4Cache == nil {
+			http.Error(w, "perforce is not initialized", http.StatusInternalServerError)
+			return
+		}
+		status, err := d.workspaceStatus(r.Context(), binding)
+		if err != nil {
+			if r.Context().Err() != nil {
+				return
+			}
+			d.logger.Error("p4 status failed", "client", binding.ws.Client, "error", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(status)
 	}
 }

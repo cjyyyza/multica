@@ -178,7 +178,7 @@ func taskScopedAuthToken(task Task) (string, error) {
 	return token, nil
 }
 
-func taskMulticaEnvironment(task Task, provider, agentName, token, configRoot, workspacesRoot, serverURL string, healthPort, slot int, tempDir string) map[string]string {
+func taskMulticaEnvironment(task Task, provider, agentName, token, configRoot, workspacesRoot, serverURL string, healthPort, slot int, tempDir string, p4Workspace bool) map[string]string {
 	env := map[string]string{
 		"MULTICA_TOKEN":        token,
 		cli.TaskConfigRootEnv:  configRoot,
@@ -193,6 +193,13 @@ func taskMulticaEnvironment(task Task, provider, agentName, token, configRoot, w
 		"TMPDIR":               tempDir,
 		"TMP":                  tempDir,
 		"TEMP":                 tempDir,
+	}
+	if p4Workspace {
+		// A missing P4CONFIG file hides the directory's real one, and an
+		// unknown P4CLIENT makes workspace writes fail. Depot reads still
+		// work. This map is the agent's environment only.
+		env["P4CONFIG"] = ".multica-p4-disabled"
+		env["P4CLIENT"] = "multica-blocked"
 	}
 	if issueID := strings.TrimSpace(task.IssueID); issueID != "" {
 		env["MULTICA_ISSUE_ID"] = issueID
@@ -695,6 +702,14 @@ type Daemon struct {
 	// waits. See MUL-2663.
 	localPathLocks *LocalPathLocker
 
+	// p4ClientLocks serialises workspace-mode tasks that share a Helix client.
+	// The key is "port|client", so two local directories on the same client
+	// cannot open files at the same time.
+	p4ClientLocks *LocalPathLocker
+
+	p4BindingsMu sync.Mutex
+	p4Bindings   map[string]*p4TaskBinding
+
 	// bgSyncs tracks background goroutines started by registerTaskRepos so
 	// callers (notably tests using t.TempDir-backed cache roots) can wait for
 	// them to drain before tearing the daemon down. Without this the bg
@@ -753,7 +768,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		cfg:                         cfg,
 		client:                      client,
 		repoCache:                   repocache.New(cacheRoot, logger),
-		p4Cache:                     &p4cache.Cache{Logger: logger},
+		p4Cache:                     &p4cache.Cache{Logger: logger, Timeout: cfg.P4Timeout, SyncMaxBytes: cfg.P4SyncMaxBytes},
 		skillCache:                  NewSkillBundleCache(skillCacheRoot),
 		logger:                      logger,
 		terminalReports:             newTerminalReportStore(cfg),
@@ -774,6 +789,8 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		activeStores:                make(map[string]int),
 		deletingStores:              make(map[string]bool),
 		localPathLocks:              NewLocalPathLocker(),
+		p4ClientLocks:               NewLocalPathLocker(),
+		p4Bindings:                  make(map[string]*p4TaskBinding),
 		runtimeGoneInflight:         make(map[string]struct{}),
 		pendingWorkInflight:         make(map[string]struct{}),
 		pendingWorkLastRun:          make(map[string]time.Time),
@@ -2217,6 +2234,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.gcLoop(ctx)
 	go d.autoUpdateLoop(ctx)
 	go d.tokenRenewalLoop(ctx)
+	go d.p4StatusLoop(ctx)
 
 	// Preflight succeeded and the background loops are up: the daemon has
 	// registered its runtimes and can now claim and run tasks. Flip /health
@@ -2224,7 +2242,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// readiness wait blocks on, so success is reported only after startup
 	// actually completed, not merely because the health port came up.
 	d.ready.Store(true)
-	d.logger.Debug("background loops launched (workspace-sync, terminal-report-replay, task-wakeup, heartbeat, gc, auto-update, token-renewal); health now reporting ready")
+	d.logger.Debug("background loops launched (workspace-sync, terminal-report-replay, task-wakeup, heartbeat, gc, auto-update, token-renewal, p4-status); health now reporting ready")
 	err = d.pollLoop(ctx, taskWakeups)
 	d.logger.Debug("daemon main loop returning", "error", err)
 	return err
@@ -8379,6 +8397,20 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			if localAssignment != nil {
 				prepParams.LocalWorkDir = localAssignment.AbsPath
 			}
+			if localAssignment != nil && !localAssignment.UsesWorktree() && len(task.P4Depots) > 0 {
+				binding, bindErr := d.bindP4Workspace(prepareCtx, task, localAssignment, provider)
+				if bindErr != nil {
+					return TaskResult{}, asEnvironmentSetupFailure(fmt.Errorf("perforce workspace: %w", bindErr))
+				}
+				if binding != nil {
+					prepParams.Task.P4Workspace = binding.envSpec()
+					defer func() {
+						finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(prepareCtx), 3*d.p4CommandTimeout())
+						defer finishCancel()
+						d.finishP4Workspace(finishCtx, task, binding)
+					}()
+				}
+			}
 			env, err = d.prepareExecutionEnvironment(prepareCtx, prepParams)
 			if err != nil {
 				return TaskResult{}, asEnvironmentSetupFailure(fmt.Errorf("prepare execution environment: %w", err))
@@ -8619,7 +8651,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		taskLog.Error("task auth token invalid; refusing to start agent", "error", err)
 		return TaskResult{}, err
 	}
-	agentEnv := taskMulticaEnvironment(task, provider, agentName, agentToken, env.MulticaConfigRoot, d.cfg.WorkspacesRoot, d.cfg.ServerBaseURL, d.cfg.HealthPort, slot, taskTempDir)
+	agentEnv := taskMulticaEnvironment(task, provider, agentName, agentToken, env.MulticaConfigRoot, d.cfg.WorkspacesRoot, d.cfg.ServerBaseURL, d.cfg.HealthPort, slot, taskTempDir, d.p4Binding(task.ID) != nil)
 	if checkoutMode := repoCheckoutModeFor(provider, runtime.GOOS); checkoutMode != "" {
 		agentEnv[repoCheckoutModeEnv] = checkoutMode
 	}
@@ -8697,6 +8729,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentCustomEnv = task.Agent.CustomEnv
 	}
 	layerCustomEnvAndHermesHome(agentEnv, agentCustomEnv, env.HermesHome, d.logger)
+	// custom_env is allowed to set P4PORT for a read, but it must not put the
+	// human's client back. Re-apply the shield after the overlay.
+	if d.p4Binding(task.ID) != nil {
+		agentEnv["P4CONFIG"] = ".multica-p4-disabled"
+		agentEnv["P4CLIENT"] = "multica-blocked"
+	}
 	if provider == "reasonix" {
 		reasonixStateHome, err := prepareReasonixTaskStateHome(d.cfg.Profile, task.RuntimeID, task.AgentID)
 		if err != nil {
@@ -10210,6 +10248,7 @@ func convertP4DepotsForEnv(depots []P4DepotData) []execenv.P4DepotForEnv {
 			Depot:       d.Depot,
 			Stream:      d.Stream,
 			User:        d.User,
+			Charset:     d.Charset,
 			Changelist:  d.Changelist,
 			Description: d.Description,
 			SwarmURL:    d.SwarmURL,

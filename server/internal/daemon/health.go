@@ -417,6 +417,7 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux.HandleFunc("/shutdown", d.shutdownHandler())
 	mux.HandleFunc("/repo/checkout", d.repoCheckoutHandler())
 	mux.HandleFunc("/p4/sync", d.p4SyncHandler())
+	mux.HandleFunc("/p4/status", d.p4StatusHandler())
 	mux.HandleFunc("/p4/run", d.p4RunHandler())
 	mux.HandleFunc("/p4/swarm", d.p4SwarmHandler())
 
@@ -585,6 +586,15 @@ func (d *Daemon) p4SyncHandler() http.HandlerFunc {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
+		}
+		if activeTask, authResult := d.activeRepoCheckoutTask(r); authResult == repoCheckoutAuthOK {
+			if d.p4Binding(activeTask.TaskID) != nil {
+				writeP4Rejection(w, p4Rejection{
+					Code:    p4CodeActionNotAllowed,
+					Message: "workspace mode does not sync; a person syncs this workspace",
+				})
+				return
+			}
 		}
 		ref, err := p4depot.Normalize(p4depot.Ref{
 			Port:       req.Port,
