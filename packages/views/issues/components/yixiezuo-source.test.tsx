@@ -4,18 +4,52 @@ import userEvent from "@testing-library/user-event";
 import { renderWithI18n } from "../../test/i18n";
 import { YixiezuoSource } from "./yixiezuo-source";
 
-const mocks = vi.hoisted(() => ({ publish: vi.fn(), refresh: vi.fn(), upload: vi.fn(), state: "imported", revision: 3 }));
+const mocks = vi.hoisted(() => ({ publish: vi.fn(), refresh: vi.fn(), upload: vi.fn(), state: "imported", revision: 3, changelists: [] as unknown[] }));
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws" }));
 vi.mock("./yixiezuo-import", () => ({ YixiezuoSourcePreview: () => <div /> }));
 vi.mock("@multica/core/api", () => ({ api: { publishYixiezuoResult: (...args: unknown[]) => mocks.publish(...args), refreshYixiezuoImport: (...args: unknown[]) => mocks.refresh(...args), uploadFile: (...args: unknown[]) => mocks.upload(...args) } }));
 vi.mock("@tanstack/react-query", async (original) => ({
   ...await original<typeof import("@tanstack/react-query")>(),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
-  useQuery: () => ({ data: { import: { issue_id: "issue", revision: mocks.revision, state: mocks.state, snapshot: { source: { id: "7", url: "https://dj01.pm.netease.com/issues/7" }, status: "Ready", lock_version: 1, digest: "source-digest", statuses: [{ id: 2, name: "QA" }] } } } }),
+  useQuery: (options: { queryKey?: unknown[] }) => options.queryKey?.[0] === "p4"
+    ? ({ data: { changelists: mocks.changelists } })
+    : ({ data: { import: { issue_id: "issue", revision: mocks.revision, state: mocks.state, snapshot: { source: { id: "7", url: "https://dj01.pm.netease.com/issues/7" }, status: "Ready", lock_version: 1, digest: "source-digest", statuses: [{ id: 2, name: "QA" }] } } } }),
   useMutation: (opts: { mutationFn: () => Promise<unknown>; onSuccess?: (value: unknown) => void }) => ({ mutate: async () => { const result = await opts.mutationFn(); await opts.onSuccess?.(result); }, isPending: false, error: null, reset: vi.fn() }),
 }));
 
-beforeEach(() => { vi.clearAllMocks(); mocks.state = "imported"; mocks.revision = 3; mocks.publish.mockResolvedValue({ id: "op" }); });
+beforeEach(() => { vi.clearAllMocks(); mocks.state = "imported"; mocks.revision = 3; mocks.changelists = []; mocks.publish.mockResolvedValue({ id: "op" }); });
+
+function changelist(overrides: Record<string, unknown>) {
+  return {
+    id: "cl-1", workspace_id: "ws", port: "p4:1666", number: 795095, original_number: 795095,
+    status: "shelved", client: "dj-win", p4_user: "yujian", description: "refs #7", ticket: "7",
+    files_count: 1, exclusive_files: [], warnings: [], swarm_review_id: null, swarm_review_number: null,
+    swarm_review_url: null, swarm_review_state: null, task_id: null, link_source: "task",
+    submitted_at: null, created_at: "", updated_at: "", ...overrides,
+  };
+}
+
+it("prefills the issue's changelists into the result", async () => {
+  const user = userEvent.setup();
+  mocks.changelists = [changelist({ number: 795115, original_number: 795095, status: "submitted", swarm_review_number: 123 })];
+  renderWithI18n(<YixiezuoSource issueId="issue" />);
+  await user.click(screen.getByRole("button", { name: "Publish result" }));
+  const result = screen.getByLabelText("Fix, validation and acceptance result");
+  expect(result).toHaveValue("CL 795115 (Submitted, was 795095) · Swarm #123");
+  await user.type(result, "\nFixed and verified");
+  await user.click(screen.getByRole("checkbox"));
+  await user.click(screen.getByRole("button", { name: "Confirm publication" }));
+  expect(mocks.publish).toHaveBeenCalledWith("ws", "issue", expect.objectContaining({
+    summary: "CL 795115 (Submitted, was 795095) · Swarm #123\nFixed and verified",
+  }));
+});
+
+it("leaves the result empty for an issue with no changelists", async () => {
+  const user = userEvent.setup();
+  renderWithI18n(<YixiezuoSource issueId="issue" />);
+  await user.click(screen.getByRole("button", { name: "Publish result" }));
+  expect(screen.getByLabelText("Fix, validation and acceptance result")).toHaveValue("");
+});
 
 it("requires acceptance and sends the reviewed revision and source digest", async () => {
   const user = userEvent.setup();
