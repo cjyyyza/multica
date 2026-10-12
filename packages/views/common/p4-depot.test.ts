@@ -39,4 +39,20 @@ describe("toP4DepotPayload", () => {
       swarm_url: "https://swarm.example.com/",
     });
   });
+
+  // The settings form rebuilds every depot through this function on save, so
+  // a switch it drops is a switch an unrelated edit turns off.
+  it("keeps the workspace-mode switches and omits them when off", () => {
+    expect(
+      toP4DepotPayload({
+        port: "p4:1666",
+        depot: "//depot/a",
+        allow_exclusive: true,
+        no_auto_review: true,
+      }),
+    ).toEqual({ port: "p4:1666", depot: "//depot/a", allow_exclusive: true, no_auto_review: true });
+    expect(
+      toP4DepotPayload({ port: "p4:1666", depot: "//depot/a", allow_exclusive: false, no_auto_review: false }),
+    ).toEqual({ port: "p4:1666", depot: "//depot/a" });
+  });
 });

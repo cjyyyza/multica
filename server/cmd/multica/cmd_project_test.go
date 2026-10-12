@@ -40,6 +40,8 @@ func newProjectResourceUpdateTestCmd() *cobra.Command {
 	c.Flags().String("charset", "", "")
 	c.Flags().String("changelist", "", "")
 	c.Flags().String("swarm-url", "", "")
+	c.Flags().Bool("allow-exclusive", false, "")
+	c.Flags().Bool("no-auto-review", false, "")
 	c.Flags().String("local-path", "", "")
 	c.Flags().String("daemon-id", "", "")
 	c.Flags().String("ref-label", "", "")
@@ -444,6 +446,53 @@ func TestBuildResourceRefFromFlagsPerforceDepot(t *testing.T) {
 		}
 		if ref["port"] != "ssl:p4.example.com:1666" || ref["depot"] != "//depot/game" {
 			t.Fatalf("lost required fields: %+v", ref)
+		}
+	})
+
+	t.Run("workspace-mode switches set and clear", func(t *testing.T) {
+		cmd := newProjectResourceUpdateTestCmd()
+		_ = cmd.Flags().Set("allow-exclusive", "true")
+		existing := map[string]any{
+			"port":           "ssl:p4.example.com:1666",
+			"depot":          "//depot/game",
+			"no_auto_review": true,
+		}
+		ref, has, err := buildResourceRefFromFlags(cmd, "perforce_depot", existing)
+		if err != nil || !has {
+			t.Fatalf("has=%v err=%v", has, err)
+		}
+		if ref["allow_exclusive"] != true || ref["no_auto_review"] != true {
+			t.Fatalf("switches = %+v", ref)
+		}
+
+		cmd = newProjectResourceUpdateTestCmd()
+		_ = cmd.Flags().Set("no-auto-review", "false")
+		ref, _, err = buildResourceRefFromFlags(cmd, "perforce_depot", existing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := ref["no_auto_review"]; ok {
+			t.Fatalf("no_auto_review should be cleared: %+v", ref)
+		}
+	})
+
+	// A stream edit must carry the boolean switches forward; dropping them
+	// would quietly turn auto review back on and exclusive opens off.
+	t.Run("string edit keeps workspace-mode switches", func(t *testing.T) {
+		cmd := newProjectResourceUpdateTestCmd()
+		_ = cmd.Flags().Set("stream", "//depot/main")
+		existing := map[string]any{
+			"port":            "ssl:p4.example.com:1666",
+			"depot":           "//depot/game",
+			"allow_exclusive": true,
+			"no_auto_review":  true,
+		}
+		ref, _, err := buildResourceRefFromFlags(cmd, "perforce_depot", existing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ref["allow_exclusive"] != true || ref["no_auto_review"] != true {
+			t.Fatalf("switches lost on a stream edit: %+v", ref)
 		}
 	})
 }

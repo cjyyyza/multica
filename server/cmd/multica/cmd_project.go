@@ -157,6 +157,8 @@ func init() {
 	projectResourceAddCmd.Flags().String("charset", "", "Shortcut: P4CHARSET (only used when --type perforce_depot)")
 	projectResourceAddCmd.Flags().String("changelist", "", "Shortcut: baseline changelist (only used when --type perforce_depot)")
 	projectResourceAddCmd.Flags().String("swarm-url", "", "Shortcut: Helix Swarm origin (only used when --type perforce_depot)")
+	projectResourceAddCmd.Flags().Bool("allow-exclusive", false, "Shortcut: let agents open +l (exclusive) files in workspace mode (only used when --type perforce_depot)")
+	projectResourceAddCmd.Flags().Bool("no-auto-review", false, "Shortcut: skip the automatic Swarm review after a workspace-mode task shelves (only used when --type perforce_depot)")
 	projectResourceAddCmd.Flags().String("default-branch-hint", "", "Shortcut: optional default branch hint (only used when --type github_repo)")
 	projectResourceAddCmd.Flags().String("local-path", "", "Shortcut: absolute path to the working directory (only used when --type local_directory)")
 	projectResourceAddCmd.Flags().String("daemon-id", "", "Shortcut: id of the daemon that owns the local path (only used when --type local_directory)")
@@ -176,6 +178,8 @@ func init() {
 	projectResourceUpdateCmd.Flags().String("charset", "", "Shortcut: new P4CHARSET (perforce_depot)")
 	projectResourceUpdateCmd.Flags().String("changelist", "", "Shortcut: new baseline changelist (perforce_depot)")
 	projectResourceUpdateCmd.Flags().String("swarm-url", "", "Shortcut: new Helix Swarm origin (perforce_depot)")
+	projectResourceUpdateCmd.Flags().Bool("allow-exclusive", false, "Shortcut: let agents open +l (exclusive) files in workspace mode; pass --allow-exclusive=false to turn it off (perforce_depot)")
+	projectResourceUpdateCmd.Flags().Bool("no-auto-review", false, "Shortcut: skip the automatic Swarm review; pass --no-auto-review=false to turn it back on (perforce_depot)")
 	projectResourceUpdateCmd.Flags().String("default-branch-hint", "", "Shortcut: new default branch hint (github_repo)")
 	projectResourceUpdateCmd.Flags().String("local-path", "", "Shortcut: new absolute local path (local_directory)")
 	projectResourceUpdateCmd.Flags().String("daemon-id", "", "Shortcut: new daemon id (local_directory)")
@@ -939,7 +943,10 @@ func buildResourceRefFromFlags(cmd *cobra.Command, resourceType string, existing
 		charsetSet := cmd.Flags().Changed("charset")
 		clSet := cmd.Flags().Changed("changelist")
 		swarmSet := cmd.Flags().Changed("swarm-url")
-		if !portSet && !depotSet && !streamSet && !userSet && !charsetSet && !clSet && !swarmSet {
+		exclusiveSet := cmd.Flags().Changed("allow-exclusive")
+		autoReviewSet := cmd.Flags().Changed("no-auto-review")
+		if !portSet && !depotSet && !streamSet && !userSet && !charsetSet && !clSet && !swarmSet &&
+			!exclusiveSet && !autoReviewSet {
 			return nil, false, nil
 		}
 		ref := map[string]any{}
@@ -949,7 +956,26 @@ func buildResourceRefFromFlags(cmd *cobra.Command, resourceType string, existing
 					ref[key] = strings.TrimSpace(v)
 				}
 			}
+			// The workspace-mode switches are booleans; an edit of any other
+			// field must not silently turn them off.
+			for _, key := range []string{"allow_exclusive", "no_auto_review"} {
+				if v, ok := existingRef[key].(bool); ok && v {
+					ref[key] = true
+				}
+			}
 		}
+		setBool := func(flag, key string, changed bool) {
+			if !changed {
+				return
+			}
+			if v, _ := cmd.Flags().GetBool(flag); v {
+				ref[key] = true
+			} else {
+				delete(ref, key)
+			}
+		}
+		setBool("allow-exclusive", "allow_exclusive", exclusiveSet)
+		setBool("no-auto-review", "no_auto_review", autoReviewSet)
 		setOrClear := func(flag, key string, changed bool) error {
 			if !changed {
 				return nil
@@ -998,7 +1024,8 @@ func buildResourceRefFromFlags(cmd *cobra.Command, resourceType string, existing
 			cmd.Flags().Changed("port") || cmd.Flags().Changed("depot") ||
 			cmd.Flags().Changed("stream") || cmd.Flags().Changed("user") ||
 			cmd.Flags().Changed("charset") || cmd.Flags().Changed("changelist") ||
-			cmd.Flags().Changed("swarm-url") {
+			cmd.Flags().Changed("swarm-url") || cmd.Flags().Changed("allow-exclusive") ||
+			cmd.Flags().Changed("no-auto-review") {
 			return nil, false, fmt.Errorf("no built-in shortcut for resource type %q; pass the full payload via --ref '<json>'", resourceType)
 		}
 		return nil, false, nil
