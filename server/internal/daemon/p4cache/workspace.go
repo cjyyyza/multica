@@ -29,6 +29,10 @@ type Workspace struct {
 	// ServerCluster identifies the Helix installation across the commit server
 	// and its edges. Empty on servers that do not set one.
 	ServerCluster string
+	// View is the classic client mappings ("//depot/... //client/..."), empty
+	// for a stream client. DetectWorkspace uses it to see which depots this
+	// workspace actually covers.
+	View []string
 }
 
 // FileState is what Perforce knows about one file in a workspace: our own open
@@ -117,6 +121,15 @@ func (c *Cache) DetectWorkspace(ctx context.Context, dir string) (*Workspace, er
 	ws.Root = firstNonBlank(spec["Root"], info["clientRoot"])
 	ws.Stream = spec["Stream"]
 	ws.Host = spec["Host"]
+	for i := 0; ; i++ {
+		view, ok := spec["View"+strconv.Itoa(i)]
+		if !ok {
+			break
+		}
+		if view = strings.TrimSpace(view); view != "" {
+			ws.View = append(ws.View, view)
+		}
+	}
 	owner := firstNonBlank(spec["Owner"], spec["owner"])
 
 	if err := ws.checkOwnership(owner); err != nil {
@@ -181,24 +194,34 @@ func (c *Cache) FileStates(ctx context.Context, ws *Workspace, files []string) (
 	return states, nil
 }
 
+// Opened lists every file this client has opened, in every changelist.
+func (c *Cache) Opened(ctx context.Context, ws *Workspace) ([]FileState, error) {
+	return c.opened(ctx, ws, nil)
+}
+
 // OpenedInChange lists the files opened in one changelist of this client.
 // change may be "default".
 func (c *Cache) OpenedInChange(ctx context.Context, ws *Workspace, change string) ([]FileState, error) {
-	if ws == nil {
-		return nil, fmt.Errorf("perforce workspace is required")
-	}
 	change = strings.TrimSpace(change)
 	if change == "" {
 		return nil, fmt.Errorf("changelist is required")
 	}
-	args := append(ws.tagArgs(), "opened", "-c", change)
+	return c.opened(ctx, ws, []string{"-c", change})
+}
+
+func (c *Cache) opened(ctx context.Context, ws *Workspace, extra []string) ([]FileState, error) {
+	if ws == nil {
+		return nil, fmt.Errorf("perforce workspace is required")
+	}
+	args := append(ws.tagArgs(), "opened")
+	args = append(args, extra...)
 	stdout, stderr, err := c.runAt(ctx, ws.Dir, args)
 	records := parseZtag(stdout)
 	if err != nil && len(records) == 0 {
 		if onlyMissingFiles(stderr) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("p4 opened -c %s: %w: %s", change, err, strings.TrimSpace(stderr))
+		return nil, fmt.Errorf("p4 opened: %w: %s", err, strings.TrimSpace(stderr))
 	}
 	states := make([]FileState, 0, len(records))
 	for _, record := range records {

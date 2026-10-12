@@ -434,6 +434,13 @@ func skillsDirPath(workDir, provider string) string {
 	}
 }
 
+// SkillsDirPath is the provider skills directory under workDir. It does not
+// create the directory; bind-time checks use it to see whether those skills
+// would be written onto depot files.
+func SkillsDirPath(workDir, provider string) string {
+	return skillsDirPath(workDir, provider)
+}
+
 var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
 
 // ensureSkillFrontmatter returns SKILL.md content guaranteed to lead with a
