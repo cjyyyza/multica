@@ -138,8 +138,15 @@ func (h *Handler) listSwarmReviewsForIssue(ctx context.Context, issue db.Issue) 
 		slog.Error("list swarm reviews", "error", err, "issue_id", uuidToString(issue.ID))
 		return nil
 	}
+	// A review attached to a changelist renders as a changelist card, which
+	// already carries its state. Leaving it here too would show one review in
+	// two places, and the pull-request card calls a committed review "Merged".
+	onChangelist := h.p4ChangelistSwarmReviewIDs(ctx, issue)
 	out := make([]GitHubPullRequestResponse, 0, len(rows))
 	for _, row := range rows {
+		if _, attached := onChangelist[uuidToString(row.ID)]; attached {
+			continue
+		}
 		out = append(out, swarmReviewRowToPRResponse(row))
 	}
 	return out

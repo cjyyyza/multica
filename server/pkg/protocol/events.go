@@ -174,6 +174,10 @@ const (
 	EventPullRequestUpdated        = "pull_request:updated"
 	EventPullRequestUnlinked       = "pull_request:unlinked"
 
+	// Perforce changelist events. One event for create, status change, link and
+	// unlink: every client answers all four by re-reading the issue's list.
+	EventP4ChangelistUpdated = "p4_changelist:updated"
+
 	// VCS integration events (Forgejo / Gitea / GitLab)
 	EventVCSConnectionCreated = "vcs_connection:created"
 	EventVCSConnectionDeleted = "vcs_connection:deleted"
