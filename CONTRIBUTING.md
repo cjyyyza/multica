@@ -50,6 +50,15 @@ upstream names sharing their numbers are frozen in
 `server/internal/migrations/fork_history_test.go`; new migrations remain subject
 to the unique-number check.
 
+Number every **new** fork migration from the reserved **9001–9099** range.
+Upstream numbers its migrations sequentially from the same counter this fork
+used to share, so a fork migration taking the next free low number collides
+with whatever upstream publishes at that number — and a published migration
+cannot be renamed, because its full name is the applied version in
+`schema_migrations`. Migrations run in filename order, and a table in the
+reserved range depends on nothing upstream adds later, so the high numbers cost
+nothing.
+
 Run the relevant checks below and `pnpm exec playwright test
 e2e/fork-integrations.spec.ts` against the checkout's managed environment. The
 browser test covers settings navigation and local Perforce configuration; real

@@ -640,6 +640,14 @@ deleted_swarm_links AS (
 deleted_swarm_reviews AS (
     DELETE FROM swarm_review
     WHERE swarm_review.workspace_id = $1
+),
+deleted_p4_changelist_links AS (
+    DELETE FROM issue_p4_changelist
+    WHERE issue_p4_changelist.workspace_id = $1
+),
+deleted_p4_changelists AS (
+    DELETE FROM p4_changelist
+    WHERE p4_changelist.workspace_id = $1
 )
 DELETE FROM vcs_pull_request WHERE vcs_pull_request.workspace_id = $1
 `
