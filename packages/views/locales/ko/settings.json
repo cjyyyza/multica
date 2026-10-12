@@ -1563,6 +1563,8 @@
     "target_status": "게시 후 원본 상태",
     "keep_status": "현재 상태 유지",
     "acceptance": "결과, 검증 증거 및 선택한 원본 상태를 확인했습니다.",
+    "evidence_files": "증빙 파일",
+    "evidence_remove": "제거",
     "confirm_publish": "게시 확인",
     "states": {
       "imported": "가져옴 · 독립적으로 처리",

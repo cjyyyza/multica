@@ -5311,7 +5311,7 @@ export class ApiClient {
     return this.yixiezuoOperationRequest(wsId, "/imports/" + issueId + "/refresh", {});
   }
 
-  async publishYixiezuoResult(wsId: string, issueId: string, body: { summary: string; status_name: string; revision: number; confirmed: boolean; source_digest: string }): Promise<YixiezuoOperation> {
+  async publishYixiezuoResult(wsId: string, issueId: string, body: { summary: string; status_name: string; revision: number; confirmed: boolean; source_digest: string; attachment_ids?: string[] }): Promise<YixiezuoOperation> {
     return this.yixiezuoOperationRequest(wsId, "/imports/" + issueId + "/publish", body);
   }
 

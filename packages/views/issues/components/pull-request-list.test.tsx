@@ -348,6 +348,7 @@ describe("PullRequestList sidebar rows", () => {
     renderList();
     await waitForRender();
     expect(screen.queryByText(/^\+0/)).not.toBeInTheDocument();
+    expect(screen.queryByText("feat/x")).not.toBeInTheDocument();
   });
 
   it("shortens the diff size to thousands", async () => {
@@ -407,17 +408,69 @@ describe("PullRequestList sidebar rows", () => {
         title: "Fix the crash",
         html_url: "https://swarm.example.com/reviews/77",
         author_login: "alice",
+        branch: "cl/1001",
+        swarm_state: "needsReview",
+        checks_rollup: null,
       }),
     ];
     renderList();
     await waitForRender();
     expect(screen.getByText("Fix the crash")).toBeInTheDocument();
     expect(screen.getByText(/Swarm #77/)).toBeInTheDocument();
+    expect(screen.getByText("cl/1001")).toBeInTheDocument();
+    expect(screen.getByTestId("pull-request-verdict")).toHaveTextContent("Needs review");
+    expect(screen.queryByText("No checks yet")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^\+0/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: enIssues.pr_automation.row_menu })).toBeNull();
     expect(screen.getByRole("link")).toHaveAttribute(
       "href",
       "https://swarm.example.com/reviews/77",
     );
+  });
+
+  it.each([
+    ["approved", "open", "Approved"],
+    ["needsRevision", "open", "Needs revision"],
+    ["committed", "merged", "Merged"],
+    ["rejected", "closed", "Closed"],
+    ["archived", "closed", "Closed"],
+    ["pending", "open", "Needs review"],
+  ] as const)("shows one Swarm pill for %s, not check counts", async (swarm_state, state, label) => {
+    mockPRs = [
+      makePR({
+        provider: "swarm",
+        state,
+        swarm_state,
+        branch: "cl/42",
+        checks_rollup: "failure",
+        checks_total: 7,
+        checks_failed: 2,
+        failed_check_names: ["backend"],
+      }),
+    ];
+    renderList();
+    await waitForRender();
+    expect(screen.getByTestId("pull-request-verdict")).toHaveTextContent(label);
+    expect(screen.getByText("cl/42")).toBeInTheDocument();
+    expect(screen.queryByText("backend")).not.toBeInTheDocument();
+    expect(screen.queryByText("No checks yet")).not.toBeInTheDocument();
+    expect(screen.getByRole("link")).toHaveAttribute("href", "https://example.test/pr/1");
+  });
+
+  it("treats an older open Swarm row with no swarm_state as needs review", async () => {
+    mockPRs = [
+      makePR({
+        provider: "swarm",
+        state: "open",
+        branch: "cl/8",
+        checks_rollup: null,
+      }),
+    ];
+    renderList();
+    await waitForRender();
+    expect(screen.getByTestId("pull-request-verdict")).toHaveTextContent("Needs review");
+    expect(screen.getByText("cl/8")).toBeInTheDocument();
+    expect(screen.queryByText("No checks yet")).not.toBeInTheDocument();
   });
 });
 
@@ -440,6 +493,28 @@ describe("PullRequestList auto-complete", () => {
     workspace_enabled: true,
     target_status: "done",
     ...extra,
+  });
+
+  it("does not name a Swarm review in the merge line", async () => {
+    mockPRs = [
+      makePR({ id: "gh", number: 12, state: "open" }),
+      makePR({
+        id: "swarm",
+        provider: "swarm",
+        number: 77,
+        state: "open",
+        swarm_state: "approved",
+        branch: "cl/1001",
+        repo_owner: "swarm",
+        repo_name: "swarm.example.com",
+      }),
+    ];
+    mockAutoComplete = decision("waiting", ["gh", "swarm"]);
+    renderList();
+    const line = await screen.findByTestId("pr-auto-complete-line");
+    expect(line).toHaveTextContent("#12");
+    expect(line).not.toHaveTextContent("#77");
+    expect(line).not.toHaveTextContent("cl/1001");
   });
 
   it("names the PR the issue is waiting on and the status it moves to", async () => {

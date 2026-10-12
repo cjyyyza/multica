@@ -1,16 +1,23 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { yixiezuoImportOptions, yixiezuoImportStatesOptions, yixiezuoKeys } from "@multica/core/yixiezuo";
+import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import { Button } from "@multica/ui/components/ui/button";
 import { Label } from "@multica/ui/components/ui/label";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@multica/ui/components/ui/dialog";
 import { useT } from "../../i18n";
 import { YixiezuoSourcePreview } from "./yixiezuo-import";
+
+interface EvidenceFile {
+  id: string;
+  filename: string;
+}
 
 export function YixiezuoSource({ issueId, revision }: { issueId: string; revision?: number }) {
   const wsId = useWorkspaceId();
@@ -23,11 +30,45 @@ export function YixiezuoSource({ issueId, revision }: { issueId: string; revisio
   const [reviewedRevision, setReviewedRevision] = useState<number | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [sourceDigest, setSourceDigest] = useState("");
+  const [evidence, setEvidence] = useState<EvidenceFile[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const evidenceOwner = useRef({ wsId, issueId });
+  const { upload, uploading } = useFileUpload(api);
   const data = useQuery(yixiezuoImportOptions(wsId, issueId));
   const invalidate = () => qc.invalidateQueries({ queryKey: yixiezuoKeys.all(wsId) });
   useEffect(() => { void qc.invalidateQueries({ queryKey: yixiezuoKeys.imported(wsId, issueId) }); }, [qc, wsId, issueId, revision]);
+  useEffect(() => { evidenceOwner.current = { wsId, issueId }; setEvidence([]); setUploadError(null); }, [wsId, issueId]);
   const refresh = useMutation({ mutationFn: () => api.refreshYixiezuoImport(wsId, issueId), onSuccess: invalidate, onError: invalidate });
-  const publish = useMutation({ mutationFn: () => api.publishYixiezuoResult(wsId, issueId, { summary, status_name: statusName, revision: reviewedRevision ?? -1, confirmed, source_digest: sourceDigest }), onSuccess: async () => { await invalidate(); setOpen(false); setConfirmed(false); }, onError: invalidate });
+  const publish = useMutation({
+    mutationFn: () => api.publishYixiezuoResult(wsId, issueId, {
+      summary,
+      status_name: statusName,
+      revision: reviewedRevision ?? -1,
+      confirmed,
+      source_digest: sourceDigest,
+      ...(evidence.length > 0 ? { attachment_ids: evidence.map((file) => file.id) } : {}),
+    }),
+    onSuccess: async () => { await invalidate(); setOpen(false); setConfirmed(false); setEvidence([]); setUploadError(null); },
+    onError: invalidate,
+  });
+  const attachEvidence = async (file: File) => {
+    const owner = evidenceOwner.current;
+    setConfirmed(false);
+    setUploadError(null);
+    try {
+      // Keep evidence unbound until publication so uploading cannot invalidate
+      // the issue revision the member is reviewing.
+      const result = await upload(file);
+      if (!result?.id || evidenceOwner.current !== owner) return;
+      setEvidence((current) => current.some((item) => item.id === result.id) ? current : [...current, { id: result.id, filename: result.filename || file.name }]);
+    } catch (err) {
+      if (evidenceOwner.current === owner) setUploadError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  const removeEvidence = (id: string) => {
+    setEvidence((current) => current.filter((file) => file.id !== id));
+    setConfirmed(false);
+  };
   const imported = data.data?.import;
   if (!imported) return data.error ? <p role="alert" className="text-caption text-destructive">{data.error.message}</p> : null;
   const busy = ["pending", "running"].includes(imported.state) || refresh.isPending || publish.isPending;
@@ -55,10 +96,23 @@ export function YixiezuoSource({ issueId, revision }: { issueId: string; revisio
             <option value="">{t(($) => $.yixiezuo.keep_status)}</option>
             {imported.snapshot.statuses.map((status) => <option value={status.name} key={status.id}>{status.name}</option>)}
           </select>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <Label id={`${formId}-evidence`}>{t(($) => $.yixiezuo.evidence_files)}</Label>
+              <FileUploadButton size="sm" multiple disabled={publish.isPending || uploading} onSelect={(file) => { void attachEvidence(file); }} />
+            </div>
+            {evidence.length > 0 && <ul aria-labelledby={`${formId}-evidence`} className="space-y-1">
+              {evidence.map((file) => <li key={file.id} className="flex items-center justify-between gap-2 text-caption">
+                <span className="min-w-0 truncate" title={file.filename}>{file.filename}</span>
+                <Button type="button" variant="ghost" size="sm" onClick={() => removeEvidence(file.id)}>{t(($) => $.yixiezuo.evidence_remove)}</Button>
+              </li>)}
+            </ul>}
+            {uploadError && <p role="alert" className="text-caption text-destructive">{uploadError}</p>}
+          </div>
           <label className="flex items-start gap-2 text-caption"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />{t(($) => $.yixiezuo.acceptance)}</label>
           {publish.error && <p role="alert" className="text-caption text-destructive">{publish.error.message}</p>}
           {staleReview && <p role="alert" className="text-caption text-destructive">{t(($) => $.yixiezuo.review_changed)}</p>}
-          <Button disabled={!confirmed || !summary.trim() || publish.isPending || staleReview} aria-busy={publish.isPending} onClick={() => publish.mutate()}>{t(($) => $.yixiezuo.confirm_publish)}</Button>
+          <Button disabled={!confirmed || !summary.trim() || publish.isPending || staleReview || uploading} aria-busy={publish.isPending || uploading} onClick={() => publish.mutate()}>{t(($) => $.yixiezuo.confirm_publish)}</Button>
         </DialogContent>
       </Dialog>
     </div>

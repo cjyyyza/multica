@@ -409,8 +409,11 @@ function PullRequestRow({
     : undefined;
 
   const endedAt = pr.state === "merged" ? pr.merged_at : pr.state === "closed" ? pr.closed_at : null;
+  const changelist = pr.provider === "swarm" ? (pr.branch?.trim() || null) : null;
   let meta: React.ReactNode = null;
-  if (isTerminal) {
+  if (changelist) {
+    meta = <span className="truncate">{changelist}</span>;
+  } else if (isTerminal) {
     meta = endedAt ? <span className="truncate">{timeAgo(endedAt)}</span> : null;
   } else if (stale && pr.snapshot_fetched_at) {
     meta = (
@@ -475,6 +478,7 @@ function PullRequestRow({
           <span className="font-medium">{pr.title}</span>
           <span className="text-muted-foreground">
             {pr.provider === "swarm" ? `Swarm #${pr.number}` : `${pr.repo_owner}/${pr.repo_name}#${pr.number}`}
+            {changelist ? ` · ${changelist}` : null}
             {pr.author_login ? ` · @${pr.author_login}` : null}
           </span>
           {showStats ? (
@@ -600,6 +604,12 @@ function getVerdictPill(verdict: PullRequestVerdict, t: IssuesT): VerdictPillCon
       };
     case "no_checks":
       return { icon: Circle, tone: "muted", label: t(($) => $.detail.pull_request_checks_none) };
+    case "needs_review":
+      return { icon: CircleDashed, tone: "amber", label: t(($) => $.detail.pull_request_verdict_needs_review) };
+    case "approved":
+      return { icon: CheckCircle2, tone: "green", label: t(($) => $.detail.pull_request_verdict_approved) };
+    case "needs_revision":
+      return { icon: TriangleAlert, tone: "amber", label: t(($) => $.detail.pull_request_verdict_needs_revision) };
     case "unknown":
       return null;
   }

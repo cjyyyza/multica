@@ -182,10 +182,17 @@ export type PullRequestVerdict =
   | { kind: "ready" }
   | { kind: "passed"; total: number }
   | { kind: "no_checks" }
-  | { kind: "unknown" };
+  | { kind: "unknown" }
+  | { kind: "needs_review" }
+  | { kind: "approved" }
+  | { kind: "needs_revision" };
 
 export interface PullRequestVerdictInput extends PullRequestChecksInput, PullRequestMergeInput {
   state: GitHubPullRequestState;
+  /** "swarm" selects the review verdict and ignores GitHub checks. */
+  provider?: string;
+  /** Raw Helix Swarm state. Empty or omitted on Git rows and older servers. */
+  swarm_state?: string | null;
 }
 
 // Priority (high → low):
@@ -197,7 +204,16 @@ export interface PullRequestVerdictInput extends PullRequestChecksInput, PullReq
 // its own. A draft never reads as ready: it cannot be merged until marked
 // ready for review. `unknown` means there is nothing current to say (no
 // snapshot, no legacy conclusion); the row renders no verdict for it.
+//
+// A Swarm review is decided before any of that. The daemon stores Helix
+// Swarm's `state` string unchanged (`needsReview`, `needsRevision`,
+// `approved`, `rejected`, `archived`, and `committed` when a review has
+// landed). `pending` uses the same waiting sentence as needs review. An
+// unrecognized non-terminal state is needs review, never "no checks".
 export function derivePullRequestVerdict(input: PullRequestVerdictInput): PullRequestVerdict {
+  if (input.provider === "swarm" || normalizeSwarmState(input.swarm_state) !== "") {
+    return deriveSwarmReviewVerdict(input);
+  }
   if (input.state === "merged") return { kind: "merged" };
   if (input.state === "closed") return { kind: "closed" };
   const checks = deriveChecksStatus(input);
@@ -222,6 +238,31 @@ export function derivePullRequestVerdict(input: PullRequestVerdictInput): PullRe
   if (checks.kind === "passed") return { kind: "passed", total: checks.total };
   if (checks.kind === "none") return { kind: "no_checks" };
   return { kind: "unknown" };
+}
+
+function normalizeSwarmState(state: string | null | undefined): string {
+  return (state ?? "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function deriveSwarmReviewVerdict(input: PullRequestVerdictInput): PullRequestVerdict {
+  switch (normalizeSwarmState(input.swarm_state)) {
+    case "committed":
+      return { kind: "merged" };
+    case "rejected":
+    case "archived":
+      return { kind: "closed" };
+    case "approved":
+      return { kind: "approved" };
+    case "needsrevision":
+      return { kind: "needs_revision" };
+    case "needsreview":
+    case "pending":
+      return { kind: "needs_review" };
+    default:
+      if (input.state === "merged") return { kind: "merged" };
+      if (input.state === "closed") return { kind: "closed" };
+      return { kind: "needs_review" };
+  }
 }
 
 // ---------------------------------------------------------------------------

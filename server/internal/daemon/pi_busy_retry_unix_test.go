@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 // TestRunTaskPiBusyRetryDoesNotRetireHealthySession pins the distinction
@@ -23,7 +25,7 @@ import (
 // from every future session lookup.
 func TestRunTaskPiBusyRetryDoesNotRetireHealthySession(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 
 	priorSessionID := filepath.Join(t.TempDir(), "busy-session.jsonl")
 	claim, err := os.OpenFile(priorSessionID, os.O_CREATE|os.O_RDWR, 0o600)

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/handler"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 // effectiveServerNames runs the full chain a claimed task actually goes
@@ -43,7 +45,7 @@ func writeOpencodeRuntimeConfig(t *testing.T, servers string) {
 	t.Helper()
 
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", "")
 	dir := filepath.Join(home, ".config", "opencode")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

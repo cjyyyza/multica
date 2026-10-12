@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -128,8 +129,115 @@ func (h *Handler) CreateMemberComment(ctx context.Context, in engine.MemberComme
 	if h.TaskService != nil {
 		h.TaskService.AutoUnresolveThreadOnReply(ctx, rootComment, util.UUIDToString(issue.WorkspaceID), "member", authorID, pgtype.UUID{})
 	}
-	h.triggerTasksForComment(ctx, issue, comment, parentComment, "member", authorID, authorID, nil, nil)
-	return engine.MemberCommentResult{Comment: comment}, nil
+	delivery := h.deliverChannelComment(ctx, issue, comment, parentComment, in.ActorUserID, authorID)
+	return engine.MemberCommentResult{Comment: comment, Delivery: delivery}, nil
+}
+
+// deliverChannelComment runs the shared comment trigger after the row is
+// committed. /note stays on that path with no steer ids. Any other comment
+// with no attachments and exactly one steerable run passes that task into
+// triggerTasksForComment. The ack uses whether the bind landed: a refused
+// steer leaves the comment in place as a normal follow-up.
+func (h *Handler) deliverChannelComment(ctx context.Context, issue db.Issue, comment db.Comment, parentComment *db.Comment, actorUserID pgtype.UUID, authorID string) engine.CommentDelivery {
+	note := isNoteComment(comment.Content)
+	var steerTaskIDs []pgtype.UUID
+	if !note {
+		ids, err := h.channelFollowSteerTaskIDs(ctx, issue, comment, actorUserID)
+		if err != nil {
+			slog.Warn("channel comment steer lookup failed",
+				"issue_id", uuidToString(issue.ID),
+				"comment_id", uuidToString(comment.ID),
+				"error", err)
+		} else {
+			steerTaskIDs = ids
+		}
+	}
+	_, injected := h.triggerTasksForComment(ctx, issue, comment, parentComment, "member", authorID, authorID, nil, steerTaskIDs)
+	if note {
+		return engine.CommentDeliveryNote
+	}
+	if injected {
+		return engine.CommentDeliveryInjected
+	}
+	return engine.CommentDeliveryWaiting
+}
+
+// channelFollowSteerTaskIDs returns the one running turn a channel comment
+// may steer, or nil when the comment carries files or the issue does not have
+// exactly one steerable run. A lookup error fails closed: the caller still
+// triggers the comment, just not into a live turn.
+func (h *Handler) channelFollowSteerTaskIDs(ctx context.Context, issue db.Issue, comment db.Comment, actorUserID pgtype.UUID) ([]pgtype.UUID, error) {
+	attached, err := h.Queries.ListAttachmentsByComment(ctx, db.ListAttachmentsByCommentParams{
+		CommentID: comment.ID, WorkspaceID: issue.WorkspaceID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(attached) > 0 {
+		return nil, nil
+	}
+	return h.soleSteerableTaskID(ctx, issue, actorUserID)
+}
+
+// soleSteerableTaskID matches isSteerableTask: status running, supplement
+// capability task-supplement-v1, and the actor may supplement that agent
+// (the same canInvokeAgent gate as CanSupplement). Provider compatibility is
+// left to steerCommentAgentTriggers so a refused bind is reported as a normal
+// follow-up instead of claimed before the call.
+func (h *Handler) soleSteerableTaskID(ctx context.Context, issue db.Issue, actorUserID pgtype.UUID) ([]pgtype.UUID, error) {
+	tasks, err := h.Queries.ListActiveTasksByIssue(ctx, issue.ID)
+	if err != nil {
+		return nil, err
+	}
+	running := make([]db.AgentTaskQueue, 0, len(tasks))
+	taskIDs := make([]pgtype.UUID, 0, len(tasks))
+	for _, task := range tasks {
+		if task.Status != "running" {
+			continue
+		}
+		running = append(running, task)
+		taskIDs = append(taskIDs, task.ID)
+	}
+	if len(running) == 0 {
+		return nil, nil
+	}
+	rows, err := h.Queries.ListTaskSupplementMetadata(ctx, db.ListTaskSupplementMetadataParams{
+		WorkspaceID: issue.WorkspaceID,
+		TaskIds:     taskIDs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	capability := make(map[string]string, len(rows))
+	for _, row := range rows {
+		capability[uuidToString(row.TaskID)] = row.Capability
+	}
+	actor := uuidToString(actorUserID)
+	workspaceID := uuidToString(issue.WorkspaceID)
+	permission := make(map[string]bool)
+	var steerable []pgtype.UUID
+	for _, task := range running {
+		if capability[uuidToString(task.ID)] != protocol.DaemonCapabilityTaskSupplementV1 {
+			continue
+		}
+		agentID := uuidToString(task.AgentID)
+		allowed, checked := permission[agentID]
+		if !checked {
+			agent, loadErr := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+				ID: task.AgentID, WorkspaceID: issue.WorkspaceID,
+			})
+			allowed = loadErr == nil && h.canInvokeAgent(ctx, agent, "member", actor, actor, workspaceID)
+			permission[agentID] = allowed
+		}
+		if !allowed {
+			continue
+		}
+		steerable = append(steerable, task.ID)
+	}
+	if len(steerable) != 1 {
+		return nil, nil
+	}
+	return steerable, nil
 }
 
 func commentEventMap(c db.Comment) map[string]any {

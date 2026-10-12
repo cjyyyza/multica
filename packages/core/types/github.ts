@@ -104,6 +104,10 @@ export interface GitHubPullRequest {
   number: number;
   title: string;
   state: GitHubPullRequestState;
+  /** Raw Helix Swarm review state (`needsReview`, `approved`, …). Empty when
+   * the row is not a Swarm review, or when an older server omits the field.
+   * `state` stays the collapsed card state. */
+  swarm_state?: string;
   html_url: string;
   branch: string | null;
   author_login: string | null;

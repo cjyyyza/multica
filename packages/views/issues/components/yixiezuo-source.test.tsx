@@ -1,13 +1,13 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithI18n } from "../../test/i18n";
 import { YixiezuoSource } from "./yixiezuo-source";
 
-const mocks = vi.hoisted(() => ({ publish: vi.fn(), refresh: vi.fn(), state: "imported", revision: 3 }));
+const mocks = vi.hoisted(() => ({ publish: vi.fn(), refresh: vi.fn(), upload: vi.fn(), state: "imported", revision: 3 }));
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws" }));
 vi.mock("./yixiezuo-import", () => ({ YixiezuoSourcePreview: () => <div /> }));
-vi.mock("@multica/core/api", () => ({ api: { publishYixiezuoResult: (...args: unknown[]) => mocks.publish(...args), refreshYixiezuoImport: (...args: unknown[]) => mocks.refresh(...args) } }));
+vi.mock("@multica/core/api", () => ({ api: { publishYixiezuoResult: (...args: unknown[]) => mocks.publish(...args), refreshYixiezuoImport: (...args: unknown[]) => mocks.refresh(...args), uploadFile: (...args: unknown[]) => mocks.upload(...args) } }));
 vi.mock("@tanstack/react-query", async (original) => ({
   ...await original<typeof import("@tanstack/react-query")>(),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
@@ -47,4 +47,92 @@ it("requires a source refresh after an uncertain external result", () => {
   expect(screen.getByRole("button", { name: "Publish result" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Refresh source" })).toBeEnabled();
   expect(mocks.publish).not.toHaveBeenCalled();
+});
+
+function evidenceInput() {
+  const input = document.body.querySelector('input[type="file"]');
+  if (!input) throw new Error("evidence file input missing");
+  return input;
+}
+
+function uploadedFile() {
+  return {
+    id: "att-1",
+    filename: "shot.png",
+    url: "https://cdn.example/shot.png",
+    content_type: "image/png",
+    size_bytes: 3,
+    created_at: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+it("stages evidence without changing the reviewed issue revision and sends its ids", async () => {
+  const user = userEvent.setup();
+  mocks.upload.mockImplementation(async (_file: File, context?: { issueId?: string }) => {
+    if (context?.issueId) mocks.revision += 1;
+    return uploadedFile();
+  });
+  renderWithI18n(<YixiezuoSource issueId="issue" />);
+  await user.click(screen.getByRole("button", { name: "Publish result" }));
+  expect(screen.getByText("Evidence files")).toBeInTheDocument();
+  await user.type(screen.getByLabelText("Fix, validation and acceptance result"), "Fixed and verified");
+  fireEvent.change(evidenceInput(), { target: { files: [new File(["png"], "shot.png", { type: "image/png" })] } });
+  expect(await screen.findByText("shot.png")).toBeInTheDocument();
+  expect(mocks.upload).toHaveBeenCalledWith(expect.any(File), { issueId: undefined, commentId: undefined, chatSessionId: undefined });
+  await user.click(screen.getByRole("checkbox"));
+  await user.click(screen.getByRole("button", { name: "Confirm publication" }));
+  expect(mocks.publish).toHaveBeenCalledWith("ws", "issue", {
+    summary: "Fixed and verified",
+    status_name: "",
+    revision: 3,
+    confirmed: true,
+    source_digest: "source-digest",
+    attachment_ids: ["att-1"],
+  });
+});
+
+it("keeps confirmation closed while an evidence file is still uploading", async () => {
+  const user = userEvent.setup();
+  let resolveUpload: (value: ReturnType<typeof uploadedFile>) => void = () => {};
+  mocks.upload.mockReturnValue(new Promise((resolve) => { resolveUpload = resolve; }));
+  renderWithI18n(<YixiezuoSource issueId="issue" />);
+  await user.click(screen.getByRole("button", { name: "Publish result" }));
+  await user.type(screen.getByLabelText("Fix, validation and acceptance result"), "Verified");
+  fireEvent.change(evidenceInput(), { target: { files: [new File(["png"], "shot.png", { type: "image/png" })] } });
+  await user.click(screen.getByRole("checkbox"));
+  const confirm = screen.getByRole("button", { name: "Confirm publication" });
+  await waitFor(() => expect(confirm).toBeDisabled());
+  expect(confirm).toHaveAttribute("aria-busy", "true");
+  expect(mocks.publish).not.toHaveBeenCalled();
+  await act(async () => { resolveUpload(uploadedFile()); });
+  expect(await screen.findByText("shot.png")).toBeInTheDocument();
+  await waitFor(() => expect(confirm).toBeEnabled());
+});
+
+it("keeps an external issue edit unconfirmed when an evidence upload completes", async () => {
+  const user = userEvent.setup();
+  mocks.upload.mockImplementation(async () => {
+    mocks.revision += 1;
+    return uploadedFile();
+  });
+  renderWithI18n(<YixiezuoSource issueId="issue" />);
+  await user.click(screen.getByRole("button", { name: "Publish result" }));
+  await user.type(screen.getByLabelText("Fix, validation and acceptance result"), "Verified");
+  fireEvent.change(evidenceInput(), { target: { files: [new File(["png"], "shot.png", { type: "image/png" })] } });
+  expect(await screen.findByText("shot.png")).toBeInTheDocument();
+  await user.click(screen.getByRole("checkbox"));
+  expect(screen.getByRole("button", { name: "Confirm publication" })).toBeDisabled();
+  expect(mocks.publish).not.toHaveBeenCalled();
+});
+
+it("does not attach a pending upload to a different issue after navigation", async () => {
+  const user = userEvent.setup();
+  let finish: (value: ReturnType<typeof uploadedFile>) => void = () => {};
+  mocks.upload.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+  const view = renderWithI18n(<YixiezuoSource issueId="issue" />);
+  await user.click(screen.getByRole("button", { name: "Publish result" }));
+  fireEvent.change(evidenceInput(), { target: { files: [new File(["png"], "shot.png", { type: "image/png" })] } });
+  view.rerender(<YixiezuoSource issueId="other-issue" />);
+  await act(async () => { finish(uploadedFile()); });
+  expect(screen.queryByText("shot.png")).not.toBeInTheDocument();
 });

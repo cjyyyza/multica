@@ -14,7 +14,7 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func prepareChannelSource(t *testing.T, e popoP2Env, externalID string) (string, yixiezuo.Snapshot) {
+func prepareChannelSource(t *testing.T, e popoP2Env, externalID string, fields ...yixiezuo.SourceField) (string, yixiezuo.Snapshot) {
 	t.Helper()
 	e.inbound(t, "source-preview", "/yixiezuo preview https://dj01.pm.netease.com/issues/"+externalID, nil)
 	var id string
@@ -28,7 +28,7 @@ func prepareChannelSource(t *testing.T, e popoP2Env, externalID string) (string,
 		t.Fatal(err)
 	}
 	lock := int64(4)
-	snapshot := yixiezuo.Snapshot{Source: source, Title: "UE source " + externalID, Description: "Fixture reproduction steps", Status: "Ready", LockVersion: &lock, Attachments: []yixiezuo.Attachment{}, Comments: []yixiezuo.Comment{}, Fields: []yixiezuo.SourceField{}, Statuses: []yixiezuo.Status{{ID: 7, Name: "QA"}}, Warnings: []string{}}
+	snapshot := yixiezuo.Snapshot{Source: source, Title: "UE source " + externalID, Description: "Fixture reproduction steps", Status: "Ready", LockVersion: &lock, Attachments: []yixiezuo.Attachment{}, Comments: []yixiezuo.Comment{}, Fields: fields, Statuses: []yixiezuo.Status{{ID: 7, Name: "QA"}}, Warnings: []string{}}
 	completeChannelSource(t, id, "succeeded", &snapshot)
 	return id, snapshot
 }
@@ -228,7 +228,8 @@ func TestPopoYixiezuoReviewConfirmationAndReceiptAreIdempotent(t *testing.T) {
 	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.StatusName != "QA" || payload.Summary != "Fixture result and validation evidence." || payload.Revision != issue.Revision {
+	confirmed := importedChannelIssue(t, "880102")
+	if payload.StatusName != "QA" || payload.Summary != "Fixture result and validation evidence." || payload.Revision != confirmed.Revision {
 		t.Fatalf("review changed during confirmation: %+v", payload)
 	}
 	if got := dbfx.Count(t, `SELECT count(*) FROM yixiezuo_operation WHERE issue_id=$1 AND kind='publish'`, issue.ID); got != 1 {
@@ -340,23 +341,62 @@ func TestPopoYixiezuoRefreshPreservesNativeTaskFields(t *testing.T) {
 		t.Skip("database not available")
 	}
 	e := popoP2Setup(t)
-	preview, snapshot := prepareChannelSource(t, e, "880121")
+	preview, snapshot := prepareChannelSource(t, e, "880121",
+		yixiezuo.SourceField{Name: "版本", Value: "v1"},
+		yixiezuo.SourceField{Name: "负责人", Value: handlerTestName},
+		yixiezuo.SourceField{Name: "指派", Value: "Nobody"},
+		yixiezuo.SourceField{Name: "开始日期", Value: "2026-04-01"},
+	)
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue_property WHERE workspace_id=$1 AND name IN ('版本', '负责人')`, testWorkspaceID)
+	})
 	e.inbound(t, "import", "/yixiezuo import "+preview+" --confirm", nil)
 	issue := importedChannelIssue(t, "880121")
-	testutil.Call(t, testHandler.UpdateIssue, withURLParam(newRequest("PUT", "/api/issues/"+uuidToString(issue.ID), map[string]any{"title": "Local task title", "description": "Local task investigation"}), "id", uuidToString(issue.ID))).Want(200)
+	if !strings.Contains(issue.Description.String, "指派: Nobody") || strings.Contains(issue.Description.String, "版本:") {
+		t.Fatalf("import description = %q", issue.Description.String)
+	}
+	localProperty := dbfx.Insert(t, "issue_property", testutil.Cols{
+		"workspace_id": testWorkspaceID,
+		"name":         "Local note 880121",
+		"type":         "text",
+	})
+	testutil.Call(t, testHandler.UpdateIssue, withURLParam(newRequest("PUT", "/api/issues/"+uuidToString(issue.ID), map[string]any{
+		"title":       "Local task title",
+		"description": "Local task investigation",
+		"status":      "in_progress",
+	}), "id", uuidToString(issue.ID))).Want(200)
+	dbfx.Exec(t, `UPDATE issue SET properties = properties || jsonb_build_object($2::text, to_jsonb('keep local'::text)) WHERE id=$1`, issue.ID, localProperty)
 	before := importedChannelIssue(t, "880121")
 	e.inbound(t, "refresh", fmt.Sprintf("/yixiezuo refresh HAN-%d", issue.Number), nil)
 	var operationID string
 	dbfx.QueryRow(t, `SELECT id FROM yixiezuo_operation WHERE issue_id=$1 AND kind='refresh'`, issue.ID).Scan(&operationID)
 	snapshot.Title, snapshot.Description, snapshot.Status = "Changed source title", "Changed source description", "QA"
+	snapshot.Fields = []yixiezuo.SourceField{
+		{Name: "版本", Value: "v2"},
+		{Name: "负责人", Value: handlerTestName},
+		{Name: "指派", Value: "Nobody"},
+		{Name: "开始日期", Value: "2026-05-02"},
+	}
 	completeChannelSource(t, operationID, "succeeded", &snapshot)
 	after := importedChannelIssue(t, "880121")
-	if after.Title != before.Title || after.Description != before.Description || after.Status != before.Status || after.AssigneeID != before.AssigneeID || after.Revision != before.Revision {
+	if after.Title != before.Title || after.Description != before.Description || after.Status != before.Status || after.AssigneeID != before.AssigneeID {
 		t.Fatal("source refresh overwrote native task fields")
 	}
-	var sourceStatus string
+	var sourceStatus, trackedStatus, version string
 	dbfx.QueryRow(t, `SELECT snapshot->>'status' FROM yixiezuo_import WHERE issue_id=$1`, issue.ID).Scan(&sourceStatus)
-	if sourceStatus != "QA" {
-		t.Fatalf("source snapshot did not refresh: %s", sourceStatus)
+	dbfx.QueryRow(t, `SELECT metadata->>'yixiezuo_status' FROM issue WHERE id=$1`, issue.ID).Scan(&trackedStatus)
+	dbfx.QueryRow(t, `
+		SELECT issue.properties -> prop.id::text ->> 0
+		FROM issue, issue_property prop
+		WHERE issue.id=$1 AND prop.workspace_id=issue.workspace_id AND prop.name='版本'
+	`, issue.ID).Scan(&version)
+	var localValue, startDate string
+	dbfx.QueryRow(t, `SELECT properties -> $2::text #>> '{}' FROM issue WHERE id=$1`, issue.ID, localProperty).Scan(&localValue)
+	dbfx.QueryRow(t, `SELECT start_date::text FROM issue WHERE id=$1`, issue.ID).Scan(&startDate)
+	if sourceStatus != "QA" || trackedStatus != "QA" {
+		t.Fatalf("source status = snapshot %s metadata %s version %s start %s local %s", sourceStatus, trackedStatus, version, startDate, localValue)
+	}
+	if version != "v2" || startDate != "2026-05-02" || localValue != "keep local" {
+		t.Fatalf("source-owned refresh = version %s start %s local %s", version, startDate, localValue)
 	}
 }
