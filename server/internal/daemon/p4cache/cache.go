@@ -12,13 +12,25 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/p4depot"
 )
 
-const p4Timeout = 10 * time.Minute
+// defaultP4Timeout is the fallback when no timeout is configured on the Cache.
+// The daemon sets Timeout from MULTICA_P4_TIMEOUT; tests and the zero value
+// keep this.
+const defaultP4Timeout = 10 * time.Minute
+
+// defaultSyncMaxBytes mirrors daemon.DefaultP4SyncMaxBytes for a Cache built
+// without an explicit ceiling.
+const defaultSyncMaxBytes int64 = 20 << 30
+
+// sizesTotal matches the trailing "<n> bytes" of `p4 sizes -s`.
+var sizesTotal = regexp.MustCompile(`(\d+)\s+bytes`)
 
 // SyncParams is the input to a one-shot `p4 client` + `p4 sync`.
 type SyncParams struct {
@@ -41,6 +53,11 @@ type Cache struct {
 	P4Path     string
 	Logger     *slog.Logger
 	HTTPClient *http.Client
+	// Timeout bounds one p4 invocation; zero falls back to defaultP4Timeout.
+	Timeout time.Duration
+	// SyncMaxBytes caps a task-scoped client sync; zero falls back to
+	// defaultSyncMaxBytes and a negative value disables the pre-check.
+	SyncMaxBytes int64
 }
 
 func (c *Cache) p4bin() string {
@@ -55,6 +72,20 @@ func (c *Cache) logger() *slog.Logger {
 		return c.Logger
 	}
 	return slog.Default()
+}
+
+func (c *Cache) timeout() time.Duration {
+	if c != nil && c.Timeout > 0 {
+		return c.Timeout
+	}
+	return defaultP4Timeout
+}
+
+func (c *Cache) syncMaxBytes() int64 {
+	if c == nil || c.SyncMaxBytes == 0 {
+		return defaultSyncMaxBytes
+	}
+	return c.SyncMaxBytes
 }
 
 // Sync creates a task-scoped P4 client and syncs the depot into workdir/p4/….
@@ -99,6 +130,15 @@ func (c *Cache) Sync(ctx context.Context, params SyncParams) (*SyncResult, error
 		syncDepot = ref.Stream
 	}
 	syncArg := p4depot.SyncPath(syncDepot, ref.Changelist)
+	// The client view, not the depot path, decides what a sync actually pulls,
+	// so measure through the client we just created. A depot too large for a
+	// task-scoped checkout must not leave that client behind.
+	if err := c.checkSyncSize(ctx, ref, user, client); err != nil {
+		if delErr := c.run(ctx, ref, user, "", "client", "-d", client); delErr != nil {
+			c.logger().Warn("p4 client -d after sync size pre-check", "client", client, "error", delErr)
+		}
+		return nil, err
+	}
 	syncArgs := []string{"sync"}
 	if params.Fresh {
 		// Removing the local directory does not clear the server-side have list.
@@ -114,6 +154,37 @@ func (c *Cache) Sync(ctx context.Context, params SyncParams) (*SyncResult, error
 		Client:     client,
 		Changelist: ref.Changelist,
 	}, nil
+}
+
+// checkSyncSize refuses a task-scoped sync whose client view is larger than
+// the configured ceiling. A `sizes` call that fails or reports nothing we can
+// parse is not evidence of an oversized depot, so it only logs.
+func (c *Cache) checkSyncSize(ctx context.Context, ref p4depot.Ref, user, client string) error {
+	limit := c.syncMaxBytes()
+	if limit < 0 {
+		return nil
+	}
+	path := p4depot.SyncPath("//"+client, ref.Changelist)
+	out, err := c.output(ctx, ref, user, client, "sizes", "-s", path)
+	if err != nil {
+		c.logger().Warn("p4 sizes pre-check skipped", "client", client, "error", err)
+		return nil
+	}
+	match := sizesTotal.FindStringSubmatch(string(out))
+	if len(match) != 2 {
+		c.logger().Warn("p4 sizes pre-check skipped", "client", client, "output", strings.TrimSpace(string(out)))
+		return nil
+	}
+	total, err := strconv.ParseInt(match[1], 10, 64)
+	if err != nil || total <= limit {
+		return nil
+	}
+	return fmt.Errorf("%s is %s through a task-scoped Perforce client, above the %s limit: attach the depot alongside an in_place local_directory resource so the task runs in your own workspace, or raise MULTICA_P4_SYNC_MAX_BYTES",
+		path, formatGiB(total), formatGiB(limit))
+}
+
+func formatGiB(bytes int64) string {
+	return fmt.Sprintf("%.1f GiB", float64(bytes)/float64(1<<30))
 }
 
 func buildClientSpec(client, user, root string, ref p4depot.Ref) string {
@@ -259,7 +330,7 @@ func (c *Cache) commandAt(ctx context.Context, dir string, args ...string) (*exe
 	} else if _, err := exec.LookPath(bin); err != nil {
 		return nil, func() {}, fmt.Errorf("p4 is not installed on this machine (install the Helix p4 CLI and run `p4 login`): %w", err)
 	}
-	runCtx, cancel := context.WithTimeout(ctx, p4Timeout)
+	runCtx, cancel := context.WithTimeout(ctx, c.timeout())
 	cmd := exec.CommandContext(runCtx, c.p4bin(), args...)
 	if strings.TrimSpace(dir) != "" {
 		cmd.Dir = dir
