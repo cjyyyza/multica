@@ -2266,10 +2266,11 @@ func TestClaimTask_ProjectWithoutRepos_FallsBackToWorkspaceRepos(t *testing.T) {
 	}
 }
 
-// A Git-only project must still inherit workspace Perforce depots, and a
-// Perforce-only project must still inherit workspace Git repos. The two
-// fallbacks are independent so attaching one VCS does not hide the other.
-func TestClaimTask_IndependentGitAndP4Fallbacks(t *testing.T) {
+// A project that attaches any code resource owns the task's code sources: a
+// Git-only project no longer inherits the workspace's Perforce depots, and a
+// Perforce-only project no longer inherits the workspace's Git repos. Only a
+// project with no code resource at all falls back to the workspace lists.
+func TestClaimTask_CodeResourceFallbackMatrix(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -2287,87 +2288,103 @@ func TestClaimTask_IndependentGitAndP4Fallbacks(t *testing.T) {
 		testWorkspaceID,
 	).Scan(&agentID, &runtimeID)
 
-	t.Run("git-only project inherits workspace p4_depots", func(t *testing.T) {
-		projectID := dbfx.Project(t, "Git-only claim project")
-		dbfx.Insert(t, "project_resource", testutil.Cols{
-			"project_id":    projectID,
-			"workspace_id":  testWorkspaceID,
-			"resource_type": "github_repo",
-			"resource_ref":  `{"url":"https://github.com/example/project-git"}`,
-			"position":      0,
-		})
-		issueID := dbfx.Issue(t, "git-only project inherits p4", testutil.Cols{
-			"project_id": projectID,
-			"priority":   "medium",
-			"number":     88011,
-		})
-		dbfx.Task(t, agentID, testutil.Cols{
-			"runtime_id": runtimeID,
-			"issue_id":   issueID,
-		})
+	gitResource := testutil.Cols{
+		"resource_type": "github_repo",
+		"resource_ref":  `{"url":"https://github.com/example/project-git"}`,
+	}
+	p4Resource := testutil.Cols{
+		"resource_type": "perforce_depot",
+		"resource_ref":  `{"port":"perforce.example.com:1666","depot":"//depot/project"}`,
+	}
 
-		req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, "test-claim-p4-fallback")
-		req = withURLParam(req, "runtimeId", runtimeID)
-		w := testutil.Call(t, testHandler.ClaimTaskByRuntime, req).Want(http.StatusOK)
+	for _, tc := range []struct {
+		name      string
+		resources []testutil.Cols
+		number    int
+		wantRepo  string
+		wantDepot string
+	}{
+		{
+			name:      "no code resources inherit both workspace lists",
+			number:    88010,
+			wantRepo:  "workspace-git",
+			wantDepot: "//depot/workspace",
+		},
+		{
+			name:      "git-only project does not inherit workspace p4_depots",
+			resources: []testutil.Cols{gitResource},
+			number:    88011,
+			wantRepo:  "project-git",
+			wantDepot: "",
+		},
+		{
+			name:      "p4-only project does not inherit workspace repos",
+			resources: []testutil.Cols{p4Resource},
+			number:    88012,
+			wantRepo:  "",
+			wantDepot: "//depot/project",
+		},
+		{
+			name:      "project with both keeps only its own",
+			resources: []testutil.Cols{gitResource, p4Resource},
+			number:    88013,
+			wantRepo:  "project-git",
+			wantDepot: "//depot/project",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			projectID := dbfx.Project(t, "Fallback matrix project "+tc.name)
+			for i, resource := range tc.resources {
+				cols := testutil.Cols{
+					"project_id":   projectID,
+					"workspace_id": testWorkspaceID,
+					"position":     i,
+				}
+				for k, v := range resource {
+					cols[k] = v
+				}
+				dbfx.Insert(t, "project_resource", cols)
+			}
+			issueID := dbfx.Issue(t, tc.name, testutil.Cols{
+				"project_id": projectID,
+				"priority":   "medium",
+				"number":     tc.number,
+			})
+			dbfx.Task(t, agentID, testutil.Cols{
+				"runtime_id": runtimeID,
+				"issue_id":   issueID,
+			})
 
-		var resp struct {
-			Task *struct {
-				Repos    []RepoData    `json:"repos"`
-				P4Depots []P4DepotData `json:"p4_depots"`
-			} `json:"task"`
-		}
-		w.JSON(&resp)
-		if resp.Task == nil {
-			t.Fatal("expected task in response")
-		}
-		if len(resp.Task.Repos) != 1 || !strings.HasSuffix(resp.Task.Repos[0].URL, "project-git") {
-			t.Fatalf("expected project git repo, got %+v", resp.Task.Repos)
-		}
-		if len(resp.Task.P4Depots) != 1 || resp.Task.P4Depots[0].Depot != "//depot/workspace" {
-			t.Fatalf("expected workspace p4 fallback, got %+v", resp.Task.P4Depots)
-		}
-	})
+			req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, "test-claim-fallback-matrix")
+			req = withURLParam(req, "runtimeId", runtimeID)
+			w := testutil.Call(t, testHandler.ClaimTaskByRuntime, req).Want(http.StatusOK)
 
-	t.Run("p4-only project inherits workspace repos", func(t *testing.T) {
-		projectID := dbfx.Project(t, "P4-only claim project")
-		dbfx.Insert(t, "project_resource", testutil.Cols{
-			"project_id":    projectID,
-			"workspace_id":  testWorkspaceID,
-			"resource_type": "perforce_depot",
-			"resource_ref":  `{"port":"perforce.example.com:1666","depot":"//depot/project"}`,
-			"position":      0,
+			var resp struct {
+				Task *struct {
+					Repos    []RepoData    `json:"repos"`
+					P4Depots []P4DepotData `json:"p4_depots"`
+				} `json:"task"`
+			}
+			w.JSON(&resp)
+			if resp.Task == nil {
+				t.Fatal("expected task in response")
+			}
+			if tc.wantRepo == "" {
+				if len(resp.Task.Repos) != 0 {
+					t.Errorf("expected no repos, got %+v", resp.Task.Repos)
+				}
+			} else if len(resp.Task.Repos) != 1 || !strings.HasSuffix(resp.Task.Repos[0].URL, tc.wantRepo) {
+				t.Errorf("expected repo %q, got %+v", tc.wantRepo, resp.Task.Repos)
+			}
+			if tc.wantDepot == "" {
+				if len(resp.Task.P4Depots) != 0 {
+					t.Errorf("expected no p4 depots, got %+v", resp.Task.P4Depots)
+				}
+			} else if len(resp.Task.P4Depots) != 1 || resp.Task.P4Depots[0].Depot != tc.wantDepot {
+				t.Errorf("expected depot %q, got %+v", tc.wantDepot, resp.Task.P4Depots)
+			}
 		})
-		issueID := dbfx.Issue(t, "p4-only project inherits git", testutil.Cols{
-			"project_id": projectID,
-			"priority":   "medium",
-			"number":     88012,
-		})
-		dbfx.Task(t, agentID, testutil.Cols{
-			"runtime_id": runtimeID,
-			"issue_id":   issueID,
-		})
-
-		req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, "test-claim-git-fallback-p4")
-		req = withURLParam(req, "runtimeId", runtimeID)
-		w := testutil.Call(t, testHandler.ClaimTaskByRuntime, req).Want(http.StatusOK)
-
-		var resp struct {
-			Task *struct {
-				Repos    []RepoData    `json:"repos"`
-				P4Depots []P4DepotData `json:"p4_depots"`
-			} `json:"task"`
-		}
-		w.JSON(&resp)
-		if resp.Task == nil {
-			t.Fatal("expected task in response")
-		}
-		if len(resp.Task.Repos) != 1 || !strings.HasSuffix(resp.Task.Repos[0].URL, "workspace-git") {
-			t.Fatalf("expected workspace git fallback, got %+v", resp.Task.Repos)
-		}
-		if len(resp.Task.P4Depots) != 1 || resp.Task.P4Depots[0].Depot != "//depot/project" {
-			t.Fatalf("expected project p4 depot, got %+v", resp.Task.P4Depots)
-		}
-	})
+	}
 }
 
 // Regression test for #1276: ClaimTaskByRuntime must populate both

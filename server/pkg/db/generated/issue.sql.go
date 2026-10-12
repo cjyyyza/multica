@@ -511,6 +511,20 @@ cleared_yixiezuo_imports AS (
 cleared_swarm_review_links AS (
     DELETE FROM issue_swarm_review WHERE issue_id IN (SELECT target.id FROM target)
 ),
+cleared_p4_changelists AS (
+    DELETE FROM p4_changelist WHERE id IN (
+        SELECT link.changelist_id FROM issue_p4_changelist link
+        WHERE link.issue_id IN (SELECT target.id FROM target)
+          AND NOT EXISTS (
+              SELECT 1 FROM issue_p4_changelist other
+              WHERE other.changelist_id = link.changelist_id
+                AND other.issue_id NOT IN (SELECT target.id FROM target)
+          )
+    )
+),
+cleared_p4_changelist_links AS (
+    DELETE FROM issue_p4_changelist WHERE issue_id IN (SELECT target.id FROM target)
+),
 cleared_pr_automation AS (
     DELETE FROM issue_pr_automation WHERE issue_id IN (SELECT target.id FROM target)
 ),
@@ -542,6 +556,8 @@ type DeleteIssueParams struct {
 // when a caller passes a foreign issue_id with its own workspace_id (the issue
 // itself is correctly untouched, but the links are already gone) — the exact
 // cross-tenant leak the #1661 guard above exists to prevent.
+// A changelist description can reference several issues, so the changelist row
+// itself only goes when this issue held its last link.
 func (q *Queries) DeleteIssue(ctx context.Context, arg DeleteIssueParams) error {
 	_, err := q.db.Exec(ctx, deleteIssue, arg.ID, arg.WorkspaceID)
 	return err

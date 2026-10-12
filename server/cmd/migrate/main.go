@@ -389,6 +389,12 @@ var concurrentIndexCleanups = map[string]string{
 	"533_popo_outbound_media_grant_workspace_index":             "idx_popo_outbound_media_grant_workspace",
 	"535_popo_registration_workspace_index":                     "idx_popo_registration_workspace",
 	"537_issue_duplicate_of_index":                              "idx_issue_duplicate_of",
+	"9002_p4_changelist_identity_index":                         "idx_p4_changelist_identity",
+	"9003_p4_changelist_workspace_index":                        "idx_p4_changelist_workspace",
+	"9004_p4_changelist_open_index":                             "idx_p4_changelist_open",
+	"9006_issue_p4_changelist_unique_index":                     "idx_issue_p4_changelist_issue_changelist",
+	"9007_issue_p4_changelist_issue_index":                      "idx_issue_p4_changelist_issue",
+	"9008_issue_p4_changelist_workspace_index":                  "idx_issue_p4_changelist_workspace",
 }
 
 // concurrentDownIndexCleanups covers every migration whose down direction

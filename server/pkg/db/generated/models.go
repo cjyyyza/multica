@@ -906,6 +906,14 @@ type IssueLabel struct {
 	Description  string             `json:"description"`
 }
 
+type IssueP4Changelist struct {
+	IssueID      pgtype.UUID        `json:"issue_id"`
+	ChangelistID pgtype.UUID        `json:"changelist_id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	LinkSource   string             `json:"link_source"`
+	LinkedAt     pgtype.Timestamptz `json:"linked_at"`
+}
+
 type IssuePrAutomation struct {
 	IssueID              pgtype.UUID        `json:"issue_id"`
 	WorkspaceID          pgtype.UUID        `json:"workspace_id"`
@@ -1230,6 +1238,30 @@ type NotificationPreference struct {
 	UserID      pgtype.UUID        `json:"user_id"`
 	Preferences []byte             `json:"preferences"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type P4Changelist struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	DaemonID       string             `json:"daemon_id"`
+	ServerKey      string             `json:"server_key"`
+	Port           string             `json:"port"`
+	Charset        string             `json:"charset"`
+	Number         int32              `json:"number"`
+	OriginalNumber int32              `json:"original_number"`
+	Client         string             `json:"client"`
+	P4User         string             `json:"p4_user"`
+	Status         string             `json:"status"`
+	Description    string             `json:"description"`
+	Ticket         string             `json:"ticket"`
+	FilesCount     int32              `json:"files_count"`
+	ExclusiveFiles []byte             `json:"exclusive_files"`
+	Warnings       []byte             `json:"warnings"`
+	SwarmReviewID  pgtype.UUID        `json:"swarm_review_id"`
+	TaskID         pgtype.UUID        `json:"task_id"`
+	SubmittedAt    pgtype.Timestamptz `json:"submitted_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type PersonalAccessToken struct {
