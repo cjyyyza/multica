@@ -65,7 +65,8 @@ export interface ListProjectsResponse {
 //   - local_directory: agent execution on a specific daemon,
 //     ref = { local_path, daemon_id, label?, execution_mode? }
 //   - perforce_depot: Helix depot the daemon syncs with host p4 credentials,
-//     ref = { port, depot, stream?, user?, charset?, changelist?, swarm_url? }
+//     ref = { port, depot, stream?, user?, charset?, changelist?, swarm_url?,
+//             allow_exclusive?, no_auto_review? }
 export type ProjectResourceType = "github_repo" | "local_directory" | "perforce_depot";
 
 export interface GithubRepoResourceRef {
@@ -82,6 +83,10 @@ export interface PerforceDepotResourceRef {
   charset?: string;
   changelist?: string;
   swarm_url?: string;
+  /** Let agents open +l (exclusive) files in workspace mode. */
+  allow_exclusive?: boolean;
+  /** Skip the automatic Swarm review after a workspace-mode task shelves. */
+  no_auto_review?: boolean;
 }
 
 /**

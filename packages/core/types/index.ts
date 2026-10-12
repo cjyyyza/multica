@@ -360,3 +360,10 @@ export type {
 export type { IssueWakeup, IssueWakeupInput, SystemWakeup, WorkspaceSystemWakeup, WakeupPreview, IssueWakeupSummaryRow, WakeupCondition, WakeupPausedReason, WakeupRun, PausedWakeup, WakeupSource } from "./issue-wakeup";
 
 export type { WorkspaceWakeup, WorkspaceWakeupPage, WorkspaceWakeupFilters, WakeupScope } from "./issue-wakeup";
+export type {
+  P4Changelist,
+  P4ChangelistStatus,
+  P4ChangelistWarning,
+  IssueP4ChangelistsResponse,
+  LinkIssueP4ChangelistRequest,
+} from "./p4";

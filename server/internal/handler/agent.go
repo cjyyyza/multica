@@ -310,14 +310,16 @@ type RepoData struct {
 // P4DepotData is one Perforce depot on the claim and daemon-repos wire.
 // Mirror of p4depot.Ref; declared here so handler types stay local.
 type P4DepotData struct {
-	Port        string `json:"port"`
-	Depot       string `json:"depot"`
-	Stream      string `json:"stream,omitempty"`
-	User        string `json:"user,omitempty"`
-	Charset     string `json:"charset,omitempty"`
-	Changelist  string `json:"changelist,omitempty"`
-	Description string `json:"description,omitempty"`
-	SwarmURL    string `json:"swarm_url,omitempty"`
+	Port           string `json:"port"`
+	Depot          string `json:"depot"`
+	Stream         string `json:"stream,omitempty"`
+	User           string `json:"user,omitempty"`
+	Charset        string `json:"charset,omitempty"`
+	Changelist     string `json:"changelist,omitempty"`
+	Description    string `json:"description,omitempty"`
+	SwarmURL       string `json:"swarm_url,omitempty"`
+	AllowExclusive bool   `json:"allow_exclusive,omitempty"`
+	NoAutoReview   bool   `json:"no_auto_review,omitempty"`
 }
 
 // ProjectResourceData is the wire shape for a project resource included in a
@@ -430,7 +432,10 @@ type AgentTaskResponse struct {
 	Repos                []RepoData         `json:"repos,omitempty"`
 	// P4Depots are Perforce depots the agent may sync with `multica p4 sync`.
 	// Omitted when empty so older daemons keep a byte-identical claim payload.
-	P4Depots           []P4DepotData         `json:"p4_depots,omitempty"`
+	P4Depots []P4DepotData `json:"p4_depots,omitempty"`
+	// P4Ticket is the 易协作 ticket number Perforce changelist descriptions
+	// must reference as `refs #<n>`. Sent only when P4Depots is non-empty.
+	P4Ticket           string                `json:"p4_ticket,omitempty"`
 	ProjectID          string                `json:"project_id,omitempty"`          // issue's project, when present
 	ProjectTitle       string                `json:"project_title,omitempty"`       // for surfacing in agent context
 	ProjectDescription string                `json:"project_description,omitempty"` // durable project-level context injected into the brief

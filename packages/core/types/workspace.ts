@@ -14,6 +14,8 @@ export interface WorkspaceP4Depot {
   changelist?: string;
   description?: string;
   swarm_url?: string;
+  allow_exclusive?: boolean;
+  no_auto_review?: boolean;
 }
 
 export interface Workspace {
