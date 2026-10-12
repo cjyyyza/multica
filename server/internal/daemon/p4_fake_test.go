@@ -67,6 +67,14 @@ func main() {
 	case "client":
 		emit("CLIENT")
 	case "fstat":
+		// P4_FAKE_FSTAT_WILDCARD answers only arguments ending in "...", the
+		// way a real server reports nothing for a bare directory path.
+		if body := os.Getenv("P4_FAKE_FSTAT_WILDCARD"); body != "" {
+			if strings.Contains(joined, "... ") {
+				fmt.Print(body)
+			}
+			return
+		}
 		emit("FSTAT")
 	case "opened":
 		emit("OPENED")

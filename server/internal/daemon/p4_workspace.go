@@ -154,7 +154,7 @@ func (d *Daemon) bindP4Workspace(ctx context.Context, task Task, a *localDirecto
 func (d *Daemon) rejectTrackedSidecars(ctx context.Context, b *p4TaskBinding, workDir, provider string) error {
 	candidates := sidecarCandidates(workDir, provider)
 	b.sidecars = candidates
-	states, err := d.p4Cache.FileStates(ctx, b.ws, candidates)
+	states, err := d.p4Cache.FileStates(ctx, b.ws, sidecarFstatPatterns(candidates))
 	if err != nil {
 		return fmt.Errorf("check whether Multica's own files are in the depot: %w", err)
 	}
@@ -166,6 +166,20 @@ func (d *Daemon) rejectTrackedSidecars(ctx context.Context, b *p4TaskBinding, wo
 		tracked = append(tracked, state.DepotFile)
 	}
 	return fmt.Errorf("%s is tracked in the depot; point the local directory resource at the workspace root (e.g. D:\\DJ)", strings.Join(tracked, ", "))
+}
+
+// sidecarFstatPatterns turns sidecar paths into fstat arguments. fstat on a
+// bare directory answers "no such file(s)" even when the depot tracks files
+// under it, so every directory candidate is queried as <dir>/... as well.
+func sidecarFstatPatterns(candidates []string) []string {
+	patterns := make([]string, 0, 2*len(candidates))
+	for _, path := range candidates {
+		patterns = append(patterns, path)
+		if filepath.Ext(path) == "" {
+			patterns = append(patterns, filepath.Join(path, "..."))
+		}
+	}
+	return patterns
 }
 
 func sidecarCandidates(workDir, provider string) []string {

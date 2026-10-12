@@ -396,6 +396,41 @@ func TestBindRejectsDepotTrackedSidecar(t *testing.T) {
 	}
 }
 
+// A real server answers "no such file(s)" for a bare directory even when it
+// tracks files under it (DJ01's Game/DJ01/.claude/skills), so a tracked skills
+// directory is only found through <dir>/....
+func TestBindRejectsSidecarDirectoryTrackedOnlyUnderneath(t *testing.T) {
+	bin := writeDaemonFakeP4(t)
+	dir := t.TempDir()
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("P4_FAKE_LOG", filepath.Join(t.TempDir(), "p4.log"))
+	t.Setenv("P4_FAKE_SET", "P4PORT=ssl:p4.example:1666\nP4USER=alice\nP4CHARSET=utf8\n")
+	t.Setenv("P4_FAKE_INFO", "... userName alice\n... clientName alice_DEV\n... clientRoot "+abs+"\n... serverServices commit-server\n")
+	t.Setenv("P4_FAKE_CLIENT", "... Client alice_DEV\n... Owner alice\n... Root "+abs+"\n... Stream //DJ01_Proj/Dev\n")
+	t.Setenv("P4_FAKE_FSTAT_WILDCARD", "... depotFile //DJ01_Proj/Dev/Game/DJ01/.claude/skills/edit-flow/SKILL.md\n... headType text\n")
+	t.Setenv("P4USER", "alice")
+
+	d := &Daemon{
+		logger:        slog.Default(),
+		p4Cache:       &p4cache.Cache{P4Path: bin},
+		p4ClientLocks: NewLocalPathLocker(),
+	}
+	task := Task{
+		ID:       "task",
+		P4Ticket: "5002",
+		P4Depots: []P4DepotData{{
+			Port: "ssl:p4.example:1666", Depot: "//DJ01_Proj/Dev", Stream: "//DJ01_Proj/Dev",
+		}},
+	}
+	_, bindErr := d.bindP4Workspace(t.Context(), task, &localDirectoryAssignment{AbsPath: abs, RealPath: abs}, "claude")
+	if bindErr == nil || !strings.Contains(bindErr.Error(), ".claude/skills/edit-flow/SKILL.md") {
+		t.Fatalf("error = %v, want the tracked skill file named", bindErr)
+	}
+}
+
 func TestBindReusesTheIssueChangelist(t *testing.T) {
 	bin := writeDaemonFakeP4(t)
 	dir := t.TempDir()

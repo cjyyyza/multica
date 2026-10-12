@@ -394,7 +394,7 @@ func TestFinishChangeDeletesAnEmptyChangelist(t *testing.T) {
 		t.Fatalf("result = %+v, want the empty changelist deleted and nothing shelved", result)
 	}
 	log := fixture.log(t)
-	if !strings.Contains(log, "revert -a -c 794230 //...") {
+	if !strings.Contains(log, "revert -a -c 794230 //alice_DEV/...") {
 		t.Fatalf("unchanged opens were not reverted inside the task changelist: %s", log)
 	}
 	if !strings.Contains(log, "change -d 794230") {

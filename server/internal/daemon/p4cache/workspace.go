@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -330,8 +331,11 @@ func (c *Cache) FinishChange(ctx context.Context, ws *Workspace, change string) 
 	}
 	result := &FinishResult{Change: change}
 	// -a is the whole point: an unchanged open still holds a +l lock and still
-	// shows up in the person's P4V, so it must not survive the task.
-	if _, err := c.RunInChange(ctx, ws, change, "revert", []string{"//..."}, "-a"); err != nil {
+	// shows up in the person's P4V, so it must not survive the task. The path
+	// is the client's own //<client>/... view: the `-c change` already limits
+	// it to the task changelist, and a bare //... is not reliably passed
+	// through the Windows shells this daemon runs under.
+	if _, err := c.RunInChange(ctx, ws, change, "revert", []string{"//" + ws.Client + "/..."}, "-a"); err != nil {
 		// A changelist the person submitted or deleted mid-task is reported,
 		// not silently recreated.
 		return nil, err
@@ -657,9 +661,14 @@ func onlyMissingFiles(stderr string) bool {
 	return saw
 }
 
+// changeUnknownLine matches the two answers a server gives for a changelist
+// that does not exist: "Change 12345 unknown." and "12345 - no such
+// changelist.". Matching a bare "unknown" would also catch "Client 'x'
+// unknown" or a connection error and mark a live changelist deleted.
+var changeUnknownLine = regexp.MustCompile(`(?im)^\s*(change\s+\d+\s+unknown\.?|\d+\s+-\s+no such changelist\.?)\s*$`)
+
 func changeIsUnknown(out string) bool {
-	lower := strings.ToLower(out)
-	return strings.Contains(lower, "no such changelist") || strings.Contains(lower, "unknown")
+	return changeUnknownLine.MatchString(out)
 }
 
 func sameHost(a, b string) bool {
