@@ -268,10 +268,22 @@ func writeAvailableCommands(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("- `multica issue wakeup <create|list|get|update|disable|trigger|delete|runs|events>` — persist an event, condition or time wakeup on this issue, then finish the current run. When the platform can check the fact itself, use a condition (`--until-status`, `--until-pr checks`, `--until-children-done`, `--until-issue`) so no run starts before it holds. PR conditions watch only PRs linked to this exact issue; `--until-pr checks` also requires server-side GitHub check snapshots. Check the rule's `last_error` for missing links or unavailable snapshots; delayed links and snapshots are retried automatically. Use `--event comment.created --filter-actor-type member --filter-actor-id USER_ID` to wait for a specific member to comment. See `multica issue wakeup --help` and the multica-platform issues reference.\n")
 	b.WriteString("- `multica issue children <id> [--output json]` — list a parent's sub-issues grouped by stage.\n")
 	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-file <path> | --content-stdin] [--parent <comment-id>] [--attachment <path>]` — post a comment. Agent-authored bodies MUST use `--content-file`; see `## Comment Formatting` for why. `multica issue comment add --help` for full flags.\n")
-	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>] [--fresh]` — repository checkout on a dedicated branch. Re-running it keeps an existing checkout that has uncommitted or unpushed work, or is already on this task's branch, and only fetches. `--fresh` discards uncommitted and untracked files and starts a new branch; commits stay on the old branch, but push any you still need first.\n")
-	b.WriteString("- `multica p4 sync --port <P4PORT> --depot <//depot/path> [--stream <stream>] [--changelist <n>] [--fresh]` — sync a configured Perforce depot into this task's working directory using the host's `p4` login. `--fresh` deletes the previous sync directory and runs a clean sync.\n")
-	b.WriteString("- `multica p4 edit --port <P4PORT> --depot <//depot/path> -- <files>` — checkout files for edit (`checkout` is an alias). Also: `add-files`, `delete`, `revert`, `opened`, `reconcile`, `change`, `submit`, `shelve`. Swarm: `multica p4 swarm create --changelist <n>`.\n\n")
-	b.WriteString("Git commits use the user's configured identity. Preserve it unless the user requests another identity. In a managed checkout, use `git config --worktree user.name` / `user.email` for an intentional task-local override; plain `git config` or `--local` can write into a shared cache and affect other tasks. Never change global Git identity for a task.\n\n")
+	// A task whose only code surface is Perforce has no repository to check
+	// out and no commit to sign, so both git lines are elided: the checkout
+	// line sent P4-only agents hunting for a repo the claim never carried.
+	if !p4OnlyTask(ctx) {
+		b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>] [--fresh]` — repository checkout on a dedicated branch. Re-running it keeps an existing checkout that has uncommitted or unpushed work, or is already on this task's branch, and only fetches. `--fresh` discards uncommitted and untracked files and starts a new branch; commits stay on the old branch, but push any you still need first.\n")
+	}
+	// Workspace mode edits the human's own client, where the daemon refuses
+	// to sync at all — the human owns that decision. Advertising the command
+	// there only buys a rejected call.
+	if ctx.P4Workspace == nil {
+		b.WriteString("- `multica p4 sync --port <P4PORT> --depot <//depot/path> [--stream <stream>] [--changelist <n>] [--fresh]` — sync a configured Perforce depot into this task's working directory using the host's `p4` login. `--fresh` deletes the previous sync directory and runs a clean sync.\n")
+	}
+	b.WriteString("- `multica p4 edit --port <P4PORT> --depot <//depot/path> -- <files>` — checkout files for edit (`checkout` is an alias). Also: `add-files`, `delete`, `revert`, `reopen`, `opened`, `reconcile`, `change`, `shelve`, `status`. Swarm: `multica p4 swarm create --changelist <n>`. Agents do not submit changelists — the human verifies in-editor and submits.\n\n")
+	if !p4OnlyTask(ctx) {
+		b.WriteString("Git commits use the user's configured identity. Preserve it unless the user requests another identity. In a managed checkout, use `git config --worktree user.name` / `user.email` for an intentional task-local override; plain `git config` or `--local` can write into a shared cache and affect other tasks. Never change global Git identity for a task.\n\n")
+	}
 	// Squad maintenance is squad-leader surface: an agent that leads no squad
 	// has no squad to change roles in, so this shipped to every run as dead
 	// weight (MUL-5442). IsSquadLeader is a PER-TASK role (the daemon derives
@@ -485,17 +497,44 @@ func writeRepositories(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("\n")
 }
 
+// p4OnlyTask reports whether Perforce is this task's only code surface: no
+// workspace repo is listed, and either a depot is configured or the task is
+// bound to a human-owned Helix client.
+//
+// A repo being present wins even in workspace mode, because then there really
+// is a git checkout to sign commits in; what the flag gates is git copy that
+// has nothing to refer to, not Perforce copy.
+func p4OnlyTask(ctx TaskContextForEnv) bool {
+	if len(ctx.Repos) > 0 {
+		return false
+	}
+	return len(ctx.P4Depots) > 0 || ctx.P4Workspace != nil
+}
+
 func writeP4Depots(b *strings.Builder, ctx TaskContextForEnv) {
+	// Workspace mode replaces this section rather than adding to it: the
+	// depot list describes the task-scoped client the daemon creates on
+	// `p4 sync`, and in workspace mode there is no such client — the task
+	// edits files in the human's own one.
+	if ctx.P4Workspace != nil {
+		writeP4Workspace(b, ctx.P4Workspace)
+		return
+	}
 	if len(ctx.P4Depots) == 0 {
 		return
 	}
 	b.WriteString("## Perforce depots\n\n")
 	b.WriteString("Available to this task — `multica p4 sync --port <P4PORT> --depot <//depot/path> --output json` to fetch. Uses the host Helix login (`p4 login`); Multica does not store a Perforce password.\n\n")
-	b.WriteString("The response contains the checkout `path` and task-scoped `client`. Do not call host `p4` against another client. Open files with `multica p4 edit` / `checkout` before editing; add new files with `multica p4 add-files`. Record changelist and Unreal validation evidence in the task for human review.\n\n")
+	b.WriteString("The response contains the checkout `path` and task-scoped `client`. Do not call host `p4` against another client. Open files with `multica p4 edit` / `checkout` before editing; add new files with `multica p4 add-files`. You do not submit: shelve the changelist, then record its number and your Unreal validation evidence in the task so a human can verify and submit.\n\n")
 	for _, depot := range ctx.P4Depots {
 		line := fmt.Sprintf("- `%s` `%s`", depot.Port, depot.Depot)
 		if depot.Stream != "" {
 			line += fmt.Sprintf(" stream `%s`", depot.Stream)
+		}
+		// Rendered because a unicode server rejects commands whose charset
+		// does not match, and the agent cannot read it off the claim.
+		if depot.Charset != "" {
+			line += fmt.Sprintf(" charset `%s`", depot.Charset)
 		}
 		if depot.Changelist != "" {
 			line += fmt.Sprintf(" @%s", depot.Changelist)
@@ -509,6 +548,63 @@ func writeP4Depots(b *strings.Builder, ctx TaskContextForEnv) {
 		b.WriteString(line + "\n")
 	}
 	b.WriteString("\n")
+}
+
+// writeP4Workspace emits the workspace-mode Perforce section.
+//
+// Workspace mode is the only brief section where the agent shares a mutable
+// working area with the person who asked for the work: the files are in that
+// person's own Helix client, their other changelists are one command away,
+// and the editor they will verify in is reading the same tree. So the copy is
+// organised around what must not be disturbed rather than around how to sync.
+//
+// Two rules carry the whole design decision (plan §0) and are stated without
+// hedging: the agent never submits, and the changelist description must keep
+// its `refs #<ticket>` trailer — which is why a task with no ticket cannot
+// open a file at all, and says so instead of improvising a number.
+//
+// Values are rendered inside backticks: they come from `p4 info` /
+// `p4 client -o` rather than from a user-authored field, and the surrounding
+// code tokens keep a surprising one from breaking the markdown around it.
+func writeP4Workspace(b *strings.Builder, ws *P4WorkspaceForEnv) {
+	b.WriteString("## Perforce workspace\n\n")
+	fmt.Fprintf(b, "You are working inside `%s`'s own Helix workspace — client `%s`, root `%s`", ws.User, ws.Client, ws.Root)
+	if ws.Stream != "" {
+		fmt.Fprintf(b, ", stream `%s`", ws.Stream)
+	}
+	b.WriteString(". Their other work lives in the same tree, so touch only what this task needs.\n\n")
+
+	if ws.Ticket == "" {
+		// I7: no ticket, no changelist, no opened files. Stated before the
+		// command list so an agent reading top-down never reaches `p4 edit`
+		// believing it is available.
+		b.WriteString("**This task has no 易协作 ticket, so you cannot open any file.** Every changelist description must carry `refs #<ticket>`, and inventing a number is worse than not having one. If the task needs a file change, post a comment asking for `refs #<ticket>` to be added to the issue description, then end your turn. Do not write to the workspace any other way.\n\n")
+		return
+	}
+
+	fmt.Fprintf(b, "The task changelist is described `refs #%s`; the daemon writes that trailer, so do not edit it away.\n\n", ws.Ticket)
+	b.WriteString("- Open a file with `multica p4 edit -- <files>` BEFORE you change it, and create new files with `multica p4 add-files -- <files>`. Files on disk are read-only until Helix opens them — never clear the read-only bit to write one: Helix would not know the file changed, and the change would be lost.\n")
+	b.WriteString("- Everything you open goes into this task's changelist automatically. `multica p4 status` reports its number and the files in it; you do not pass `--changelist`.\n")
+	b.WriteString("- Do not use raw `p4` to write. Read-only queries (`p4 files`, `p4 print`, `p4 filelog`, `p4 describe`, `p4 changes`) are fine and often the fastest way to understand history.\n")
+	b.WriteString("- Never sync, never submit, and never touch a changelist other than this task's. The person who owns this workspace syncs and submits; shelved and under review is where your work stops.\n")
+	b.WriteString("- If a command reports `opened_by_you`, `exclusive_locked`, `exclusive_not_allowed`, or `not_head`, stop on that file and explain it in the issue. These mean the human already has it open, someone else holds the lock, or your copy is behind — none of them is worked around.\n")
+	if ws.AllowExclusive {
+		b.WriteString("- This depot allows opening exclusive-lock (`+l`) files. You still hold the lock while they are open, so open them late and keep the list short.\n")
+	}
+	b.WriteString("- When the task ends the daemon reverts the files you opened but did not change, shelves the rest, and opens a Helix Swarm review. Your changes stay open in the changelist for the human to verify.\n")
+	b.WriteString("- Your final reply must state what you changed, the changelist number (`multica p4 status`), and how to verify it in Unreal Editor.\n")
+	b.WriteString("- Read `Game/DJ01/AGENTS.md` first when it is present: it carries the project's own rules from the depot and overrides general guidance here.\n\n")
+}
+
+// hasProjectResourceType reports whether the project carries at least one
+// resource of the given type.
+func hasProjectResourceType(resources []ProjectResourceForEnv, resourceType string) bool {
+	for _, r := range resources {
+		if r.ResourceType == resourceType {
+			return true
+		}
+	}
+	return false
 }
 
 // writeProjectContext emits the Project Context section when the task carries
@@ -533,10 +629,23 @@ func writeProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 		for _, r := range ctx.ProjectResources {
 			fmt.Fprintf(b, "- %s\n", formatProjectResource(r))
 		}
-		b.WriteString("\nResources are pointers — open them only when relevant to the task. ")
-		b.WriteString("For `github_repo` resources, use `multica repo checkout <url>` to fetch the code. ")
-		b.WriteString("A resource listing a starting point is checked out there automatically — pass `--ref <branch-or-sha>` only to override it, when a task or handoff names a different revision.\n\n")
-		b.WriteString("For `perforce_depot` resources, use `multica p4 sync --port <P4PORT> --depot <//depot/path>`, then `multica p4 edit` / `add-files` / `shelve` / `swarm create` as needed.\n\n")
+		b.WriteString("\nResources are pointers — open them only when relevant to the task.")
+		// Each per-type sentence is stated only when that type is actually
+		// attached. A P4-only project was being told how to check out a
+		// GitHub repo it does not have, which is the same wrong steer the
+		// git lines in `## Available Commands` used to give.
+		if hasProjectResourceType(ctx.ProjectResources, "github_repo") {
+			b.WriteString(" For `github_repo` resources, use `multica repo checkout <url>` to fetch the code.")
+			b.WriteString(" A resource listing a starting point is checked out there automatically — pass `--ref <branch-or-sha>` only to override it, when a task or handoff names a different revision.")
+		}
+		b.WriteString("\n\n")
+		if hasProjectResourceType(ctx.ProjectResources, "perforce_depot") {
+			if ctx.P4Workspace != nil {
+				b.WriteString("The `perforce_depot` resource is already checked out in the client named under `## Perforce workspace` — work there, by the rules in that section.\n\n")
+			} else {
+				b.WriteString("For `perforce_depot` resources, use `multica p4 sync --port <P4PORT> --depot <//depot/path>`, then `multica p4 edit` / `add-files` / `shelve` / `swarm create` as needed.\n\n")
+			}
+		}
 	} else {
 		b.WriteString("This project has no resources attached yet.\n\n")
 	}

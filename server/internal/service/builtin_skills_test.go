@@ -367,12 +367,19 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				// the bounded-reads rule must name it rather than leave an
 				// agent choosing between two contradicting instructions.
 				"that read is the bounded scan",
+				// D3: agents shelve, humans submit. Stated in the router
+				// because an agent that only reads this file must still not
+				// submit, and the mode detail stays in the reference.
+				"An agent never submits a Perforce changelist",
+				"multica p4 status",
 			},
 			notWant: []string{
 				"--no-start",
 				// The singular forms this replaced.
 				"open the ONE reference",
 				"there is never a reason to read all eight",
+				// The submit verb is gone from every Perforce surface.
+				"multica p4 submit",
 			},
 		},
 		{
@@ -555,7 +562,21 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"multica repo checkout <url>",
 				"multica p4 sync --port <p4port> --depot <depot-path>",
 				"multica p4 edit --port <p4port> --depot <depot-path> -- <files>",
+				"multica p4 status --output json",
 				"multica p4 swarm create --port <p4port> --depot <depot-path> --changelist <n> --output json",
+				// Perforce has two modes and the daemon enforces different
+				// things in each; an agent that cannot tell which one it is in
+				// cannot follow either set of rules.
+				"Workspace mode",
+				"task-client mode",
+				"Neither mode submits",
+				// I7 / D1: no ticket, no changelist, no opened files — and no
+				// inventing a number.
+				"refs #<ticket>",
+				"ticket_required",
+				// The per-depot switches that change what a task may do.
+				"allow_exclusive",
+				"no_auto_review",
 				"MULTICA_DAEMON_PORT",
 				"resource_ref.ref",
 				"github_repo",
@@ -567,6 +588,13 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				// metadata; every other runtime gets a linked worktree.
 				"Linux and Windows Codex",
 				"task-local Git metadata",
+			},
+			notWant: []string{
+				// D3: the submit verb is gone from the Perforce surface, so
+				// the reference must not hand an agent a command the daemon
+				// rejects.
+				"multica p4 submit",
+				"`submit`",
 			},
 		},
 		{
