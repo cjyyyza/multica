@@ -12,14 +12,14 @@ import { Callout } from "fumadocs-ui/components/callout";
 | 资源 | 适用场景 | 执行位置 |
 |---|---|---|
 | **GitHub 仓库** | 团队共享的代码库，希望由运行时管理 checkout | 运行时管理的工作目录 |
-| **Perforce depot** | 守护进程用本机 `p4` 登录同步的 Helix depot | 运行时管理的 `p4/` 目录 |
+| **Perforce depot** | 守护进程用本机 `p4` 登录操作的 Helix depot | 关联了你自己的 Perforce 工作区时就在那里，否则在运行时管理的 `p4/` 目录 |
 | **本地目录** | 已经存在的 checkout、很大的仓库，或需要直接查看本地改动 | 指定电脑上的原目录 |
 
 ## 资源进入执行的方式
 
 当智能体处理项目内的任务时，Multica 会把项目名称、项目描述和资源列表加入执行上下文，并在工作目录中写入 `.multica/project/resources.json`。
 
-项目没有 `github_repo` 时，工作区仓库列表会进入执行上下文。项目关联的仓库指明这组工作使用的 Git 代码和默认 ref。工作区 Perforce depot 与项目 `perforce_depot` 使用同样的独立回退，见 [Perforce](/perforce)。
+项目既没有 `github_repo` 也没有 `perforce_depot` 时，工作区的仓库列表和 Perforce depot 列表一起进入执行上下文。挂上其中任何一类，两类回退都会关闭：只配 Perforce 的项目不再继承工作区 Git 仓库，只配 Git 的项目也不再继承工作区 depot。项目关联的仓库指明这组工作使用的 Git 代码和默认 ref。
 
 本地目录只对绑定它的守护进程有效。本次执行所在的守护进程有匹配的本地目录时，智能体直接进入该目录工作；其他电脑仍使用项目中的 GitHub 仓库或工作区仓库。
 
@@ -32,6 +32,17 @@ import { Callout } from "fumadocs-ui/components/callout";
 创建项目时，也可以直接在 **Repos** 中选择仓库。一个项目可以关联多个 GitHub 仓库。
 
 资源中的 `ref` 可以指定后续 checkout 默认使用的分支、tag 或 commit。`default_branch_hint` 只向智能体提供默认分支提示，不会强制切换分支。
+
+## 添加 Perforce depot
+
+可以选择工作区上已有的 Helix depot，也可以直接填 port 和 depot 路径。`--stream` 可选；其余字段（`user`、`charset`、`changelist`、`swarm_url`、`allow_exclusive`、`no_auto_review`）通过 JSON `--ref` 设置。
+
+```bash
+multica project resource add <project-id> --type perforce_depot \
+  --port perforce.example.com:1666 --depot //depot/project --output json
+```
+
+再配一条 `in_place` 的本地目录、指向你的 Perforce 工作区根目录，运行就会直接在那个 client 里改文件，而不是再同步一份 depot —— 每条任务一个 changelist，shelve 之后由你验证并提交。这个模式的全部约束见 [Perforce](/perforce)。
 
 ## 添加本地目录
 
@@ -118,6 +129,12 @@ multica project resource add <project-id> \
  --type github_repo \
  --url https://github.com/multica-ai/multica \
  --ref main
+
+# 关联 Perforce depot
+multica project resource add <project-id> \
+ --type perforce_depot \
+ --port perforce.example.com:1666 \
+ --depot //depot/project
 
 # 关联指定守护进程上的本地目录
 multica project resource add <project-id> \
