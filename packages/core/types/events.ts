@@ -90,7 +90,8 @@ export type WSEventType =
   | "github_installation:deleted"
   | "pull_request:linked"
   | "pull_request:updated"
-  | "pull_request:unlinked";
+  | "pull_request:unlinked"
+  | "p4_changelist:updated";
 
 export interface WSMessage<T = unknown> {
   type: WSEventType;
@@ -541,6 +542,12 @@ export interface InvitationRevokedPayload {
   invitee_email: string;
 }
 
+/** A Perforce changelist linked to this issue was created, updated or unlinked. */
+export interface P4ChangelistUpdatedPayload {
+  issue_id: string;
+  changelist_id: string;
+}
+
 export interface ChatSessionCreatedPayload {
   workspace_id: string;
   chat_session_id: string;
@@ -630,6 +637,7 @@ export interface WSEventPayloadMap {
   "invitation:accepted": InvitationAcceptedPayload;
   "invitation:declined": InvitationDeclinedPayload;
   "invitation:revoked": InvitationRevokedPayload;
+  "p4_changelist:updated": P4ChangelistUpdatedPayload;
   // No formal payload interfaces yet — server emits domain objects clients
   // currently consume as opaque triggers (refetch on receipt).
   "daemon:heartbeat": unknown;

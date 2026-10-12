@@ -342,6 +342,9 @@ const mockApiObj = vi.hoisted(() => ({
   listRuntimes: vi.fn().mockResolvedValue([]),
   getProject: vi.fn(),
   listProjects: vi.fn().mockResolvedValue({ projects: [] }),
+  // The changelist section mounts on every issue and reads these.
+  listIssueP4Changelists: vi.fn().mockResolvedValue({ changelists: [] }),
+  listProjectResources: vi.fn().mockResolvedValue({ resources: [] }),
 }));
 
 vi.mock("@multica/core/api", () => ({
