@@ -54,6 +54,8 @@ import type {
   GroupedIssuesResponse,
   GitHubConnectResponse,
   IssuePullRequestsResponse,
+  P4Changelist,
+  IssueP4ChangelistsResponse,
   InboxItem,
   InboxWorkspaceUnread,
   Label,
@@ -456,6 +458,77 @@ export const IssuePullRequestsResponseSchema = z.object({
 export const EMPTY_ISSUE_PULL_REQUESTS_RESPONSE: IssuePullRequestsResponse = {
   pull_requests: [],
   auto_complete: null,
+};
+
+// Perforce changelists linked to an issue. Every field defaults, so a row the
+// daemon reported before a field existed — or one whose jsonb column drifted —
+// still renders as a card instead of taking the whole list down with it.
+export const P4ChangelistWarningSchema = z.object({
+  // The kind is kept as a plain string: the card labels the kinds it knows and
+  // shows the raw kind for one it has never heard of.
+  kind: z.string().default(""),
+  files: z.array(z.string()).optional().default([]).catch([]),
+}).loose();
+
+export const P4ChangelistSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().optional().default("").catch(""),
+  port: z.string().optional().default("").catch(""),
+  number: z.number().int().optional().default(0).catch(0),
+  original_number: z.number().int().optional().default(0).catch(0),
+  // A status this client does not know is treated as still open, never as
+  // submitted: the issue's auto-advance and the "submitted" wording both read
+  // off this value.
+  status: z.enum(["pending", "shelved", "submitted", "deleted"]).optional().default("pending").catch("pending"),
+  client: z.string().optional().default("").catch(""),
+  p4_user: z.string().optional().default("").catch(""),
+  description: z.string().optional().default("").catch(""),
+  ticket: z.string().optional().default("").catch(""),
+  files_count: z.number().int().nonnegative().optional().default(0).catch(0),
+  exclusive_files: z.array(z.string()).optional().default([]).catch([]),
+  warnings: z.array(P4ChangelistWarningSchema).optional().default([]).catch([]),
+  swarm_review_id: z.string().nullable().optional().default(null).catch(null),
+  swarm_review_number: z.number().int().nullable().optional().default(null).catch(null),
+  swarm_review_url: z.string().nullable().optional().default(null).catch(null),
+  swarm_review_state: z.string().nullable().optional().default(null).catch(null),
+  task_id: z.string().nullable().optional().default(null).catch(null),
+  link_source: z.enum(["task", "manual"]).optional().default("task").catch("task"),
+  submitted_at: z.string().nullable().optional().default(null).catch(null),
+  created_at: z.string().optional().default("").catch(""),
+  updated_at: z.string().optional().default("").catch(""),
+}).loose();
+
+export const IssueP4ChangelistsResponseSchema = z.object({
+  changelists: z.array(P4ChangelistSchema).optional().default([]).catch([]),
+}).loose();
+
+export const EMPTY_P4_CHANGELIST: P4Changelist = {
+  id: "",
+  workspace_id: "",
+  port: "",
+  number: 0,
+  original_number: 0,
+  status: "pending",
+  client: "",
+  p4_user: "",
+  description: "",
+  ticket: "",
+  files_count: 0,
+  exclusive_files: [],
+  warnings: [],
+  swarm_review_id: null,
+  swarm_review_number: null,
+  swarm_review_url: null,
+  swarm_review_state: null,
+  task_id: null,
+  link_source: "task",
+  submitted_at: null,
+  created_at: "",
+  updated_at: "",
+};
+
+export const EMPTY_ISSUE_P4_CHANGELISTS_RESPONSE: IssueP4ChangelistsResponse = {
+  changelists: [],
 };
 
 // Label responses are consumed by settings tables and resource pickers. Keep
@@ -3670,6 +3743,11 @@ export const WorkspaceP4DepotSchema = z.object({
   changelist: z.string().optional().default(""),
   description: z.string().optional().default(""),
   swarm_url: z.string().optional().default(""),
+  // Both guard a behavior, so an unreadable value must read as "not granted":
+  // allow_exclusive lets agents open +l files, no_auto_review suppresses the
+  // automatic Swarm review.
+  allow_exclusive: z.boolean().optional().default(false).catch(false),
+  no_auto_review: z.boolean().optional().default(false).catch(false),
 }).loose();
 
 export const WorkspaceSchema = z.object({

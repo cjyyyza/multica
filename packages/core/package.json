@@ -121,6 +121,8 @@
     "./billing/mutations": "./billing/mutations.ts",
     "./github": "./github/index.ts",
     "./github/queries": "./github/queries.ts",
+    "./p4": "./p4/index.ts",
+    "./p4/queries": "./p4/queries.ts",
     "./vcs": "./vcs/index.ts",
     "./vcs/queries": "./vcs/queries.ts",
     "./lark": "./lark/index.ts",

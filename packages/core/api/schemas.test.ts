@@ -91,6 +91,11 @@ import {
   EMPTY_LIST_ISSUE_STATUSES_RESPONSE,
   EMPTY_ISSUE_STATUS_ENTRY,
 } from "./schemas";
+import {
+  P4ChangelistSchema,
+  IssueP4ChangelistsResponseSchema,
+  EMPTY_ISSUE_P4_CHANGELISTS_RESPONSE,
+} from "./schemas";
 import { parseWithFallback } from "./schema";
 
 const baseIssue = {
@@ -2615,6 +2620,158 @@ describe("WorkspaceSchema", () => {
       depot: "//depot/game",
       extra: "ok",
     });
+  });
+
+  // Both flags permit something (opening +l files, skipping the Swarm review),
+  // so a server that omits them or sends junk must read as "not granted".
+  it("defaults the depot permission flags to off", () => {
+    const parsed = WorkspaceSchema.parse({
+      ...baseWorkspace,
+      p4_depots: [{ port: "p4:1666", depot: "//depot/game" }],
+    });
+    expect(parsed.p4_depots[0]).toMatchObject({ allow_exclusive: false, no_auto_review: false });
+  });
+
+  it("keeps a granted depot flag and drops a malformed one", () => {
+    const parsed = WorkspaceSchema.parse({
+      ...baseWorkspace,
+      p4_depots: [
+        { port: "p4:1666", depot: "//depot/game", allow_exclusive: true, no_auto_review: "yes" },
+      ],
+    });
+    expect(parsed.p4_depots[0]).toMatchObject({ allow_exclusive: true, no_auto_review: false });
+  });
+});
+
+describe("P4ChangelistSchema", () => {
+  const changelist = {
+    id: "cl-1",
+    workspace_id: "ws-1",
+    port: "perforce.example.com:1666",
+    number: 795115,
+    original_number: 795095,
+    status: "submitted",
+    client: "dj-win",
+    p4_user: "yujian",
+    description: "refs #12345 fix the thing",
+    ticket: "12345",
+    files_count: 3,
+    exclusive_files: ["//depot/game/Content/A.uasset"],
+    warnings: [{ kind: "not_head", files: ["//depot/game/Content/B.uasset"] }],
+    swarm_review_id: "rev-1",
+    swarm_review_number: 123,
+    swarm_review_url: "https://swarm.example.com/reviews/123",
+    swarm_review_state: "committed",
+    task_id: "task-1",
+    link_source: "task",
+    submitted_at: "2026-10-12T02:00:00Z",
+    created_at: "2026-10-12T01:00:00Z",
+    updated_at: "2026-10-12T02:00:00Z",
+  };
+
+  it("reads a full changelist and keeps unknown fields", () => {
+    const parsed = P4ChangelistSchema.parse({ ...changelist, charset: "utf8" });
+    expect(parsed).toMatchObject({
+      number: 795115,
+      original_number: 795095,
+      status: "submitted",
+      files_count: 3,
+      swarm_review_number: 123,
+      charset: "utf8",
+    });
+  });
+
+  // A status this client has never heard of must not read as submitted: the
+  // card's wording and the issue's auto-advance both hang off it.
+  it.each(["committed", "", 7, null, undefined])("parses status %p as pending", (status) => {
+    expect(P4ChangelistSchema.parse({ ...changelist, status }).status).toBe("pending");
+  });
+
+  it("defaults every field an older server may omit", () => {
+    const parsed = P4ChangelistSchema.parse({ id: "cl-1" });
+    expect(parsed).toEqual({
+      id: "cl-1",
+      workspace_id: "",
+      port: "",
+      number: 0,
+      original_number: 0,
+      status: "pending",
+      client: "",
+      p4_user: "",
+      description: "",
+      ticket: "",
+      files_count: 0,
+      exclusive_files: [],
+      warnings: [],
+      swarm_review_id: null,
+      swarm_review_number: null,
+      swarm_review_url: null,
+      swarm_review_state: null,
+      task_id: null,
+      link_source: "task",
+      submitted_at: null,
+      created_at: "",
+      updated_at: "",
+    });
+  });
+
+  it("keeps the changelist when the jsonb columns are malformed", () => {
+    const parsed = P4ChangelistSchema.parse({
+      ...changelist,
+      exclusive_files: "//depot/game/Content/A.uasset",
+      warnings: [{ kind: "exclusive_held", files: 3 }, "not_head"],
+    });
+    expect(parsed.number).toBe(795115);
+    expect(parsed.exclusive_files).toEqual([]);
+    expect(parsed.warnings).toEqual([]);
+  });
+
+  it("drops a malformed warning file list without dropping the kind", () => {
+    const parsed = P4ChangelistSchema.parse({
+      ...changelist,
+      warnings: [{ kind: "exclusive_held", files: ["//depot/a"] }, { kind: "not_head" }],
+    });
+    expect(parsed.warnings).toEqual([
+      { kind: "exclusive_held", files: ["//depot/a"] },
+      { kind: "not_head", files: [] },
+    ]);
+  });
+
+  it("reads an unlinked review and an unknown link source", () => {
+    const parsed = P4ChangelistSchema.parse({
+      ...changelist,
+      swarm_review_id: null,
+      swarm_review_number: null,
+      link_source: "autopilot",
+    });
+    expect(parsed.swarm_review_number).toBeNull();
+    expect(parsed.link_source).toBe("task");
+  });
+});
+
+describe("IssueP4ChangelistsResponseSchema", () => {
+  it("defaults a missing list", () => {
+    expect(IssueP4ChangelistsResponseSchema.parse({})).toEqual({ changelists: [] });
+  });
+
+  it("falls back to an empty list when the response is malformed", () => {
+    expect(
+      parseWithFallback(
+        { changelists: { "cl-1": {} } },
+        IssueP4ChangelistsResponseSchema,
+        EMPTY_ISSUE_P4_CHANGELISTS_RESPONSE,
+        { endpoint: "GET /api/issues/:id/p4-changelists" },
+      ),
+    ).toEqual({ changelists: [] });
+  });
+
+  it("keeps the rows a drifted response still carries", () => {
+    const parsed = IssueP4ChangelistsResponseSchema.parse({
+      changelists: [{ id: "cl-1", number: 795115, status: "shelved" }],
+      next_poll_at: "2026-10-12T03:00:00Z",
+    });
+    expect(parsed.changelists).toHaveLength(1);
+    expect(parsed.changelists[0]).toMatchObject({ number: 795115, status: "shelved" });
   });
 });
 
