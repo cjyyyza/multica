@@ -983,11 +983,14 @@ func (c claimProjectContext) applyTo(resp *AgentTaskResponse) {
 //     deleted, or points outside this workspace, and the claim degrades to
 //     workspace context.
 //
-// Repo precedence: project-bound github_repo resources override workspace repos
-// when present. Mixing both would just confuse the agent — if a project
-// explicitly attached its repos, those are the authoritative set. With no
-// project, no github_repo resources, or a stale reference, the workspace repos
-// are the fallback.
+// Code-source precedence: a project that attaches ANY code resource owns the
+// task's code sources outright, and the workspace-level lists are not mixed in.
+// Git and Perforce are one axis here, not two: a project that attaches only a
+// github_repo must not silently inherit a workspace Perforce depot, because the
+// agent would then be told to work in a 328GB UE depot nobody chose for it (and
+// the reverse inherits a repo checkout into a Perforce-only task). The workspace
+// lists remain the fallback for a project with no code resources at all, for no
+// project, and for a stale reference.
 func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, workspaceID pgtype.UUID) (claimProjectContext, error) {
 	var out claimProjectContext
 
@@ -1017,8 +1020,8 @@ func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, wor
 		}
 	}
 
-	needGitFallback := len(out.Repos) == 0
-	needP4Fallback := len(out.P4Depots) == 0
+	needGitFallback := len(out.Repos) == 0 && len(out.P4Depots) == 0
+	needP4Fallback := len(out.P4Depots) == 0 && len(out.Repos) == 0
 	if !needGitFallback && !needP4Fallback {
 		return out, nil
 	}
@@ -1054,9 +1057,8 @@ func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, wor
 // projectResourcesForClaim maps resource rows onto the claim wire shape and
 // lifts github_repo / perforce_depot resources into the checkout lists so
 // `multica repo checkout`, `multica p4 sync`, and the meta-skill render them
-// as the task's code sources. Git and Perforce are independent axes: a
-// project that only attaches one does not hide the workspace fallback for
-// the other.
+// as the task's code sources. Either kind makes the project the authoritative
+// code source; see resolveClaimProjectContext for the fallback rule.
 func projectResourcesForClaim(rows []db.ProjectResource) ([]ProjectResourceData, []RepoData, []P4DepotData) {
 	if len(rows) == 0 {
 		return nil, nil, nil
