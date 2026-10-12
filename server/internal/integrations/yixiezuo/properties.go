@@ -109,9 +109,9 @@ func Classify(snapshot Snapshot, members MemberIDs) Classification {
 			out.Retained = append(out.Retained, field)
 			continue
 		}
-		if isPersonField(name) {
-			typ, ids, ok := mapPerson(value, members)
-			if !ok || !propertyNameOK(name) || !add(name, typ, ids) {
+		if typ := personFieldType(name); typ != "" {
+			ids, ok := mapPerson(value, members)
+			if !ok || (typ == propertyActor && len(ids) != 1) || !propertyNameOK(name) || !add(name, typ, ids) {
 				out.Retained = append(out.Retained, field)
 				continue
 			}
@@ -138,17 +138,14 @@ func Classify(snapshot Snapshot, members MemberIDs) Classification {
 }
 
 func (g *propertyGroup) absorb(typ string, values []string) bool {
-	if g.typ != typ && !(actorType(g.typ) && actorType(typ)) {
+	if g.typ != typ {
 		return false
 	}
-	g.values = dedupe(append(g.values, values...))
-	if actorType(g.typ) || actorType(typ) {
-		if len(g.values) > 1 {
-			g.typ = propertyMultiActor
-		} else {
-			g.typ = propertyActor
-		}
+	merged := dedupe(append(append([]string{}, g.values...), values...))
+	if typ == propertyActor && len(merged) != 1 {
+		return false
 	}
+	g.values = merged
 	return true
 }
 
@@ -167,36 +164,28 @@ func (g *propertyGroup) mapped() MappedProperty {
 	}
 }
 
-func actorType(typ string) bool {
-	return typ == propertyActor || typ == propertyMultiActor
-}
-
-func mapPerson(value string, members MemberIDs) (string, []string, bool) {
+func mapPerson(value string, members MemberIDs) ([]string, bool) {
 	if ids, ok := oneMember(value, members); ok {
-		return propertyActor, ids, true
+		return ids, true
 	}
 	// An ambiguous whole-value match is a miss. Do not split it into pieces
 	// that might accidentally match other people.
 	if len(members[strings.TrimSpace(value)]) > 1 {
-		return "", nil, false
+		return nil, false
 	}
 	names := splitDelimiters(value, true)
 	if len(names) < 2 {
-		return "", nil, false
+		return nil, false
 	}
 	ids := make([]string, 0, len(names))
 	for _, name := range names {
 		matched, ok := oneMember(name, members)
 		if !ok {
-			return "", nil, false
+			return nil, false
 		}
 		ids = append(ids, matched[0])
 	}
-	ids = dedupe(ids)
-	if len(ids) == 1 {
-		return propertyActor, ids, true
-	}
-	return propertyMultiActor, ids, true
+	return dedupe(ids), true
 }
 
 func oneMember(name string, members MemberIDs) ([]string, bool) {
@@ -341,23 +330,35 @@ func calendarDay(raw string) (string, bool) {
 	return parsed.Format("2006-01-02"), true
 }
 
-func isPersonField(name string) bool {
-	for _, word := range []string{"负责人", "指派给", "指派", "作者", "参与者", "参与人"} {
+// Multiplicity belongs to the field, not today's value. A participant field
+// remains multi_actor when it contains one person or temporarily becomes empty.
+func personFieldType(name string) string {
+	for _, word := range []string{"参与者", "参与人"} {
 		if strings.Contains(name, word) {
-			return true
+			return propertyMultiActor
 		}
 	}
 	tokens := strings.FieldsFunc(strings.ToLower(name), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
 	for _, token := range tokens {
-		for _, word := range []string{"assignee", "author", "owner", "participant"} {
-			if token == word || token == word+"s" {
-				return true
+		for _, word := range []string{"participant", "participants", "assignees", "authors", "owners"} {
+			if token == word {
+				return propertyMultiActor
 			}
 		}
 	}
-	return false
+	for _, word := range []string{"负责人", "指派给", "指派", "作者"} {
+		if strings.Contains(name, word) {
+			return propertyActor
+		}
+	}
+	for _, token := range tokens {
+		if token == "assignee" || token == "author" || token == "owner" {
+			return propertyActor
+		}
+	}
+	return ""
 }
 
 func propertyNameOK(name string) bool {

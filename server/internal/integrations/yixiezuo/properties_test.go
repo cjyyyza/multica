@@ -107,7 +107,7 @@ func TestClassifyPersonMissesStayOutOfText(t *testing.T) {
 	if _, ok := findProperty(got, "参与人"); ok {
 		t.Fatal("partial person list became a property")
 	}
-	assertProperty(t, got, "Participants", "actor", "member:44444444-4444-4444-8444-444444444444")
+	assertProperty(t, got, "Participants", "multi_actor", []string{"member:44444444-4444-4444-8444-444444444444"})
 	if _, ok := findProperty(got, "Module owner"); ok {
 		t.Fatal("unknown owner was stored as text")
 	}
@@ -142,6 +142,31 @@ func TestClassifyCommaSeparatedURLsAndDuplicateNames(t *testing.T) {
 	}
 	if !fieldRetained(got, "end_date") {
 		t.Fatal("unparsed end date was dropped")
+	}
+}
+
+func TestClassifyPersonFieldTypesStayStable(t *testing.T) {
+	ada := "11111111-1111-4111-8111-111111111111"
+	grace := "22222222-2222-4222-8222-222222222222"
+	members := MemberIDs{"Ada": {ada}, "Grace": {grace}}
+	for _, name := range []string{"参与者", "参与人", "Participants", "Module owners"} {
+		t.Run(name, func(t *testing.T) {
+			for _, value := range []string{"Ada", "Ada、Grace", "Grace"} {
+				got := Classify(Snapshot{Fields: []SourceField{{Name: name, Value: value}}}, members)
+				property, ok := findProperty(got, name)
+				if !ok || property.Type != "multi_actor" {
+					t.Fatalf("%s=%q changed field type: %+v", name, value, got)
+				}
+			}
+		})
+	}
+	got := Classify(Snapshot{Fields: []SourceField{
+		{Name: "负责人", Value: "Ada"}, {Name: "负责人", Value: "Grace"},
+		{Name: "作者", Value: "Ada、Grace"},
+	}}, members)
+	assertProperty(t, got, "负责人", "actor", "member:"+ada)
+	if !fieldRetained(got, "负责人") || !fieldRetained(got, "作者") {
+		t.Fatal("multi-person material for a single-person field must be retained")
 	}
 }
 

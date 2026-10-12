@@ -39,7 +39,7 @@ func TestYixiezuoImportStoresPropertiesAndRefreshKeepsNativeFields(t *testing.T)
 		{Name: "版本", Value: "v1"},
 		{Name: "相关链接", Value: "https://a.example/x、https://b.example/y"},
 		{Name: "负责人", Value: "Ada Lovelace"},
-		{Name: "参与者", Value: "Ada Lovelace、Grace Hopper"},
+		{Name: "参与者", Value: "Ada Lovelace"},
 		{Name: "指派", Value: "Nobody"},
 		{Name: "备注", Value: "alpha"},
 		{Name: "开始日期", Value: "2026-04-01"},
@@ -158,6 +158,27 @@ func TestYixiezuoImportStoresPropertiesAndRefreshKeepsNativeFields(t *testing.T)
 	fx.QueryRow(t, `SELECT metadata->>'yixiezuo_status' FROM issue WHERE id=$1`, util.UUIDToString(issue.ID)).Scan(&tracked)
 	if version != "v2" || owner != "member:"+graceID || tracked != "QA" {
 		t.Fatalf("refreshed source fields = version %s owner %s status %s", version, owner, tracked)
+	}
+	var participantCount int
+	fx.QueryRow(t, `SELECT jsonb_array_length(i.properties -> p.id::text) FROM issue i JOIN issue_property p ON p.workspace_id=i.workspace_id AND p.name='参与者' WHERE i.id=$1`, util.UUIDToString(issue.ID)).Scan(&participantCount)
+	if participantCount != 2 {
+		t.Fatalf("refreshed participants = %d, want 2", participantCount)
+	}
+	refreshed.Fields[3].Value = "Grace Hopper"
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if err := svc.ApplyYixiezuoRefresh(ctx, tx, ws, issue.ID, snapshot, refreshed); err != nil {
+		t.Fatalf("refresh back to one participant: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fx.QueryRow(t, `SELECT jsonb_array_length(i.properties -> p.id::text) FROM issue i JOIN issue_property p ON p.workspace_id=i.workspace_id AND p.name='参与者' WHERE i.id=$1`, util.UUIDToString(issue.ID)).Scan(&participantCount)
+	if participantCount != 1 {
+		t.Fatalf("refreshed participants = %d, want 1", participantCount)
 	}
 	var noteCount int
 	fx.QueryRow(t, `
