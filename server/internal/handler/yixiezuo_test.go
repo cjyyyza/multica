@@ -3,8 +3,16 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"net/http/httptest"
+	"time"
+
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/yixiezuo"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/dbid"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 	"net/http"
 	"testing"
 )
@@ -220,5 +228,160 @@ func TestYixiezuoPublishRejectsBadAttachmentBeforeQueue(t *testing.T) {
 	}
 	if dbfx.Count(t, `SELECT count(*) FROM attachment WHERE id = $1 AND comment_id = $2`, bound, earlier) != 1 {
 		t.Fatal("already-bound attachment was moved")
+	}
+
+	agentID := dbfx.Agent(t, "Evidence chat agent", testRuntimeID)
+	chatID := dbfx.ChatSession(t, agentID)
+	otherIssue := dbfx.Issue(t, "Other evidence owner")
+	otherWorkspace := dbfx.Workspace(t, "Other evidence workspace", "evidence-boundary-"+issue.ID)
+	for _, tc := range []struct {
+		name  string
+		owner testutil.Cols
+	}{
+		{"other uploader", testutil.Cols{"uploader_id": "11111111-1111-4111-8111-111111111111"}},
+		{"other issue", testutil.Cols{"issue_id": otherIssue}},
+		{"other workspace", testutil.Cols{"workspace_id": otherWorkspace}},
+		{"chat upload", testutil.Cols{"chat_session_id": chatID}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := testutil.Cols{
+				"workspace_id": testWorkspaceID, "uploader_type": "member", "uploader_id": testUserID,
+				"filename": "staged.txt", "url": "https://example.test/staged.txt", "content_type": "text/plain", "size_bytes": 4,
+			}
+			good := dbfx.Insert(t, "attachment", fields)
+			for key, value := range tc.owner {
+				fields[key] = value
+			}
+			bad := dbfx.Insert(t, "attachment", fields)
+			testutil.Call(t, testHandler.PublishYixiezuoResult, manualIssueRequest("POST", issue.ID, body([]string{good, bad}))).Want(409)
+			if pending() != 0 || evidence() != 0 {
+				t.Fatal("rejected evidence left a publication or comment")
+			}
+			if dbfx.Count(t, `SELECT count(*) FROM attachment WHERE id=$1 AND issue_id IS NULL AND comment_id IS NULL`, good) != 1 {
+				t.Fatal("failed publication consumed an otherwise valid staged upload")
+			}
+			if dbfx.Count(t, `SELECT count(*) FROM attachment WHERE id=$1 AND issue_id=$2`, bad, issue.ID) != 0 {
+				t.Fatal("failed publication reassigned an unavailable upload")
+			}
+			var current int64
+			dbfx.QueryRow(t, `SELECT revision FROM issue WHERE id=$1`, issue.ID).Scan(&current)
+			if current != issue.Revision {
+				t.Fatalf("failed publication bumped revision to %d from %d", current, issue.Revision)
+			}
+		})
+	}
+}
+
+func TestYixiezuoPublishRejectsConcurrentUnreviewedRevision(t *testing.T) {
+	_, issue := prepareManualImport(t)
+	var digest string
+	dbfx.QueryRow(t, `SELECT snapshot->>'digest' FROM yixiezuo_import WHERE issue_id=$1`, issue.ID).Scan(&digest)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	holder, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(context.Background())
+	if _, err := holder.Exec(ctx, `SELECT id FROM issue WHERE id=$1 FOR UPDATE`, issue.ID); err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	req := manualIssueRequest("POST", issue.ID, map[string]any{
+		"summary": "Reviewed original revision", "revision": issue.Revision,
+		"source_digest": digest, "confirmed": true,
+	})
+	done := make(chan error, 1)
+	go func() { testHandler.PublishYixiezuoResult(rr, req); done <- nil }()
+	waitForBlockedQuery(t, done, "CreateComment", "LockIssueForDescriptionUpdate")
+	if _, err := holder.Exec(ctx, `UPDATE issue SET title='Unreviewed concurrent change', revision=revision+1 WHERE id=$1`, issue.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("concurrent edit accepted: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if dbfx.Count(t, `SELECT count(*) FROM comment WHERE issue_id=$1`, issue.ID) != 0 {
+		t.Fatal("rejected publication left an evidence comment")
+	}
+	if dbfx.Count(t, `SELECT count(*) FROM yixiezuo_operation WHERE issue_id=$1 AND kind='publish'`, issue.ID) != 0 {
+		t.Fatal("rejected publication queued an external write")
+	}
+}
+
+func TestYixiezuoPublishBindsStagedEvidenceAtomically(t *testing.T) {
+	_, issue := prepareManualImport(t)
+	var digest string
+	dbfx.QueryRow(t, `SELECT snapshot->>'digest' FROM yixiezuo_import WHERE issue_id=$1`, issue.ID).Scan(&digest)
+	att, err := testHandler.Queries.CreateAttachment(t.Context(), db.CreateAttachmentParams{
+		ID: dbid.NewV7(), WorkspaceID: parseUUID(testWorkspaceID),
+		UploaderType: "member", UploaderID: parseUUID(testUserID),
+		Filename: "evidence.txt", Url: "https://example.test/evidence.txt", ContentType: "text/plain", SizeBytes: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbfx.Cleanup(t, `DELETE FROM attachment WHERE id=$1`, att.ID)
+	dbfx.Cleanup(t, `DELETE FROM comment WHERE issue_id=$1`, issue.ID)
+	var revision int64
+	dbfx.QueryRow(t, `SELECT revision FROM issue WHERE id=$1`, issue.ID).Scan(&revision)
+	if revision != issue.Revision {
+		t.Fatalf("staging changed revision from %d to %d", issue.Revision, revision)
+	}
+	var op yixiezuo.Operation
+	testutil.Call(t, testHandler.PublishYixiezuoResult, manualIssueRequest("POST", issue.ID, map[string]any{
+		"summary": "Verified", "revision": issue.Revision, "confirmed": true,
+		"source_digest": digest, "attachment_ids": []string{uuidToString(att.ID)},
+	})).Want(201).JSON(&op)
+	if dbfx.Count(t, `SELECT count(*) FROM attachment WHERE id=$1 AND issue_id=$2 AND comment_id IN (SELECT id FROM comment WHERE issue_id=$2)`, att.ID, issue.ID) != 1 {
+		t.Fatal("staged evidence was not bound to the publication comment")
+	}
+	dbfx.QueryRow(t, `SELECT revision FROM issue WHERE id=$1`, issue.ID).Scan(&revision)
+	if op.Payload.Revision != revision || revision != issue.Revision+1 {
+		t.Fatalf("publication revision=%d issue=%d reviewed=%d", op.Payload.Revision, revision, issue.Revision)
+	}
+}
+
+func TestYixiezuoRefreshPublishesUpdatedIssueAndPropertyCatalog(t *testing.T) {
+	_, issue := prepareManualImport(t)
+	var op yixiezuo.Operation
+	testutil.Call(t, testHandler.RefreshYixiezuoImport, manualIssueRequest("POST", issue.ID, map[string]any{})).Want(201).JSON(&op)
+	var claimed struct {
+		Operation yixiezuo.Operation `json:"operation"`
+	}
+	testutil.Call(t, testHandler.ClaimYixiezuoOperation, yixiezuoRequest("POST", "/claim", map[string]any{})).Want(200).JSON(&claimed)
+	var raw []byte
+	dbfx.QueryRow(t, `SELECT snapshot FROM yixiezuo_import WHERE issue_id=$1`, issue.ID).Scan(&raw)
+	var snapshot yixiezuo.Snapshot
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Fields = []yixiezuo.SourceField{{Name: "Refresh field", Value: "new value"}, {Name: "截止日期", Value: "2026-10-31"}}
+	snapshot.Status = "QA"
+	var seen []events.Event
+	bus := events.New()
+	bus.SubscribeAll(func(e events.Event) { seen = append(seen, e) })
+	h := *testHandler
+	h.Bus = bus
+	h.IssueService = service.NewIssueService(h.Queries, testPool, bus, nil, nil)
+	receipt := yixiezuo.Completion{LeaseToken: claimed.Operation.LeaseToken, State: "succeeded", Snapshot: &snapshot}
+	testutil.Call(t, h.CompleteYixiezuoOperation, manualOperationRequest("POST", op.ID, receipt)).Want(200)
+	if len(seen) != 2 || seen[0].Type != protocol.EventIssueUpdated || seen[1].Type != protocol.EventIssuePropertiesChanged {
+		t.Fatalf("expected owner snapshot then property/catalog invalidation, got %+v", seen)
+	}
+	owner := seen[0].Payload.(map[string]any)["issue"].(IssueResponse)
+	if owner.DueDate == nil || *owner.DueDate != "2026-10-31" || owner.Metadata["yixiezuo_status"] != "QA" {
+		t.Fatalf("stale owner event: %+v", owner)
+	}
+	properties := seen[1].Payload.(map[string]any)
+	if properties["issue_revision"] != owner.Revision {
+		t.Fatalf("event revisions differ: %v vs %d", properties["issue_revision"], owner.Revision)
+	}
+	testutil.Call(t, h.CompleteYixiezuoOperation, manualOperationRequest("POST", op.ID, receipt)).Want(200)
+	if len(seen) != 2 {
+		t.Fatal("receipt replay duplicated change events")
 	}
 }

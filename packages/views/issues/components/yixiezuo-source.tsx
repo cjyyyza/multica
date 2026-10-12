@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -32,11 +32,12 @@ export function YixiezuoSource({ issueId, revision }: { issueId: string; revisio
   const [sourceDigest, setSourceDigest] = useState("");
   const [evidence, setEvidence] = useState<EvidenceFile[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const evidenceOwner = useRef({ wsId, issueId });
   const { upload, uploading } = useFileUpload(api);
   const data = useQuery(yixiezuoImportOptions(wsId, issueId));
   const invalidate = () => qc.invalidateQueries({ queryKey: yixiezuoKeys.all(wsId) });
   useEffect(() => { void qc.invalidateQueries({ queryKey: yixiezuoKeys.imported(wsId, issueId) }); }, [qc, wsId, issueId, revision]);
-  useEffect(() => { setEvidence([]); setUploadError(null); }, [issueId]);
+  useEffect(() => { evidenceOwner.current = { wsId, issueId }; setEvidence([]); setUploadError(null); }, [wsId, issueId]);
   const refresh = useMutation({ mutationFn: () => api.refreshYixiezuoImport(wsId, issueId), onSuccess: invalidate, onError: invalidate });
   const publish = useMutation({
     mutationFn: () => api.publishYixiezuoResult(wsId, issueId, {
@@ -51,14 +52,17 @@ export function YixiezuoSource({ issueId, revision }: { issueId: string; revisio
     onError: invalidate,
   });
   const attachEvidence = async (file: File) => {
+    const owner = evidenceOwner.current;
     setConfirmed(false);
     setUploadError(null);
     try {
-      const result = await upload(file, { issueId });
-      if (!result?.id) return;
+      // Keep evidence unbound until publication so uploading cannot invalidate
+      // the issue revision the member is reviewing.
+      const result = await upload(file);
+      if (!result?.id || evidenceOwner.current !== owner) return;
       setEvidence((current) => current.some((item) => item.id === result.id) ? current : [...current, { id: result.id, filename: result.filename || file.name }]);
     } catch (err) {
-      setUploadError(err instanceof Error ? err.message : String(err));
+      if (evidenceOwner.current === owner) setUploadError(err instanceof Error ? err.message : String(err));
     }
   };
   const removeEvidence = (id: string) => {

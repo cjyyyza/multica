@@ -9,6 +9,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/integrations/yixiezuo"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 	"net/http"
 )
 
@@ -177,6 +178,7 @@ func (h *Handler) CompleteYixiezuoOperation(w http.ResponseWriter, r *http.Reque
 	}
 	defer tx.Rollback(r.Context())
 	q := h.Queries.WithTx(tx)
+	var refreshed *db.Issue
 	updated, err := q.CompleteYixiezuoOperation(r.Context(), db.CompleteYixiezuoOperationParams{WorkspaceID: ws, RequestedBy: member.UserID, ID: id, LeaseToken: lease, State: req.State, Result: result, Error: req.Error})
 	if err != nil {
 		writeError(w, http.StatusConflict, "operation lease expired; refresh the source before retrying")
@@ -197,6 +199,11 @@ func (h *Handler) CompleteYixiezuoOperation(w http.ResponseWriter, r *http.Reque
 			err = q.UpdateYixiezuoImportSnapshot(r.Context(), db.UpdateYixiezuoImportSnapshotParams{WorkspaceID: ws, IssueID: row.IssueID, Snapshot: result})
 			if err == nil && row.Kind == "refresh" {
 				err = h.IssueService.ApplyYixiezuoRefresh(r.Context(), tx, ws, row.IssueID, previous, *req.Snapshot)
+				if err == nil {
+					var issue db.Issue
+					issue, err = q.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{WorkspaceID: ws, ID: row.IssueID})
+					refreshed = &issue
+				}
 			}
 		}
 		if err != nil {
@@ -212,6 +219,14 @@ func (h *Handler) CompleteYixiezuoOperation(w http.ResponseWriter, r *http.Reque
 	if err = tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit receipt")
 		return
+	}
+	if refreshed != nil {
+		resp := issueToResponse(*refreshed, h.getIssuePrefix(r.Context(), ws))
+		h.fillStatusCategory(r.Context(), ws, &resp)
+		// Publish the full owner first so the auxiliary revision cannot mask
+		// the new dates or metadata as an equal-revision duplicate.
+		h.publish(protocol.EventIssueUpdated, uuidToString(ws), "member", uuidToString(member.UserID), map[string]any{"issue": resp})
+		h.publishYixiezuoProperties(*refreshed, member.UserID)
 	}
 	h.settleYixiezuoAutoImport(r.Context(), updated)
 	writeJSON(w, http.StatusOK, operationResponse(updated, false))

@@ -215,6 +215,9 @@ func (h *Handler) importYixiezuo(ctx context.Context, ws, actor, previewID, proj
 	if errors.Is(err, service.ErrProjectNotFound) {
 		return db.Issue{}, false, sourceError(400, "project not found in this workspace")
 	}
+	if err == nil {
+		h.publishYixiezuoProperties(res.Issue, actor)
+	}
 	return res.Issue, false, err
 }
 
@@ -273,7 +276,23 @@ func (h *Handler) enqueueYixiezuo(ctx context.Context, ws, actor, id pgtype.UUID
 	if err != nil {
 		return db.YixiezuoOperation{}, sourceError(404, "issue is not imported from 易协作")
 	}
-	issue, err := q.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{WorkspaceID: ws, ID: id})
+	// Unbound uploads precede the issue lock, matching the regular issue-edit
+	// path. Already issue-owned files are locked later, after their owner.
+	if kind == "publish" && len(req.attachmentUUIDs) > 0 {
+		if _, err := q.LockAttachmentsForIssueLink(ctx, db.LockAttachmentsForIssueLinkParams{
+			WorkspaceID: ws, AttachmentIds: req.attachmentUUIDs,
+		}); err != nil {
+			return db.YixiezuoOperation{}, err
+		}
+	}
+	var issue db.Issue
+	if kind == "publish" {
+		// Keep the reviewed version pinned through the evidence comment and
+		// operation insert. Its revision must not absorb a concurrent edit.
+		issue, err = q.LockIssueForDescriptionUpdate(ctx, db.LockIssueForDescriptionUpdateParams{WorkspaceID: ws, ID: id})
+	} else {
+		issue, err = q.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{WorkspaceID: ws, ID: id})
+	}
 	if err != nil {
 		return db.YixiezuoOperation{}, sourceError(404, "issue not found")
 	}
@@ -397,9 +416,15 @@ func publishEvidenceContent(summary string, reviews []db.ListSwarmReviewsByIssue
 	return body.String()
 }
 
-// bindPublishEvidenceAttachments uses the same lock-then-link path as
-// POST /comments, and also requires the confirming member to be the uploader.
+// bindPublishEvidenceAttachments consumes uploads locked before the issue,
+// then follows POST /comments for issue-owned files. Any failed ownership or
+// availability check rolls the entire publication back, including this link.
 func bindPublishEvidenceAttachments(ctx context.Context, q *db.Queries, ws, actor, issueID, commentID pgtype.UUID, attachmentIDs []pgtype.UUID) error {
+	if _, err := q.LinkAttachmentsToIssue(ctx, db.LinkAttachmentsToIssueParams{
+		WorkspaceID: ws, IssueID: issueID, AttachmentIds: attachmentIDs, BumpRevision: false,
+	}); err != nil {
+		return err
+	}
 	missing, err := lockCommentAttachments(ctx, q, ws, issueID, attachmentIDs)
 	if err != nil {
 		return err
@@ -412,7 +437,7 @@ func bindPublishEvidenceAttachments(ctx context.Context, q *db.Queries, ws, acto
 	for _, id := range attachmentIDs {
 		seen[id] = struct{}{}
 		row, err := q.GetAttachment(ctx, db.GetAttachmentParams{ID: id, WorkspaceID: ws})
-		if errors.Is(err, pgx.ErrNoRows) || (err == nil && (row.UploaderType != "member" || uuidToString(row.UploaderID) != actorID)) {
+		if errors.Is(err, pgx.ErrNoRows) || (err == nil && (row.UploaderType != "member" || uuidToString(row.UploaderID) != actorID || row.ChatSessionID.Valid || row.ChatMessageID.Valid || row.TaskID.Valid)) {
 			return sourceError(http.StatusConflict, "attachment "+uuidToString(id)+" is no longer available")
 		}
 		if err != nil {
@@ -430,6 +455,16 @@ func bindPublishEvidenceAttachments(ctx context.Context, q *db.Queries, ws, acto
 		return sourceError(http.StatusConflict, "attachment is no longer available")
 	}
 	return nil
+}
+
+// The property event invalidates both issue value projections and the
+// workspace catalog, including definitions created by a source import.
+func (h *Handler) publishYixiezuoProperties(issue db.Issue, actor pgtype.UUID) {
+	h.publish(protocol.EventIssuePropertiesChanged, uuidToString(issue.WorkspaceID), "member", uuidToString(actor), map[string]any{
+		"issue_id":       uuidToString(issue.ID),
+		"properties":     parseIssueProperties(issue.Properties),
+		"issue_revision": issue.Revision,
+	})
 }
 
 func (h *Handler) publishEvidenceComment(ctx context.Context, issue db.Issue, comment db.Comment, issueRevision int64) {
