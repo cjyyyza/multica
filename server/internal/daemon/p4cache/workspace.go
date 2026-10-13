@@ -195,6 +195,23 @@ func (c *Cache) FileStates(ctx context.Context, ws *Workspace, files []string) (
 	return states, nil
 }
 
+// LocalPath resolves a depot filespec even before add creates a depot record.
+// Refuse ambiguous/negative mappings instead of bypassing the local guards.
+func (c *Cache) LocalPath(ctx context.Context, ws *Workspace, file string) (string, error) {
+	stdout, stderr, err := c.runAt(ctx, ws.Dir, append(ws.tagArgs(), "where", file))
+	if err != nil {
+		return "", fmt.Errorf("p4 where %s: %w: %s", file, err, strings.TrimSpace(stderr))
+	}
+	records := parseZtag(stdout)
+	if len(records) != 1 || records[0]["path"] == "" {
+		return "", fmt.Errorf("p4 where %s did not return one local file", file)
+	}
+	if _, excluded := records[0]["unmap"]; excluded || !filepath.IsAbs(records[0]["path"]) {
+		return "", fmt.Errorf("%s is not mapped into this Perforce client", file)
+	}
+	return records[0]["path"], nil
+}
+
 // Opened lists every file this client has opened, in every changelist.
 func (c *Cache) Opened(ctx context.Context, ws *Workspace) ([]FileState, error) {
 	return c.opened(ctx, ws, nil)
@@ -345,6 +362,11 @@ func (c *Cache) FinishChange(ctx context.Context, ws *Workspace, change string) 
 		return nil, err
 	}
 	if len(opened) == 0 {
+		// A previous run may have shelved files the person has since reverted.
+		// A changelist cannot be deleted until that shelf is removed as well.
+		if _, stderr, err := c.runAt(ctx, ws.Dir, append(ws.baseArgs(), "shelve", "-d", "-c", change)); err != nil && !noShelvedFiles.MatchString(strings.TrimSpace(stderr)) {
+			return result, fmt.Errorf("p4 shelve -d %s: %w: %s", change, err, strings.TrimSpace(stderr))
+		}
 		if _, _, err := c.runAt(ctx, ws.Dir, append(ws.baseArgs(), "change", "-d", change)); err != nil {
 			return nil, fmt.Errorf("p4 change -d %s: %w", change, err)
 		}
@@ -372,7 +394,7 @@ func (c *Cache) FinishChange(ctx context.Context, ws *Workspace, change string) 
 		}
 	}
 
-	flags := []string{"-f"}
+	flags := []string{"-r"}
 	if ws.Edge {
 		// Swarm only reads shelves that reached the commit server.
 		flags = append(flags, "-p")
@@ -384,9 +406,10 @@ func (c *Cache) FinishChange(ctx context.Context, ws *Workspace, change string) 
 	return result, nil
 }
 
-// DescribeChange reads a changelist by its original number. -O follows the
-// renumber a submit performs, so a changelist reported as 795095 is still
-// found after it lands as 795115.
+var noShelvedFiles = regexp.MustCompile(`(?i)^(no shelved files in changelist to delete\.?|change \d+ has no shelved files\.?)$`)
+
+// DescribeChange accepts either number a person can copy from P4V. A current
+// number resolves directly; -O resolves the original number after submission.
 func (c *Cache) DescribeChange(ctx context.Context, ref p4depot.Ref, number string) (*ChangeInfo, error) {
 	number = strings.TrimSpace(number)
 	if number == "" {
@@ -397,8 +420,12 @@ func (c *Cache) DescribeChange(ctx context.Context, ref p4depot.Ref, number stri
 		return nil, err
 	}
 	args := append([]string{"-ztag"}, c.baseArgs(ref, user, "")...)
-	args = append(args, "describe", "-s", "-O", number)
+	args = append(args, "describe", "-s", number)
 	stdout, stderr, err := c.runAt(ctx, "", args)
+	if changeIsUnknown(stderr) || changeIsUnknown(stdout) {
+		args = append(args[:len(args)-1], "-O", number)
+		stdout, stderr, err = c.runAt(ctx, "", args)
+	}
 	if err != nil {
 		if changeIsUnknown(stderr) || changeIsUnknown(stdout) {
 			return &ChangeInfo{Change: number, OldChange: number, Missing: true}, nil
@@ -415,6 +442,23 @@ func (c *Cache) DescribeChange(ctx context.Context, ref p4depot.Ref, number stri
 		Status:    record["status"],
 	}
 	return info, nil
+}
+
+// ServerKey resolves the shared cluster identity for a manually linked CL.
+// An unsuccessful info is not evidence that the server has no cluster.
+func (c *Cache) ServerKey(ctx context.Context, ref p4depot.Ref) (string, error) {
+	user, err := c.resolveUser(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	out, err := c.output(ctx, ref, user, "", "-ztag", "info")
+	if err != nil {
+		return "", err
+	}
+	if cluster := strings.TrimSpace(firstZtagRecord(string(out))["serverCluster"]); cluster != "" {
+		return cluster, nil
+	}
+	return strings.ToLower(strings.TrimSpace(ref.Port)), nil
 }
 
 // baseArgs spells out the connection for every command. Relying on the

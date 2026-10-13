@@ -107,11 +107,13 @@ Multica: <任务编号>
 成功、失败、取消都走同一套收尾：
 
 1. 在任务 changelist 上执行 `revert -a`，把“打开了但没改”的文件退回去；
-2. changelist 变空就删掉；
-3. 否则 shelve 这个 changelist（edge 服务器上加 `-p`）；
+2. changelist 变空时，先清理旧 shelf，再删除 changelist；
+3. 否则用当前文件完整替换 shelf（`shelve -r`，edge 服务器上加 `-p`）；
 4. 除非 depot 设了 `no_auto_review`，否则自动建一个 Helix Swarm review 并关联到任务。
 
 **改过的文件保持打开状态。** 你在编辑器里验证后提交；智能体的最终评论会写清改了什么、changelist 号，以及怎么验证。运行过程中用 `multica p4 status` 看到的也是这些信息。
+
+收尾或上报失败会显示为任务失败。守护进程会保留 changelist 上报记录，在 HTTP 失败或重启后重试；服务端缺少上报接口也不会被当成投递成功。状态轮询只连接项目或工作区当前配置的 depot，不启动 `rsh:` 进程。
 
 两个 depot 开关会改变上述行为，通过资源上的 JSON `--ref` 设置：`allow_exclusive` 允许智能体打开 `+l` 文件，`no_auto_review` 关掉自动 Swarm review。
 

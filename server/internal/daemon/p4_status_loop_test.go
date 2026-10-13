@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,9 +16,33 @@ import (
 	"github.com/multica-ai/multica/server/internal/p4depot"
 )
 
+func TestP4StatusPollRefusesUnconfiguredServer(t *testing.T) {
+	bin := writeDaemonFakeP4(t)
+	logPath := filepath.Join(t.TempDir(), "p4.log")
+	t.Setenv("P4USER", "alice")
+	t.Setenv("P4_FAKE_LOG", logPath)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/open") {
+			json.NewEncoder(w).Encode(p4OpenChangelistsResponse{Changelists: []p4OpenChangelist{{
+				ID: "unconfigured", Port: "rsh:inert-test-sentinel", Number: 1001, Status: "pending",
+			}}})
+			return
+		}
+		t.Error("an unconfigured changelist must not be observed or claimed")
+		w.Write([]byte(`{}`))
+	}))
+	defer api.Close()
+	d := &Daemon{client: NewClient(api.URL), p4Cache: &p4cache.Cache{P4Path: bin}, workspaces: map[string]*workspaceState{"ws": {}}}
+	d.pollP4ChangelistStatuses(t.Context())
+	if log, _ := os.ReadFile(logPath); len(log) != 0 {
+		t.Fatalf("unconfigured server reached the p4 executable: %s", log)
+	}
+}
+
 func TestP4StatusLoopMapsRenumberAndDelete(t *testing.T) {
 	bin := writeDaemonFakeP4(t)
 	t.Setenv("P4USER", "alice")
+	t.Setenv("P4_FAKE_INFO", "... serverCluster p4_cluster\n")
 	var posted p4StatusUpdateRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -25,7 +50,7 @@ func TestP4StatusLoopMapsRenumberAndDelete(t *testing.T) {
 			if r.URL.Query().Get("workspace_id") != "ws-1" {
 				t.Errorf("workspace_id = %q", r.URL.Query().Get("workspace_id"))
 			}
-			json.NewEncoder(w).Encode(p4OpenChangelistsResponse{Changelists: []p4OpenChangelist{
+			json.NewEncoder(w).Encode(p4OpenChangelistsResponse{P4Depots: []P4DepotData{{Port: "ssl:p4.example:1666", Depot: "//depot"}}, Changelists: []p4OpenChangelist{
 				{ID: "cl-sub", Port: "ssl:p4.example:1666", Number: 795095, OriginalNumber: 795095, Status: "shelved"},
 				{ID: "cl-del", Port: "ssl:p4.example:1666", Number: 111, OriginalNumber: 111, Status: "pending"},
 			}})
@@ -55,7 +80,7 @@ func TestP4StatusLoopMapsRenumberAndDelete(t *testing.T) {
 		got[update.ID] = update
 	}
 	sub := got["cl-sub"]
-	if sub.Status != "submitted" || sub.Number != 795115 || sub.SubmittedAt == "" {
+	if sub.Status != "submitted" || sub.Number != 795115 || sub.OriginalNumber != 795095 || sub.ServerKey != "p4_cluster" || sub.SubmittedAt == "" {
 		t.Fatalf("submitted update = %+v", sub)
 	}
 	del := got["cl-del"]
@@ -165,7 +190,7 @@ func TestFinishReportsShelvedChangelistAndReview(t *testing.T) {
 	}
 }
 
-func TestFinishWarnsWhenTheServerHasNoChangelistRoute(t *testing.T) {
+func TestFinishFailsWhenTheServerHasNoChangelistRoute(t *testing.T) {
 	bin := writeDaemonFakeP4(t)
 	root := t.TempDir()
 	t.Setenv("P4USER", "alice")
@@ -190,8 +215,25 @@ func TestFinishWarnsWhenTheServerHasNoChangelistRoute(t *testing.T) {
 		client:  NewClient(api.URL),
 		p4Cache: &p4cache.Cache{P4Path: bin},
 	}
-	d.finishP4Workspace(t.Context(), Task{ID: "task", AuthToken: "mat_task"}, binding)
-	if !strings.Contains(log.String(), "no changelist route") {
-		t.Fatalf("log = %s", log.String())
+	if err := d.finishP4Workspace(t.Context(), Task{ID: "task", AuthToken: "mat_task"}, binding); err == nil {
+		t.Fatal("missing server route was treated as a delivered changelist")
+	}
+}
+
+func TestP4PollRefUsesOnlyConfiguredCredentialsAndReviewOrigin(t *testing.T) {
+	depots := []P4DepotData{{Port: "ssl:p4.example:1666", Depot: "//depot", User: "configured", Charset: "utf8", SwarmURL: "https://swarm.example"}}
+	ref, ok := p4PollRef(depots, "ssl:p4.example:1666", "https://foreign.example")
+	if !ok || ref.User != "configured" || ref.Charset != "utf8" || ref.SwarmURL != "" {
+		t.Fatalf("unsafe poll ref: %+v %v", ref, ok)
+	}
+	ref, ok = p4PollRef(depots, "ssl:p4.example:1666", "https://swarm.example")
+	if !ok || ref.SwarmURL != "https://swarm.example" {
+		t.Fatalf("configured Swarm lost: %+v %v", ref, ok)
+	}
+	if _, ok := p4PollRef(depots, "other.example:1666", ""); ok {
+		t.Fatal("accepted another server")
+	}
+	if _, ok := p4PollRef([]P4DepotData{{Port: "rsh:inert", Depot: "//depot"}}, "rsh:inert", ""); ok {
+		t.Fatal("background polling may not start an rsh process")
 	}
 }

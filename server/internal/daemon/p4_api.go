@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -49,18 +50,18 @@ func (d *Daemon) changelistReport(ctx context.Context, b *p4TaskBinding, result 
 		desc = p4depot.ChangeDescription(ticket, b.title, b.issueKey)
 	}
 	number, _ := strconv.Atoi(result.Change)
-	status := "deleted"
-	filesCount := 0
-	var exclusive []string
-	var warnings []p4Warning
+	status := "pending"
+	filesCount := len(result.Files)
+	exclusive := result.ExclusiveHeld
+	warnings := packWarnings(
+		p4Warning{Kind: "not_head", Files: result.NotHead},
+		p4Warning{Kind: "exclusive_held", Files: result.ExclusiveHeld},
+	)
+	if result.Deleted {
+		status = "deleted"
+	}
 	if result.Shelved {
 		status = "shelved"
-		filesCount = len(result.Files)
-		exclusive = result.ExclusiveHeld
-		warnings = packWarnings(
-			p4Warning{Kind: "not_head", Files: result.NotHead},
-			p4Warning{Kind: "exclusive_held", Files: result.ExclusiveHeld},
-		)
 	}
 	if exclusive == nil {
 		exclusive = []string{}
@@ -188,21 +189,18 @@ func swarmAction(params p4cache.SwarmParams, action string) p4cache.SwarmParams 
 	return params
 }
 
-// reportTaskP4Changelist tells the server about the task changelist. A 404
-// means this server build has no changelist route yet; that is a warning,
-// not a failed task.
+// reportTaskP4Changelist persists the receipt before delivery. Even an old
+// server's 404 is not an acknowledgement: keep the receipt for replay/quarantine
+// and make the failed delivery visible to the task's caller.
 func (d *Daemon) reportTaskP4Changelist(ctx context.Context, task Task, report p4ChangelistReport) error {
 	if d.client == nil {
 		return fmt.Errorf("daemon client is not initialized")
 	}
-	err := d.client.ReportTaskP4Changelist(ctx, task.ID, report, &map[string]any{})
-	if isNotFound(err) {
-		if d.logger != nil {
-			d.logger.Warn("p4 changelist report skipped; server has no changelist route", "task_id", task.ID)
-		}
-		return nil
+	body, err := json.Marshal(report)
+	if err != nil {
+		return err
 	}
-	return err
+	return d.reportTerminalTask(ctx, terminalTaskReport{kind: terminalTaskReportP4Changelist, taskID: task.ID, output: string(body)})
 }
 
 func isNotFound(err error) bool {

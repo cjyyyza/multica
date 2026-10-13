@@ -76,6 +76,8 @@ func main() {
 			return
 		}
 		emit("FSTAT")
+	case "where":
+		emit("WHERE")
 	case "opened":
 		emit("OPENED")
 	case "changes":

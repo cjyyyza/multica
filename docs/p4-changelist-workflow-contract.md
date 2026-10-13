@@ -30,6 +30,8 @@ The agent reaches these only through the `multica` CLI; requests carry the task 
 `POST /p4/run`: existing request shape. When the task is bound to a workspace (`p4Binding(taskID) != nil`):
 - Optional fields: `port`, `depot`, `stream`, `workdir`. The daemon fills them from the binding.
 - `changelist` must be empty or equal to the task CL.
+- File arguments must name individual files, without wildcards, revision specifiers, or directories. Depot paths are resolved with `p4 where` before checking the local root and sidecar paths, including files not added to the depot yet.
+- A new description must retain the bound ticket. A foreign or malformed `refs #...` marker is rejected before creating or updating a CL.
 - Allowed actions: `edit`, `add`, `delete`, `move`, `reopen`, `revert`, `reconcile`, `shelve`, `change`, `opened`, `describe`.
 - Rejected actions: `submit` (removed in every mode), `sync`, `unshelve`.
 - Success response: the existing `MutateResult` plus `"warnings": [{"kind": string, "files": [string]}]` (omitted when empty).
@@ -69,7 +71,7 @@ Daemon routes (DaemonAuth group):
 | Route | Body | Response |
 |---|---|---|
 | `POST /api/daemon/tasks/{taskId}/p4/changelists` | see below | 200 with one `P4Changelist`; creates or updates the row and links it to the task's issue (`link_source="task"`) |
-| `GET /api/daemon/p4/changelists/open?workspace_id=<uuid>` | — | `{"changelists":[{"id","port","number","original_number","status","swarm_review_number","swarm_url"}]}`; rows with status `pending` or `shelved` that this daemon reported, for workspaces it can access |
+| `GET /api/daemon/p4/changelists/open?workspace_id=<uuid>` | — | `{"changelists":[{"id","port","number","original_number","status","swarm_review_number","swarm_url"}],"p4_depots":[P4DepotData...]}`; pending/shelved rows and the current project/workspace resources authorizing the poll |
 | `POST /api/daemon/p4/changelists/status` | see below | `{"updated": int}` |
 
 The task-report body:
@@ -81,13 +83,18 @@ The task-report body:
 The status body:
 
 ```
-{"workspace_id":"<uuid>","updates":[{"id","status","number","submitted_at","swarm_review_state"}]}
+{"workspace_id":"<uuid>","updates":[{"id","status","number","original_number","server_key","submitted_at","swarm_review_state"}]}
 ```
 
 Rules for the task-report route:
 - Ownership is checked with `requireDaemonTaskAccessWithWorkspace`.
 - The row is keyed by `(workspace_id, server_key, original_number)`.
+- Task reports, manual links, identity merges, status updates, and unlinks serialize identity writes within the workspace. Manual rows are adopted or merged once the cluster and original number are known; all issue links and manual attribution survive. Delayed receipts cannot revert a submitted/deleted status or a submitted number.
 - When `swarm_review` is present, upsert `swarm_review` and attach it to the changelist (`swarm_review_id`). That review must not also be returned in the issue's pull-request list.
+
+Polling only uses the returned configured depots. Unconfigured ports and `rsh:` are excluded on both server and daemon; review URLs must match a configured Swarm origin before credentials are sent. Project resources are resolved even after a task ends or the daemon restarts.
+
+At close-out, `shelve -r` replaces the complete shelf, with `-p` on an edge. An empty CL first removes any old shelf and then deletes the CL. Finalization errors still produce a pending CL receipt and fail the task. CL receipts use a separate delivery key in the durable terminal-report outbox so they survive HTTP failures/restarts without replacing the task result. A report is acknowledged only after the server accepts it, including when a server lacks the route.
 
 User routes (authenticated issue group):
 
@@ -100,6 +107,7 @@ User routes (authenticated issue group):
 For the manual link:
 - `port` defaults to the only `perforce_depot` on the issue's project; with zero or several depots, a missing `port` returns 422.
 - A manual row has no `daemon_id`. The open-changelists route also returns manual rows whose port matches a depot that daemon serves, and the first daemon to report them claims them.
+- Manual links reuse existing rows by either the current or original number. Port aliases converge on the canonical cluster identity during polling; merging a duplicate does not transfer the canonical row to another daemon.
 
 Realtime event `p4_changelist:updated`, payload `{"issue_id": "<uuid>", "changelist_id": "<uuid>"}`. Published after each create, update, link, or unlink.
 

@@ -84,8 +84,8 @@
 5. agent 用 `multica p4 edit` / `add-files` / `delete` 修改文件。raw `p4` 写操作已被环境变量屏蔽，只读查询仍然可用。
 6. 任务结束（成功、失败或取消都执行）时：
    - `revert -a -c <CL>`，只 revert 打开了但没改的文件；
-   - 如果 CL 变空了，`change -d` 删掉它；
-   - 否则 `shelve -f -c <CL>`，edge 工作区加 `-p`；
+   - 如果 CL 变空了，先用 `shelve -d -c <CL>` 清理旧 shelf，再用 `change -d` 删掉它；
+   - 否则 `shelve -r -c <CL>`，edge 工作区加 `-p`；
    - 自动建 Swarm review 并关联到 issue；
    - **文件保持打开状态**。
 7. 人在 UE 里验证，用 P4V / safesubmit 提交。
@@ -170,7 +170,7 @@ type FinishResult struct {
     Deleted, Shelved       bool
     ExclusiveHeld, NotHead []string
 }
-// FinishChange: revert -a -c N; opened -c N; empty -> change -d N; else shelve -f -c N [-p].
+// FinishChange: revert -a -c N; opened -c N; empty -> shelve -d -c N, change -d N; else shelve -r -c N [-p].
 func (c *Cache) FinishChange(ctx context.Context, ws *Workspace, change string) (*FinishResult, error)
 ```
 
@@ -247,7 +247,7 @@ func (h *Handler) resolveIssueP4Ticket(ctx context.Context, issue db.Issue) stri
 #### 1.7 结束收尾：`finishP4Workspace`
 
 1. 没有任务 CL → 直接结束。
-2. 执行 `FinishChange`：`revert -a -c N` → `opened -c N` → 如果为空就 `change -d N`；否则 `shelve -f -c N`（edge 工作区加 `-p`）。**改过的文件保持打开。**
+2. 执行 `FinishChange`：`revert -a -c N` → `opened -c N` → 如果为空就先 `shelve -d -c N`，再 `change -d N`；否则 `shelve -r -c N`（edge 工作区加 `-p`）。**改过的文件保持打开。**
 3. depot 的 `auto_review` 开着（默认开）时：
    - 这个 CL 还没有 review → 调现有的 `Cache.Swarm` 创建（已经 shelve 过，`Shelve=false`），再用该任务的 token 调 `POST /api/issues/{id}/swarm-reviews` 关联到 issue。这段逻辑和 CLI 的 `reportSwarmReviewToIssue`（`cmd_p4_task.go:373-424`）一致，在 daemon 侧新文件 `p4_api.go` 里实现。
    - 已经有 review → 重新 shelve 即可更新它（Swarm 的标准行为，**待实测**）。
@@ -280,7 +280,7 @@ func (h *Handler) resolveIssueP4Ticket(ctx context.Context, issue db.Issue) stri
 **单元测试**（fake p4）：
 - `DetectWorkspace`：`set -q` / `info` / `client -o` 的解析；host 不匹配、owner 不匹配、目录不在 root 内、edge 识别。
 - 每条不变量 I1–I8 一个表驱动用例。
-- `FinishChange` 的两种序列：CL 变空 → `change -d`；有改动 → `shelve -f`，edge 加 `-p`。
+- `FinishChange` 的两种序列：CL 变空 → `shelve -d` → `change -d`；有改动 → `shelve -r`，edge 加 `-p`。
 - sidecar 是 depot 文件时任务失败。
 - `ticket_required`。
 

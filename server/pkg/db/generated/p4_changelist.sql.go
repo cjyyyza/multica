@@ -32,6 +32,134 @@ func (q *Queries) DeleteOrphanP4Changelist(ctx context.Context, arg DeleteOrphan
 	return err
 }
 
+const findP4ChangelistIdentityRows = `-- name: FindP4ChangelistIdentityRows :many
+SELECT id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at FROM p4_changelist
+WHERE workspace_id = $1 AND (
+    (server_key = $2 AND original_number = $3)
+    OR id = $4
+    OR (lower(port) = lower($5) AND server_key = lower(port)
+        AND (original_number IN ($3, $6)
+             OR number IN ($3, $6)))
+)
+ORDER BY (server_key = $2 AND original_number = $3) DESC,
+         (task_id IS NOT NULL) DESC, created_at
+FOR UPDATE
+`
+
+type FindP4ChangelistIdentityRowsParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	ServerKey      string      `json:"server_key"`
+	OriginalNumber int32       `json:"original_number"`
+	SourceID       pgtype.UUID `json:"source_id"`
+	Port           string      `json:"port"`
+	Number         int32       `json:"number"`
+}
+
+func (q *Queries) FindP4ChangelistIdentityRows(ctx context.Context, arg FindP4ChangelistIdentityRowsParams) ([]P4Changelist, error) {
+	rows, err := q.db.Query(ctx, findP4ChangelistIdentityRows,
+		arg.WorkspaceID,
+		arg.ServerKey,
+		arg.OriginalNumber,
+		arg.SourceID,
+		arg.Port,
+		arg.Number,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []P4Changelist{}
+	for rows.Next() {
+		var i P4Changelist
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.DaemonID,
+			&i.ServerKey,
+			&i.Port,
+			&i.Charset,
+			&i.Number,
+			&i.OriginalNumber,
+			&i.Client,
+			&i.P4User,
+			&i.Status,
+			&i.Description,
+			&i.Ticket,
+			&i.FilesCount,
+			&i.ExclusiveFiles,
+			&i.Warnings,
+			&i.SwarmReviewID,
+			&i.TaskID,
+			&i.SubmittedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const findP4ChangelistsByPortNumber = `-- name: FindP4ChangelistsByPortNumber :many
+SELECT id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at FROM p4_changelist
+WHERE workspace_id = $1 AND lower(port) = lower($2)
+  AND (number = $3 OR original_number = $3)
+ORDER BY (server_key <> lower(port)) DESC, (task_id IS NOT NULL) DESC, created_at
+FOR UPDATE
+`
+
+type FindP4ChangelistsByPortNumberParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Port        string      `json:"port"`
+	Number      int32       `json:"number"`
+}
+
+func (q *Queries) FindP4ChangelistsByPortNumber(ctx context.Context, arg FindP4ChangelistsByPortNumberParams) ([]P4Changelist, error) {
+	rows, err := q.db.Query(ctx, findP4ChangelistsByPortNumber, arg.WorkspaceID, arg.Port, arg.Number)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []P4Changelist{}
+	for rows.Next() {
+		var i P4Changelist
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.DaemonID,
+			&i.ServerKey,
+			&i.Port,
+			&i.Charset,
+			&i.Number,
+			&i.OriginalNumber,
+			&i.Client,
+			&i.P4User,
+			&i.Status,
+			&i.Description,
+			&i.Ticket,
+			&i.FilesCount,
+			&i.ExclusiveFiles,
+			&i.Warnings,
+			&i.SwarmReviewID,
+			&i.TaskID,
+			&i.SubmittedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getP4ChangelistInWorkspace = `-- name: GetP4ChangelistInWorkspace :one
 SELECT id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at FROM p4_changelist WHERE id = $1 AND workspace_id = $2
 `
@@ -430,6 +558,64 @@ func (q *Queries) ListP4ChangelistsForIssue(ctx context.Context, arg ListP4Chang
 	return items, nil
 }
 
+const lockP4ChangelistWorkspace = `-- name: LockP4ChangelistWorkspace :one
+SELECT id FROM workspace WHERE id = $1 FOR UPDATE
+`
+
+// Serialize identity discovery, placeholder adoption and linking. An absent
+// row cannot be protected with a changelist row lock alone.
+func (q *Queries) LockP4ChangelistWorkspace(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockP4ChangelistWorkspace, id)
+	var id_2 pgtype.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
+const mergeP4Changelist = `-- name: MergeP4Changelist :exec
+WITH metadata AS (
+    UPDATE p4_changelist target SET
+        swarm_review_id = COALESCE(target.swarm_review_id, source.swarm_review_id),
+        daemon_id = CASE WHEN target.daemon_id = '' THEN source.daemon_id ELSE target.daemon_id END,
+        client = CASE WHEN target.client = '' THEN source.client ELSE target.client END,
+        p4_user = CASE WHEN target.p4_user = '' THEN source.p4_user ELSE target.p4_user END,
+        charset = CASE WHEN target.charset = '' THEN source.charset ELSE target.charset END,
+        description = CASE WHEN target.description = '' THEN source.description ELSE target.description END,
+        ticket = CASE WHEN target.ticket = '' THEN source.ticket ELSE target.ticket END,
+        files_count = CASE WHEN target.task_id IS NULL AND source.task_id IS NOT NULL THEN source.files_count ELSE target.files_count END,
+        warnings = CASE WHEN target.task_id IS NULL AND source.task_id IS NOT NULL THEN source.warnings ELSE target.warnings END,
+        exclusive_files = CASE WHEN target.task_id IS NULL AND source.task_id IS NOT NULL THEN source.exclusive_files ELSE target.exclusive_files END,
+        task_id = COALESCE(target.task_id, source.task_id)
+    FROM p4_changelist source
+    WHERE target.id = $3 AND source.id = $1
+      AND target.workspace_id = $2 AND source.workspace_id = $2
+), copied AS (
+    INSERT INTO issue_p4_changelist (issue_id, changelist_id, workspace_id, link_source)
+    SELECT issue_id, $3, workspace_id, link_source
+    FROM issue_p4_changelist
+    WHERE changelist_id = $1 AND workspace_id = $2
+    ON CONFLICT (issue_id, changelist_id) DO UPDATE SET link_source =
+        CASE WHEN issue_p4_changelist.link_source = 'manual' OR EXCLUDED.link_source = 'manual'
+             THEN 'manual' ELSE 'task' END
+), removed AS (
+    DELETE FROM issue_p4_changelist
+    WHERE changelist_id = $1 AND workspace_id = $2
+)
+DELETE FROM p4_changelist WHERE p4_changelist.id = $1 AND p4_changelist.workspace_id = $2
+`
+
+type MergeP4ChangelistParams struct {
+	SourceID    pgtype.UUID `json:"source_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	TargetID    pgtype.UUID `json:"target_id"`
+}
+
+// Keep all issue links and any metadata already delivered for a placeholder.
+// The caller holds the workspace identity lock and keeps the canonical row.
+func (q *Queries) MergeP4Changelist(ctx context.Context, arg MergeP4ChangelistParams) error {
+	_, err := q.db.Exec(ctx, mergeP4Changelist, arg.SourceID, arg.WorkspaceID, arg.TargetID)
+	return err
+}
+
 const moveIssueFromP4Changelists = `-- name: MoveIssueFromP4Changelists :one
 UPDATE issue AS i SET
     status = $3::text,
@@ -520,6 +706,52 @@ func (q *Queries) MoveIssueFromP4Changelists(ctx context.Context, arg MoveIssueF
 	return i, err
 }
 
+const setP4ChangelistIdentity = `-- name: SetP4ChangelistIdentity :one
+UPDATE p4_changelist SET server_key = $3, original_number = $4, updated_at = now()
+WHERE id = $1 AND workspace_id = $2 RETURNING id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at
+`
+
+type SetP4ChangelistIdentityParams struct {
+	ID             pgtype.UUID `json:"id"`
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	ServerKey      string      `json:"server_key"`
+	OriginalNumber int32       `json:"original_number"`
+}
+
+func (q *Queries) SetP4ChangelistIdentity(ctx context.Context, arg SetP4ChangelistIdentityParams) (P4Changelist, error) {
+	row := q.db.QueryRow(ctx, setP4ChangelistIdentity,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.ServerKey,
+		arg.OriginalNumber,
+	)
+	var i P4Changelist
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.DaemonID,
+		&i.ServerKey,
+		&i.Port,
+		&i.Charset,
+		&i.Number,
+		&i.OriginalNumber,
+		&i.Client,
+		&i.P4User,
+		&i.Status,
+		&i.Description,
+		&i.Ticket,
+		&i.FilesCount,
+		&i.ExclusiveFiles,
+		&i.Warnings,
+		&i.SwarmReviewID,
+		&i.TaskID,
+		&i.SubmittedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const unlinkIssueP4Changelist = `-- name: UnlinkIssueP4Changelist :execrows
 DELETE FROM issue_p4_changelist
 WHERE issue_id = $1 AND changelist_id = $2 AND workspace_id = $3
@@ -541,8 +773,8 @@ func (q *Queries) UnlinkIssueP4Changelist(ctx context.Context, arg UnlinkIssueP4
 
 const updateP4ChangelistStatus = `-- name: UpdateP4ChangelistStatus :one
 UPDATE p4_changelist SET
-    status = $3,
-    number = CASE WHEN $4::int > 0 THEN $4::int ELSE number END,
+    status = CASE WHEN status IN ('submitted', 'deleted') THEN status ELSE $3 END,
+    number = CASE WHEN status = 'submitted' THEN number WHEN $4::int > 0 THEN $4::int ELSE number END,
     submitted_at = COALESCE($5, submitted_at),
     daemon_id = CASE WHEN daemon_id = '' THEN $6 ELSE daemon_id END,
     updated_at = now()
@@ -635,10 +867,10 @@ ON CONFLICT (workspace_id, server_key, original_number) DO UPDATE SET
     daemon_id = EXCLUDED.daemon_id,
     port = EXCLUDED.port,
     charset = EXCLUDED.charset,
-    number = EXCLUDED.number,
+    number = CASE WHEN p4_changelist.status = 'submitted' THEN p4_changelist.number ELSE EXCLUDED.number END,
     client = EXCLUDED.client,
     p4_user = EXCLUDED.p4_user,
-    status = EXCLUDED.status,
+    status = CASE WHEN p4_changelist.status IN ('submitted', 'deleted') THEN p4_changelist.status ELSE EXCLUDED.status END,
     description = EXCLUDED.description,
     ticket = EXCLUDED.ticket,
     files_count = EXCLUDED.files_count,

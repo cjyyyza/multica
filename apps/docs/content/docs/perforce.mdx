@@ -107,11 +107,13 @@ One agent task runs per client at a time, so two tasks pointed at the same works
 Success, failure, or cancellation all run the same close-out:
 
 1. `revert -a` inside the task changelist, which returns files the agent opened but did not change;
-2. an empty changelist is deleted;
-3. otherwise the changelist is shelved (`-p` on an edge server);
+2. an empty changelist has any old shelf removed and is then deleted;
+3. otherwise the complete shelf is replaced with the current files (`shelve -r`, with `-p` on an edge server);
 4. unless the depot sets `no_auto_review`, a Helix Swarm review is created and linked to the issue.
 
 **Changed files stay open.** You verify in the editor and submit; the agent's final comment states what it changed, the changelist number, and how to check it. `multica p4 status` reports the same thing while a run is in flight.
+
+A close-out or report failure is shown as a task failure. The daemon retains the changelist receipt for retry after an HTTP failure or restart; it does not treat a missing server route as successful delivery. Status polling only connects to currently configured project/workspace depots and never starts an `rsh:` process.
 
 Two depot switches change this, and are set through a JSON `--ref` payload on the resource: `allow_exclusive` lets agents open `+l` files, and `no_auto_review` turns off the automatic Swarm review.
 

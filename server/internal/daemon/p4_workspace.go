@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -202,9 +203,14 @@ func sidecarCandidates(workDir, provider string) []string {
 	return paths
 }
 
-func (d *Daemon) finishP4Workspace(ctx context.Context, task Task, b *p4TaskBinding) {
+type p4FinalizeError struct{ err error }
+
+func (e *p4FinalizeError) Error() string { return e.err.Error() }
+func (e *p4FinalizeError) Unwrap() error { return e.err }
+
+func (d *Daemon) finishP4Workspace(ctx context.Context, task Task, b *p4TaskBinding) error {
 	if b == nil {
-		return
+		return nil
 	}
 	defer func() {
 		if b.release != nil {
@@ -216,28 +222,32 @@ func (d *Daemon) finishP4Workspace(ctx context.Context, task Task, b *p4TaskBind
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
-		return
+		return nil
 	}
 	b.closed = true
 	change := b.change
 	b.mu.Unlock()
 	if change == "" {
-		return
+		return nil
 	}
-	result, err := d.p4Cache.FinishChange(ctx, b.ws, change)
-	if err != nil {
+	result, finishErr := d.p4Cache.FinishChange(ctx, b.ws, change)
+	if finishErr != nil {
 		if d.logger != nil {
-			d.logger.Error("p4 workspace finish failed", "task_id", task.ID, "change", change, "error", err)
+			d.logger.Error("p4 workspace finish failed", "task_id", task.ID, "change", change, "error", finishErr)
 		}
-		return
+	}
+	if result == nil {
+		result = &p4cache.FinishResult{Change: change}
 	}
 	report := d.changelistReport(ctx, b, result)
 	if result.Shelved && !b.ref.NoAutoReview {
 		d.attachSwarmReview(ctx, task, b, &report)
 	}
-	if err := d.reportTaskP4Changelist(ctx, task, report); err != nil && d.logger != nil {
-		d.logger.Warn("p4 changelist report failed", "task_id", task.ID, "change", change, "error", err)
+	reportErr := d.reportTaskP4Changelist(ctx, task, report)
+	if err := errors.Join(finishErr, reportErr); err != nil {
+		return fmt.Errorf("Perforce changelist %s delivery failed: %w", change, err)
 	}
+	return nil
 }
 
 func (d *Daemon) p4CommandTimeout() time.Duration {

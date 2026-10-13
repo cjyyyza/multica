@@ -74,6 +74,10 @@ func main() {
 	case rest[0] == "changes":
 		emit("CHANGES")
 	case rest[0] == "describe":
+		if original := os.Getenv("P4_FAKE_ORIGINAL_CHANGE"); original != "" && strings.Contains(joined, " " + original + " ") && !strings.Contains(joined, " -O ") {
+			fmt.Fprintln(os.Stderr, "Change " + original + " unknown.")
+			os.Exit(1)
+		}
 		emit("DESCRIBE")
 	case rest[0] == "change" && strings.Contains(joined, " -i "):
 		io.Copy(io.Discard, os.Stdin)
@@ -400,8 +404,8 @@ func TestFinishChangeDeletesAnEmptyChangelist(t *testing.T) {
 	if !strings.Contains(log, "change -d 794230") {
 		t.Fatalf("empty changelist was left behind: %s", log)
 	}
-	if strings.Contains(log, "shelve") {
-		t.Fatalf("an empty changelist was shelved: %s", log)
+	if !strings.Contains(log, "shelve -d -c 794230") {
+		t.Fatalf("the old shelf was not removed: %s", log)
 	}
 }
 
@@ -431,9 +435,9 @@ func TestFinishChangeShelvesRemainingWork(t *testing.T) {
 				t.Fatalf("report lost the +l and not-at-head warnings: %+v", result)
 			}
 			log := fixture.log(t)
-			wantShelve := "shelve -f -c 794230"
+			wantShelve := "shelve -r -c 794230"
 			if edge {
-				wantShelve = "shelve -f -p -c 794230"
+				wantShelve = "shelve -r -p -c 794230"
 			}
 			if !strings.Contains(log, wantShelve) {
 				t.Fatalf("expected %q in %s", wantShelve, log)
@@ -502,6 +506,7 @@ func TestDescribeChangeFollowsASubmitRenumber(t *testing.T) {
 	ref.Depot = "//DJ01_Proj/Dev"
 
 	t.Setenv("P4_FAKE_DESCRIBE", "... change 795115\n... oldChange 795095\n... status submitted\n... user alice\n")
+	t.Setenv("P4_FAKE_ORIGINAL_CHANGE", "795095")
 	info, err := fixture.cache.DescribeChange(context.Background(), ref, "795095")
 	if err != nil {
 		t.Fatalf("DescribeChange: %v", err)
@@ -511,6 +516,10 @@ func TestDescribeChangeFollowsASubmitRenumber(t *testing.T) {
 	}
 	if log := fixture.log(t); !strings.Contains(log, "describe -s -O 795095") {
 		t.Fatalf("describe did not look the changelist up by its original number: %s", log)
+	}
+	current, err := fixture.cache.DescribeChange(context.Background(), ref, "795115")
+	if err != nil || current.Change != "795115" || current.OldChange != "795095" || current.Missing {
+		t.Fatalf("submitted number did not resolve to the original identity: %+v %v", current, err)
 	}
 
 	t.Setenv("P4_FAKE_DESCRIBE", "")

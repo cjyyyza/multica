@@ -47,12 +47,17 @@ type p4OpenChangelist struct {
 
 type p4OpenChangelistsResponse struct {
 	Changelists []p4OpenChangelist `json:"changelists"`
+	// Resolved from the linked issues' current project/workspace resources,
+	// never from a manual changelist's user-supplied port or review URL.
+	P4Depots []P4DepotData `json:"p4_depots"`
 }
 
 type p4StatusUpdate struct {
 	ID               string `json:"id"`
 	Status           string `json:"status"`
 	Number           int    `json:"number"`
+	OriginalNumber   int    `json:"original_number,omitempty"`
+	ServerKey        string `json:"server_key,omitempty"`
 	SubmittedAt      string `json:"submitted_at,omitempty"`
 	SwarmReviewState string `json:"swarm_review_state,omitempty"`
 }
@@ -90,7 +95,11 @@ func (d *Daemon) pollP4ChangelistStatuses(ctx context.Context) {
 		}
 		updates := make([]p4StatusUpdate, 0, len(listed.Changelists))
 		for _, cl := range listed.Changelists {
-			update, ok := d.observeP4Changelist(ctx, cl)
+			ref, allowed := p4PollRef(listed.P4Depots, cl.Port, cl.SwarmURL)
+			if !allowed {
+				continue
+			}
+			update, ok := d.observeP4Changelist(ctx, cl, ref)
 			if ok {
 				updates = append(updates, update)
 			}
@@ -115,12 +124,11 @@ func (d *Daemon) pollP4ChangelistStatuses(ctx context.Context) {
 	}
 }
 
-func (d *Daemon) observeP4Changelist(ctx context.Context, cl p4OpenChangelist) (p4StatusUpdate, bool) {
+func (d *Daemon) observeP4Changelist(ctx context.Context, cl p4OpenChangelist, ref p4depot.Ref) (p4StatusUpdate, bool) {
 	original := cl.OriginalNumber
 	if original == 0 {
 		original = cl.Number
 	}
-	ref := p4depot.Ref{Port: cl.Port, Charset: d.p4CharsetForPort(cl.Port)}
 	info, err := d.p4Cache.DescribeChange(ctx, ref, strconv.Itoa(original))
 	if err != nil {
 		if d.logger != nil {
@@ -129,6 +137,19 @@ func (d *Daemon) observeP4Changelist(ctx context.Context, cl p4OpenChangelist) (
 		return p4StatusUpdate{}, false
 	}
 	update := p4StatusUpdate{ID: cl.ID, Number: cl.Number, Status: cl.Status}
+	if !info.Missing {
+		key, err := d.p4Cache.ServerKey(ctx, ref)
+		if err != nil {
+			if d.logger != nil {
+				d.logger.Warn("p4 server identity lookup failed", "changelist", original, "error", err)
+			}
+			return p4StatusUpdate{}, false
+		}
+		update.ServerKey = key
+		if n, err := strconv.Atoi(info.OldChange); err == nil && n > 0 {
+			update.OriginalNumber = n
+		}
+	}
 	switch {
 	case info.Missing:
 		update.Status = "deleted"
@@ -148,23 +169,18 @@ func (d *Daemon) observeP4Changelist(ctx context.Context, cl p4OpenChangelist) (
 			update.Number = n
 		}
 	}
-	if state := d.swarmReviewState(ctx, cl); state != "" {
+	if state := d.swarmReviewState(ctx, cl, ref); state != "" {
 		update.SwarmReviewState = state
 	}
 	return update, true
 }
 
-func (d *Daemon) swarmReviewState(ctx context.Context, cl p4OpenChangelist) string {
-	if cl.SwarmReviewNumber <= 0 || strings.TrimSpace(cl.SwarmURL) == "" || strings.TrimSpace(cl.Port) == "" {
+func (d *Daemon) swarmReviewState(ctx context.Context, cl p4OpenChangelist, ref p4depot.Ref) string {
+	if cl.SwarmReviewNumber <= 0 || ref.SwarmURL == "" {
 		return ""
 	}
 	result, err := d.p4Cache.Swarm(ctx, p4cache.SwarmParams{
-		Ref: p4depot.Ref{
-			Port:     cl.Port,
-			Depot:    d.p4DepotForPort(cl.Port),
-			Charset:  d.p4CharsetForPort(cl.Port),
-			SwarmURL: cl.SwarmURL,
-		},
+		Ref:      ref,
 		Action:   p4cache.SwarmShow,
 		ReviewID: strconv.Itoa(cl.SwarmReviewNumber),
 	})
@@ -188,48 +204,29 @@ func (d *Daemon) p4WorkspaceIDs() []string {
 	return ids
 }
 
-func (d *Daemon) p4CharsetForPort(port string) string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	for _, ws := range d.workspaces {
-		for _, stored := range ws.allowedP4Identities {
-			if strings.EqualFold(stored.Port, port) && stored.Charset != "" {
-				return stored.Charset
-			}
+// p4PollRef selects only a resource configured for this poll's workspace.
+// The changelist row can name a server/review, but cannot authorize either.
+func p4PollRef(depots []P4DepotData, port, swarmURL string) (p4depot.Ref, bool) {
+	var selected p4depot.Ref
+	found := false
+	for _, depot := range depots {
+		ref, err := p4depot.Normalize(p4depot.Ref(depot))
+		if err != nil || !strings.EqualFold(ref.Port, strings.TrimSpace(port)) {
+			continue
 		}
-		for _, taskDepots := range ws.taskP4Refs {
-			for _, stored := range taskDepots {
-				if strings.EqualFold(stored.Port, port) && stored.Charset != "" {
-					return stored.Charset
-				}
-			}
+		// P4PORT rsh executes a local program. Polling is a background read,
+		// not authorization to start a process on behalf of a workspace member.
+		if strings.HasPrefix(strings.ToLower(ref.Port), "rsh:") {
+			continue
 		}
-	}
-	return ""
-}
-
-func (d *Daemon) p4DepotForPort(port string) string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	for _, ws := range d.workspaces {
-		for _, stored := range ws.allowedP4Identities {
-			if strings.EqualFold(stored.Port, port) && stored.Depot != "" {
-				return stored.Depot
-			}
+		if !found {
+			selected, found = ref, true
+			selected.SwarmURL = ""
 		}
-		for _, taskDepots := range ws.taskP4Refs {
-			for _, stored := range taskDepots {
-				if strings.EqualFold(stored.Port, port) && stored.Depot != "" {
-					return stored.Depot
-				}
-			}
+		if ref.SwarmURL != "" && ref.SwarmURL == strings.TrimRight(strings.TrimSpace(swarmURL), "/") {
+			selected = ref
+			break
 		}
 	}
-	// Describe does not need a depot. Swarm's Normalize does, and a poll
-	// that only has the port still has to name one. The depot path is not
-	// sent to Swarm; it only has to be syntactically valid.
-	if strings.TrimSpace(port) != "" {
-		return "//depot"
-	}
-	return ""
+	return selected, found
 }

@@ -252,6 +252,7 @@ type terminalTaskReportKind uint8
 const (
 	terminalTaskReportComplete terminalTaskReportKind = iota + 1
 	terminalTaskReportFail
+	terminalTaskReportP4Changelist
 
 	// CompleteTask and FailTask can make six 30-second HTTP attempts around
 	// the five backoffs in defaultTerminalRetrySchedule (124 seconds total).
@@ -288,6 +289,15 @@ type terminalTaskReport struct {
 }
 
 type terminalReportSendFunc func(context.Context, terminalTaskReport, []time.Duration) error
+
+// P4 delivery and the task's terminal result have independent acknowledgements.
+// Complete/fail still share one immutable payload and the original file names.
+func (r terminalTaskReport) deliveryKey() string {
+	if r.kind == terminalTaskReportP4Changelist {
+		return "p4-changelist:" + r.taskID
+	}
+	return r.taskID
+}
 
 type executionEnvironmentCommand func() ([]string, error)
 
@@ -6047,8 +6057,12 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		// stamp a bogus reason on every ordinary mid-run cancel.
 		ack := TaskCancelAck{BranchName: result.BranchName, DurableWorkDir: result.DurableWorkDir}
 		var preserved *worktreePreservedError
+		var p4Failure *p4FinalizeError
 		if errors.As(err, &preserved) {
 			ack.ErrorMessage = preserved.Error()
+			ack.FailureReason = "local_directory_error"
+		} else if errors.As(err, &p4Failure) {
+			ack.ErrorMessage = p4Failure.Error()
 			ack.FailureReason = "local_directory_error"
 		}
 		if ackErr := d.client.AckTaskCancelled(ctx, task.ID, ack); ackErr != nil {
@@ -6175,6 +6189,10 @@ func (e *environmentSetupError) Unwrap() error { return e.err }
 func asEnvironmentSetupFailure(err error) error { return &environmentSetupError{err: err} }
 
 func taskRunFailureReason(err error) string {
+	var p4Failure *p4FinalizeError
+	if errors.As(err, &p4Failure) {
+		return "local_directory_error"
+	}
 	if errors.Is(err, errInvalidTaskIdentity) {
 		return taskfailure.ReasonInvalidTaskIdentity.String()
 	}
@@ -6501,7 +6519,7 @@ func (d *Daemon) reportTerminalTask(parentCtx context.Context, report terminalTa
 	if _, err := persistedTerminalReport(report, time.Now()); err != nil {
 		return err
 	}
-	release, ok := d.beginTerminalReportDelivery(report.taskID)
+	release, ok := d.beginTerminalReportDelivery(report.deliveryKey())
 	if !ok {
 		return fmt.Errorf("terminal task report for %s is already being delivered", report.taskID)
 	}
@@ -6529,7 +6547,7 @@ func (d *Daemon) reportTerminalTask(parentCtx context.Context, report terminalTa
 	if err != nil {
 		quarantined := false
 		if persisted {
-			item := pendingTerminalTaskReport{fileName: terminalReportFileName(report.taskID), report: report}
+			item := pendingTerminalTaskReport{fileName: terminalReportFileName(report.deliveryKey()), report: report}
 			quarantined = d.handleTerminalReportDeliveryError(ctx, item, err)
 		}
 		if persisted && !quarantined {
@@ -6540,7 +6558,7 @@ func (d *Daemon) reportTerminalTask(parentCtx context.Context, report terminalTa
 	if !persisted {
 		return nil
 	}
-	item := pendingTerminalTaskReport{fileName: terminalReportFileName(report.taskID), report: report}
+	item := pendingTerminalTaskReport{fileName: terminalReportFileName(report.deliveryKey()), report: report}
 	if err := d.terminalReports.acknowledge(item); err != nil {
 		d.signalTerminalReportReplay()
 		return fmt.Errorf("acknowledge terminal task report: %w", err)
@@ -6578,6 +6596,12 @@ func (d *Daemon) sendTerminalTaskReport(ctx context.Context, report terminalTask
 		return d.terminalReportSend(ctx, report, schedule)
 	}
 	switch report.kind {
+	case terminalTaskReportP4Changelist:
+		var payload p4ChangelistReport
+		if err := json.Unmarshal([]byte(report.output), &payload); err != nil {
+			return fmt.Errorf("decode pending Perforce changelist: %w", err)
+		}
+		return d.client.ReportTaskP4Changelist(ctx, report.taskID, payload, &map[string]any{})
 	case terminalTaskReportComplete:
 		return d.client.completeTaskWithRetrySchedule(ctx, report.taskID, report.output, report.branchName, report.sessionID, report.workDir, report.sessionRolloutMissing, report.retiredSessionID, report.durableWorkDir, schedule)
 	case terminalTaskReportFail:
@@ -8407,7 +8431,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 					defer func() {
 						finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(prepareCtx), 3*d.p4CommandTimeout())
 						defer finishCancel()
-						d.finishP4Workspace(finishCtx, task, binding)
+						if err := d.finishP4Workspace(finishCtx, task, binding); err != nil {
+							returnErr = errors.Join(returnErr, &p4FinalizeError{err: err})
+						}
 					}()
 				}
 			}

@@ -18,10 +18,10 @@ ON CONFLICT (workspace_id, server_key, original_number) DO UPDATE SET
     daemon_id = EXCLUDED.daemon_id,
     port = EXCLUDED.port,
     charset = EXCLUDED.charset,
-    number = EXCLUDED.number,
+    number = CASE WHEN p4_changelist.status = 'submitted' THEN p4_changelist.number ELSE EXCLUDED.number END,
     client = EXCLUDED.client,
     p4_user = EXCLUDED.p4_user,
-    status = EXCLUDED.status,
+    status = CASE WHEN p4_changelist.status IN ('submitted', 'deleted') THEN p4_changelist.status ELSE EXCLUDED.status END,
     description = EXCLUDED.description,
     ticket = EXCLUDED.ticket,
     files_count = EXCLUDED.files_count,
@@ -32,6 +32,68 @@ ON CONFLICT (workspace_id, server_key, original_number) DO UPDATE SET
     submitted_at = COALESCE(EXCLUDED.submitted_at, p4_changelist.submitted_at),
     updated_at = now()
 RETURNING *;
+
+-- name: LockP4ChangelistWorkspace :one
+-- Serialize identity discovery, placeholder adoption and linking. An absent
+-- row cannot be protected with a changelist row lock alone.
+SELECT id FROM workspace WHERE id = $1 FOR UPDATE;
+
+-- name: FindP4ChangelistsByPortNumber :many
+SELECT * FROM p4_changelist
+WHERE workspace_id = $1 AND lower(port) = lower(sqlc.arg('port'))
+  AND (number = sqlc.arg('number') OR original_number = sqlc.arg('number'))
+ORDER BY (server_key <> lower(port)) DESC, (task_id IS NOT NULL) DESC, created_at
+FOR UPDATE;
+
+-- name: FindP4ChangelistIdentityRows :many
+SELECT * FROM p4_changelist
+WHERE workspace_id = $1 AND (
+    (server_key = sqlc.arg('server_key') AND original_number = sqlc.arg('original_number'))
+    OR id = sqlc.narg('source_id')
+    OR (lower(port) = lower(sqlc.arg('port')) AND server_key = lower(port)
+        AND (original_number IN (sqlc.arg('original_number'), sqlc.arg('number'))
+             OR number IN (sqlc.arg('original_number'), sqlc.arg('number'))))
+)
+ORDER BY (server_key = sqlc.arg('server_key') AND original_number = sqlc.arg('original_number')) DESC,
+         (task_id IS NOT NULL) DESC, created_at
+FOR UPDATE;
+
+-- name: SetP4ChangelistIdentity :one
+UPDATE p4_changelist SET server_key = $3, original_number = $4, updated_at = now()
+WHERE id = $1 AND workspace_id = $2 RETURNING *;
+
+-- name: MergeP4Changelist :exec
+-- Keep all issue links and any metadata already delivered for a placeholder.
+-- The caller holds the workspace identity lock and keeps the canonical row.
+WITH metadata AS (
+    UPDATE p4_changelist target SET
+        swarm_review_id = COALESCE(target.swarm_review_id, source.swarm_review_id),
+        daemon_id = CASE WHEN target.daemon_id = '' THEN source.daemon_id ELSE target.daemon_id END,
+        client = CASE WHEN target.client = '' THEN source.client ELSE target.client END,
+        p4_user = CASE WHEN target.p4_user = '' THEN source.p4_user ELSE target.p4_user END,
+        charset = CASE WHEN target.charset = '' THEN source.charset ELSE target.charset END,
+        description = CASE WHEN target.description = '' THEN source.description ELSE target.description END,
+        ticket = CASE WHEN target.ticket = '' THEN source.ticket ELSE target.ticket END,
+        files_count = CASE WHEN target.task_id IS NULL AND source.task_id IS NOT NULL THEN source.files_count ELSE target.files_count END,
+        warnings = CASE WHEN target.task_id IS NULL AND source.task_id IS NOT NULL THEN source.warnings ELSE target.warnings END,
+        exclusive_files = CASE WHEN target.task_id IS NULL AND source.task_id IS NOT NULL THEN source.exclusive_files ELSE target.exclusive_files END,
+        task_id = COALESCE(target.task_id, source.task_id)
+    FROM p4_changelist source
+    WHERE target.id = sqlc.arg('target_id') AND source.id = sqlc.arg('source_id')
+      AND target.workspace_id = sqlc.arg('workspace_id') AND source.workspace_id = sqlc.arg('workspace_id')
+), copied AS (
+    INSERT INTO issue_p4_changelist (issue_id, changelist_id, workspace_id, link_source)
+    SELECT issue_id, sqlc.arg('target_id'), workspace_id, link_source
+    FROM issue_p4_changelist
+    WHERE changelist_id = sqlc.arg('source_id') AND workspace_id = sqlc.arg('workspace_id')
+    ON CONFLICT (issue_id, changelist_id) DO UPDATE SET link_source =
+        CASE WHEN issue_p4_changelist.link_source = 'manual' OR EXCLUDED.link_source = 'manual'
+             THEN 'manual' ELSE 'task' END
+), removed AS (
+    DELETE FROM issue_p4_changelist
+    WHERE changelist_id = sqlc.arg('source_id') AND workspace_id = sqlc.arg('workspace_id')
+)
+DELETE FROM p4_changelist WHERE p4_changelist.id = sqlc.arg('source_id') AND p4_changelist.workspace_id = sqlc.arg('workspace_id');
 
 -- name: InsertManualP4Changelist :one
 -- A person pasting a changelist number. Everything but the number is unknown
@@ -130,8 +192,8 @@ ORDER BY cl.original_number;
 -- numbering, so the stored number stands. An unowned row is claimed by the
 -- daemon applying the update; an owned row only accepts its own daemon.
 UPDATE p4_changelist SET
-    status = sqlc.arg('status'),
-    number = CASE WHEN sqlc.arg('number')::int > 0 THEN sqlc.arg('number')::int ELSE number END,
+    status = CASE WHEN status IN ('submitted', 'deleted') THEN status ELSE sqlc.arg('status') END,
+    number = CASE WHEN status = 'submitted' THEN number WHEN sqlc.arg('number')::int > 0 THEN sqlc.arg('number')::int ELSE number END,
     submitted_at = COALESCE(sqlc.narg('submitted_at'), submitted_at),
     daemon_id = CASE WHEN daemon_id = '' THEN sqlc.arg('daemon_id') ELSE daemon_id END,
     updated_at = now()

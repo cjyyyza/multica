@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -88,6 +89,22 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 	if rej != nil {
 		return nil, rej, nil
 	}
+	// Depot syntax is an alias for a local path, including files not in the
+	// depot yet. fstat cannot reveal those aliases for add/reconcile.
+	for i, path := range files {
+		resolved, rejection, err := d.workspaceLocalPath(ctx, b, path)
+		if rejection != nil || err != nil {
+			return nil, rejection, err
+		}
+		files[i] = resolved
+	}
+	if dest != "" {
+		var err error
+		dest, rej, err = d.workspaceLocalPath(ctx, b, dest)
+		if rej != nil || err != nil {
+			return nil, rej, err
+		}
+	}
 	if action == p4cache.ActionReconcile && len(files) == 0 {
 		return nil, rejectP4(p4CodeActionNotAllowed, "reconcile requires explicit file paths in workspace mode and never scans the whole client", nil, nil), nil
 	}
@@ -153,6 +170,24 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 		},
 		Warnings: warnings,
 	}, nil, nil
+}
+
+func (d *Daemon) workspaceLocalPath(ctx context.Context, b *p4TaskBinding, path string) (string, *p4Rejection, error) {
+	if strings.HasPrefix(path, "//") {
+		local, err := d.p4Cache.LocalPath(ctx, b.ws, path)
+		if err != nil {
+			return "", nil, err
+		}
+		paths, rej := b.resolveOneList(b.ws.Dir, []string{local})
+		if rej != nil {
+			return "", rej, nil
+		}
+		path = paths[0]
+	}
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return "", rejectP4(p4CodeActionNotAllowed, "workspace mode requires individual files, not directories", []string{path}, nil), nil
+	}
+	return path, nil, nil
 }
 
 func (b *p4TaskBinding) rejectForeignChangelist(requested string) *p4Rejection {
@@ -242,8 +277,8 @@ func (b *p4TaskBinding) resolveOneList(cwd string, files []string) ([]string, *p
 		if file == "" {
 			continue
 		}
-		if file == "..." || strings.HasSuffix(file, "/...") || strings.HasSuffix(file, `\...`) {
-			return nil, rejectP4(p4CodeActionNotAllowed, "workspace mode never runs a command against the whole client", []string{file}, nil)
+		if strings.Contains(file, "...") || strings.ContainsAny(file, "*@#") {
+			return nil, rejectP4(p4CodeActionNotAllowed, "workspace mode requires individual file paths without wildcards or revision specifiers", []string{file}, nil)
 		}
 		if strings.HasPrefix(file, "//") {
 			if !b.depotVisible(file) {
@@ -469,11 +504,14 @@ func (d *Daemon) workspaceDescribe(ctx context.Context, b *p4TaskBinding) (*p4Wo
 }
 
 func (d *Daemon) workspaceRetitle(ctx context.Context, b *p4TaskBinding, description string) (*p4WorkspaceResult, *p4Rejection, error) {
+	desc, err := taskChangeDescription(b, description)
+	if err != nil {
+		return nil, rejectP4(p4CodeTicketRequired, err.Error(), nil, nil), nil
+	}
 	change, err := d.ensureTaskChange(ctx, b)
 	if err != nil {
 		return nil, nil, err
 	}
-	desc := taskChangeDescription(b, description)
 	if err := d.p4Cache.SetChangeDescription(ctx, b.ws, change, desc); err != nil {
 		return nil, nil, err
 	}
@@ -491,22 +529,32 @@ func (d *Daemon) workspaceRetitle(ctx context.Context, b *p4TaskBinding, descrip
 	}, nil, nil
 }
 
-func taskChangeDescription(b *p4TaskBinding, description string) string {
+func taskChangeDescription(b *p4TaskBinding, description string) (string, error) {
+	if !p4depot.ValidTicket(b.ticket) {
+		return "", fmt.Errorf("this task has no valid bound ticket")
+	}
 	description = strings.TrimSpace(description)
 	if description == "" {
 		description = b.title
 	}
 	// The ticket prefix and the issue trailer are not the agent's to drop.
-	if !strings.Contains(strings.ToLower(description), "refs #") {
-		return p4depot.ChangeDescription(b.ticket, description, b.issueKey)
+	ticket := p4depot.TicketFromText(description)
+	if ticket != "" && ticket != b.ticket {
+		return "", fmt.Errorf("changelist description must reference this task's ticket refs #%s", b.ticket)
+	}
+	if ticket == "" {
+		if strings.Contains(strings.ToLower(description), "refs #") {
+			return "", fmt.Errorf("changelist description must contain a valid refs #%s marker", b.ticket)
+		}
+		return p4depot.ChangeDescription(b.ticket, description, b.issueKey), nil
 	}
 	if b.issueKey != "" && !p4depot.DescriptionHasTaskTrailer(description, b.issueKey) {
-		return strings.TrimRight(description, "\n") + "\n\n" + p4depot.TaskTrailerPrefix + b.issueKey + "\n"
+		return strings.TrimRight(description, "\n") + "\n\n" + p4depot.TaskTrailerPrefix + b.issueKey + "\n", nil
 	}
 	if !strings.HasSuffix(description, "\n") {
 		description += "\n"
 	}
-	return description
+	return description, nil
 }
 
 func (d *Daemon) workspaceShelve(ctx context.Context, b *p4TaskBinding) (*p4WorkspaceResult, *p4Rejection, error) {
@@ -514,7 +562,7 @@ func (d *Daemon) workspaceShelve(ctx context.Context, b *p4TaskBinding) (*p4Work
 	if change == "" {
 		return nil, rejectP4(p4CodeActionNotAllowed, "this task has no changelist yet; open a file first", nil, nil), nil
 	}
-	flags := []string{"-f"}
+	flags := []string{"-r"}
 	if b.ws.Edge {
 		flags = append(flags, "-p")
 	}

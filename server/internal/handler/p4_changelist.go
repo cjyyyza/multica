@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/p4depot"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -248,10 +250,22 @@ func (h *Handler) ReportTaskP4Changelist(w http.ResponseWriter, r *http.Request)
 	}
 	// Resolved from the task row, not from the request.
 	wsUUID := parseUUID(workspaceID)
+	tx, qtx, err := h.beginP4ChangelistWrite(r.Context(), wsUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save changelist")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	serverKey := p4ServerKey(req.ServerKey, port)
+	if _, _, err := reconcileP4ChangelistIdentity(r.Context(), qtx, wsUUID, serverKey, port, req.Number, original, pgtype.UUID{}); err != nil {
+		slog.Error("resolve p4 changelist identity", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save changelist")
+		return
+	}
 
 	var reviewID pgtype.UUID
 	if req.SwarmReview != nil && req.SwarmReview.Number > 0 {
-		reviewID, ok = h.upsertP4SwarmReview(r.Context(), w, wsUUID, req.Number, *req.SwarmReview)
+		reviewID, ok = h.upsertP4SwarmReview(r.Context(), w, qtx, wsUUID, req.Number, *req.SwarmReview)
 		if !ok {
 			return
 		}
@@ -265,10 +279,10 @@ func (h *Handler) ReportTaskP4Changelist(w http.ResponseWriter, r *http.Request)
 	if status == p4ChangelistStatusSubmitted {
 		submittedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
 	}
-	row, err := h.Queries.UpsertP4Changelist(r.Context(), db.UpsertP4ChangelistParams{
+	row, err := qtx.UpsertP4Changelist(r.Context(), db.UpsertP4ChangelistParams{
 		WorkspaceID:    wsUUID,
 		DaemonID:       middleware.DaemonIDFromContext(r.Context()),
-		ServerKey:      p4ServerKey(req.ServerKey, port),
+		ServerKey:      serverKey,
 		Port:           port,
 		Charset:        strings.TrimSpace(req.Charset),
 		Number:         req.Number,
@@ -290,7 +304,7 @@ func (h *Handler) ReportTaskP4Changelist(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to save changelist")
 		return
 	}
-	if err := h.Queries.LinkIssueP4Changelist(r.Context(), db.LinkIssueP4ChangelistParams{
+	if err := qtx.LinkIssueP4Changelist(r.Context(), db.LinkIssueP4ChangelistParams{
 		IssueID:      task.IssueID,
 		ChangelistID: row.ID,
 		WorkspaceID:  wsUUID,
@@ -300,10 +314,11 @@ func (h *Handler) ReportTaskP4Changelist(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to link changelist")
 		return
 	}
-	h.publishP4ChangelistUpdated(workspaceID, task.IssueID, row.ID)
-	if row.Status == p4ChangelistStatusSubmitted {
-		h.maybeAutoCompleteIssueFromP4(r.Context(), wsUUID, task.IssueID)
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save changelist")
+		return
 	}
+	h.afterP4ChangelistStatusChange(r.Context(), wsUUID, row)
 
 	resp, ok := h.p4ChangelistForIssue(r.Context(), task.IssueID, wsUUID, row.ID)
 	if !ok {
@@ -321,6 +336,7 @@ func (h *Handler) ReportTaskP4Changelist(w http.ResponseWriter, r *http.Request)
 func (h *Handler) upsertP4SwarmReview(
 	ctx context.Context,
 	w http.ResponseWriter,
+	q *db.Queries,
 	workspaceID pgtype.UUID,
 	changelistNumber int32,
 	review p4SwarmReviewReport,
@@ -336,7 +352,7 @@ func (h *Handler) upsertP4SwarmReview(
 		state = "needsReview"
 	}
 	desc := strings.TrimSpace(review.Description)
-	saved, err := h.Queries.UpsertSwarmReview(ctx, db.UpsertSwarmReviewParams{
+	saved, err := q.UpsertSwarmReview(ctx, db.UpsertSwarmReviewParams{
 		WorkspaceID:  workspaceID,
 		SwarmUrl:     base,
 		ReviewNumber: int32(review.Number),
@@ -408,7 +424,23 @@ func (h *Handler) ListOpenP4ChangelistsForDaemon(w http.ResponseWriter, r *http.
 		return
 	}
 	out := make([]map[string]any, 0, len(rows))
+	depots, err := h.p4PollingDepots(r.Context(), wsUUID, rows)
+	if err != nil {
+		slog.Error("resolve p4 polling resources", "error", err, "workspace_id", workspaceID)
+		writeError(w, http.StatusInternalServerError, "failed to load Perforce resources")
+		return
+	}
 	for _, row := range rows {
+		allowed := false
+		for _, depot := range depots {
+			if strings.EqualFold(depot.Port, row.Port) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			continue
+		}
 		out = append(out, map[string]any{
 			"id":                  uuidToString(row.ID),
 			"port":                row.Port,
@@ -419,13 +451,64 @@ func (h *Handler) ListOpenP4ChangelistsForDaemon(w http.ResponseWriter, r *http.
 			"swarm_url":           textPtr(row.SwarmUrl),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"changelists": out})
+	writeJSON(w, http.StatusOK, map[string]any{"changelists": out, "p4_depots": depots})
+}
+
+// Project depots do not belong in the daemon's workspace-wide task allowlist.
+// Resolve them specifically for polling, including after a task has ended or
+// the daemon has restarted and no claim-time resources remain in memory.
+func (h *Handler) p4PollingDepots(ctx context.Context, workspaceID pgtype.UUID, rows []db.ListOpenP4ChangelistsForDaemonRow) ([]P4DepotData, error) {
+	resources := map[string]P4DepotData{}
+	projects := map[string]bool{}
+	for _, row := range rows {
+		issues, err := h.Queries.ListIssueIDsForP4Changelist(ctx, db.ListIssueIDsForP4ChangelistParams{WorkspaceID: workspaceID, ChangelistID: row.ID})
+		if err != nil {
+			return nil, err
+		}
+		for _, issueID := range issues {
+			issue, err := h.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{ID: issueID, WorkspaceID: workspaceID})
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			projectKey := uuidToString(issue.ProjectID)
+			if projects[projectKey] {
+				continue
+			}
+			project, err := h.resolveClaimProjectContext(ctx, issue.ProjectID, workspaceID)
+			if err != nil {
+				return nil, err
+			}
+			projects[projectKey] = true
+			for _, depot := range project.P4Depots {
+				ref, err := p4depot.Normalize(p4depot.Ref(depot))
+				if err != nil || strings.HasPrefix(strings.ToLower(ref.Port), "rsh:") {
+					continue
+				}
+				resources[p4depot.Identity(ref)] = P4DepotData(ref)
+			}
+		}
+	}
+	keys := make([]string, 0, len(resources))
+	for key := range resources {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]P4DepotData, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, resources[key])
+	}
+	return out, nil
 }
 
 type p4ChangelistStatusUpdate struct {
 	ID               string `json:"id"`
 	Status           string `json:"status"`
 	Number           int32  `json:"number"`
+	OriginalNumber   int32  `json:"original_number"`
+	ServerKey        string `json:"server_key"`
 	SubmittedAt      string `json:"submitted_at"`
 	SwarmReviewState string `json:"swarm_review_state"`
 }
@@ -477,14 +560,8 @@ func (h *Handler) UpdateP4ChangelistStatuses(w http.ResponseWriter, r *http.Requ
 			submittedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
 		}
 
-		row, err := h.Queries.UpdateP4ChangelistStatus(r.Context(), db.UpdateP4ChangelistStatusParams{
-			ID:          id,
-			WorkspaceID: wsUUID,
-			Status:      status,
-			Number:      update.Number,
-			SubmittedAt: submittedAt,
-			DaemonID:    daemonID,
-		})
+		update.Status = status
+		row, err := h.applyP4ChangelistStatus(r.Context(), wsUUID, id, daemonID, update, submittedAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Gone, in another workspace, or owned by a different daemon.
 			continue
@@ -495,15 +572,6 @@ func (h *Handler) UpdateP4ChangelistStatuses(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		updated++
-		if state := strings.TrimSpace(update.SwarmReviewState); state != "" && row.SwarmReviewID.Valid {
-			if err := h.Queries.UpdateP4ChangelistSwarmReviewState(r.Context(), db.UpdateP4ChangelistSwarmReviewStateParams{
-				ID:          id,
-				WorkspaceID: wsUUID,
-				State:       state,
-			}); err != nil {
-				slog.Warn("update swarm review state from p4 poll", "error", err, "changelist_id", update.ID)
-			}
-		}
 		h.afterP4ChangelistStatusChange(r.Context(), wsUUID, row)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"updated": updated})
@@ -573,18 +641,34 @@ func (h *Handler) LinkIssueP4Changelist(w http.ResponseWriter, r *http.Request) 
 			"port is required: this issue's project does not have exactly one Perforce depot to take it from")
 		return
 	}
-	row, err := h.Queries.InsertManualP4Changelist(r.Context(), db.InsertManualP4ChangelistParams{
-		WorkspaceID: issue.WorkspaceID,
-		ServerKey:   p4ServerKey("", port),
-		Port:        port,
-		Number:      req.Number,
+	tx, qtx, err := h.beginP4ChangelistWrite(r.Context(), issue.WorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to link changelist")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	existing, err := qtx.FindP4ChangelistsByPortNumber(r.Context(), db.FindP4ChangelistsByPortNumberParams{
+		WorkspaceID: issue.WorkspaceID, Port: port, Number: req.Number,
 	})
+	var row db.P4Changelist
+	if err == nil && len(existing) > 0 {
+		row = existing[0]
+		for _, duplicate := range existing[1:] {
+			if err = qtx.MergeP4Changelist(r.Context(), db.MergeP4ChangelistParams{WorkspaceID: issue.WorkspaceID, TargetID: row.ID, SourceID: duplicate.ID}); err != nil {
+				break
+			}
+		}
+	} else if err == nil {
+		row, err = qtx.InsertManualP4Changelist(r.Context(), db.InsertManualP4ChangelistParams{
+			WorkspaceID: issue.WorkspaceID, ServerKey: p4ServerKey("", port), Port: port, Number: req.Number,
+		})
+	}
 	if err != nil {
 		slog.Error("insert manual p4 changelist", "error", err, "issue_id", uuidToString(issue.ID))
 		writeError(w, http.StatusInternalServerError, "failed to link changelist")
 		return
 	}
-	if err := h.Queries.LinkIssueP4Changelist(r.Context(), db.LinkIssueP4ChangelistParams{
+	if err := qtx.LinkIssueP4Changelist(r.Context(), db.LinkIssueP4ChangelistParams{
 		IssueID:      issue.ID,
 		ChangelistID: row.ID,
 		WorkspaceID:  issue.WorkspaceID,
@@ -594,12 +678,11 @@ func (h *Handler) LinkIssueP4Changelist(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to link changelist")
 		return
 	}
-	h.publishP4ChangelistUpdated(uuidToString(issue.WorkspaceID), issue.ID, row.ID)
-	// Linking an already-submitted changelist is a completion event for the
-	// issue, the same way linking a merged PR is.
-	if row.Status == p4ChangelistStatusSubmitted {
-		h.maybeAutoCompleteIssueFromP4(r.Context(), issue.WorkspaceID, issue.ID)
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to link changelist")
+		return
 	}
+	h.afterP4ChangelistStatusChange(r.Context(), issue.WorkspaceID, row)
 
 	resp, ok := h.p4ChangelistForIssue(r.Context(), issue.ID, issue.WorkspaceID, row.ID)
 	if !ok {
@@ -621,7 +704,13 @@ func (h *Handler) UnlinkIssueP4Changelist(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	rows, err := h.Queries.UnlinkIssueP4Changelist(r.Context(), db.UnlinkIssueP4ChangelistParams{
+	tx, qtx, err := h.beginP4ChangelistWrite(r.Context(), issue.WorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to unlink changelist")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	rows, err := qtx.UnlinkIssueP4Changelist(r.Context(), db.UnlinkIssueP4ChangelistParams{
 		IssueID:      issue.ID,
 		ChangelistID: changelistID,
 		WorkspaceID:  issue.WorkspaceID,
@@ -635,11 +724,17 @@ func (h *Handler) UnlinkIssueP4Changelist(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, "changelist not linked to this issue")
 		return
 	}
-	if err := h.Queries.DeleteOrphanP4Changelist(r.Context(), db.DeleteOrphanP4ChangelistParams{
+	if err := qtx.DeleteOrphanP4Changelist(r.Context(), db.DeleteOrphanP4ChangelistParams{
 		ID:          changelistID,
 		WorkspaceID: issue.WorkspaceID,
 	}); err != nil {
 		slog.Warn("delete orphan p4 changelist", "error", err, "changelist_id", uuidToString(changelistID))
+		writeError(w, http.StatusInternalServerError, "failed to unlink changelist")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to unlink changelist")
+		return
 	}
 	h.publishP4ChangelistUpdated(uuidToString(issue.WorkspaceID), issue.ID, changelistID)
 	// Removing the last unsubmitted changelist can leave only submitted ones.

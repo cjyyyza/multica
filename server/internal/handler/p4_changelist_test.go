@@ -380,7 +380,8 @@ func TestP4ChangelistPollListClaimsManualRowsOnce(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-	issueID := dbfx.Issue(t, "p4 claim fixture")
+	projectID := p4ConfiguredProject(t, "p4 claim fixture", p4TestPort)
+	issueID := dbfx.Issue(t, "p4 claim fixture", testutil.Cols{"project_id": projectID})
 	var manual P4ChangelistResponse
 	testutil.Call(t, testHandler.LinkIssueP4Changelist, p4UserRequest(
 		http.MethodPost, "/api/issues/"+issueID+"/p4-changelists",

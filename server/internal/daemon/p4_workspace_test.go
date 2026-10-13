@@ -166,6 +166,23 @@ func TestWorkspaceRunInvariants(t *testing.T) {
 			forbidLog: " add ",
 		},
 		{
+			name:      "I6 untracked sidecar in depot syntax",
+			action:    "add",
+			files:     []string{"//DJ01_Proj/Dev/.multica/run.json"},
+			change:    "1001",
+			sidecars:  []string{filepath.Join(root, ".multica")},
+			wantCode:  p4CodeSidecarPath,
+			forbidLog: " add ",
+		},
+		{
+			name:      "I6 wildcard can include untracked sidecars",
+			action:    "reconcile",
+			files:     []string{"*"},
+			change:    "1001",
+			wantCode:  p4CodeActionNotAllowed,
+			forbidLog: " reconcile ",
+		},
+		{
 			name:     "I8 path outside the client",
 			action:   "edit",
 			files:    []string{filepath.Join(filepath.Dir(root), "outside.cpp")},
@@ -219,7 +236,7 @@ func TestWorkspaceRunInvariants(t *testing.T) {
 			action:  "shelve",
 			change:  "1001",
 			edge:    true,
-			wantLog: "shelve -f -p -c 1001",
+			wantLog: "shelve -r -p -c 1001",
 		},
 	}
 
@@ -228,6 +245,7 @@ func TestWorkspaceRunInvariants(t *testing.T) {
 			logPath := filepath.Join(t.TempDir(), "p4.log")
 			t.Setenv("P4_FAKE_LOG", logPath)
 			t.Setenv("P4_FAKE_FSTAT", tc.fstat)
+			t.Setenv("P4_FAKE_WHERE", "... depotFile //DJ01_Proj/Dev/.multica/run.json\n... path "+filepath.Join(root, ".multica", "run.json")+"\n")
 			t.Setenv("P4_FAKE_MUTATE", "ok\n")
 			t.Setenv("P4_FAKE_CHANGEIN", "Change 1001 created.\n")
 			t.Setenv("P4USER", "alice")
