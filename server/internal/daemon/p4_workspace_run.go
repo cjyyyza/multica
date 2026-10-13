@@ -343,7 +343,9 @@ func (b *p4TaskBinding) rejectFileStates(action string, states []p4cache.FileSta
 		if action == p4cache.ActionRevert {
 			continue
 		}
-		if state.OtherLock {
+		// A +l file anyone else has open is locked to them: the server reports
+		// that as a plain otherOpen, and sets otherLock only for `p4 lock`.
+		if state.OtherLock || (state.Exclusive() && len(state.OtherOpens) > 0) {
 			lockedFiles = append(lockedFiles, state.DepotFile)
 			lockedHolders = append(lockedHolders, state.OtherOpens...)
 			continue

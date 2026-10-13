@@ -529,6 +529,16 @@ func parseZtag(out string) []map[string]string {
 		if !ok {
 			continue
 		}
+		// Per-client details (otherOpenN, otherLockN, ...) arrive nested as
+		// "... ... key value". They belong to the record they follow, so the
+		// extra marker is dropped rather than read as a key.
+		for {
+			nested, isNested := strings.CutPrefix(rest, "... ")
+			if !isNested {
+				break
+			}
+			rest = nested
+		}
 		key, value, _ := strings.Cut(rest, " ")
 		if _, exists := current[key]; exists {
 			// A second record started without a blank line between them.

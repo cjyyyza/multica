@@ -87,6 +87,28 @@ func TestWorkspaceRunInvariants(t *testing.T) {
 			wantCode:   p4CodeExclusiveLocked,
 			wantHolder: "bob@bob_DEV",
 		},
+		// The shape the DJ01 server really returns for a +l file someone else
+		// has open: nested "... ..." lines and no otherLock at all.
+		{
+			name:       "I3 exclusive open held by another client (real server output)",
+			action:     "edit",
+			files:      []string{"Game/A.cpp"},
+			change:     "1001",
+			allow:      true,
+			fstat:      "... depotFile " + depotFile + "\n... headType binary+l\n... headRev 3\n... haveRev 3\n... ... otherOpen0 erin@erin_Dev_Art\n... ... otherAction0 edit\n... ... otherChange0 default\n... ... otherOpen 1\n",
+			wantCode:   p4CodeExclusiveLocked,
+			wantHolder: "erin@erin_Dev_Art",
+			forbidLog:  "edit -c",
+		},
+		{
+			name:     "opened elsewhere warns (real server output)",
+			action:   "edit",
+			files:    []string{"Game/A.cpp"},
+			change:   "1001",
+			fstat:    "... depotFile " + depotFile + "\n... headType text\n... headRev 2\n... haveRev 2\n... ... otherOpen0 frank@frank_Dev\n... ... otherAction0 edit\n... ... otherChange0 780652\n... ... otherOpen 1\n",
+			wantLog:  "edit -c 1001",
+			wantWarn: "opened_elsewhere",
+		},
 		{
 			name:     "I3 exclusive type not allowed",
 			action:   "edit",
