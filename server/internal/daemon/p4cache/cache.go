@@ -332,12 +332,18 @@ func (c *Cache) commandAt(ctx context.Context, dir string, args ...string) (*exe
 	}
 	runCtx, cancel := context.WithTimeout(ctx, c.timeout())
 	cmd := exec.CommandContext(runCtx, c.p4bin(), args...)
+	cmd.Env = os.Environ()
 	if strings.TrimSpace(dir) != "" {
 		cmd.Dir = dir
+		// p4 finds P4CONFIG (p4config.txt) by walking up from $PWD, not from
+		// the process working directory, and exec does not set PWD. Without
+		// it a workspace's own config is ignored and the registry P4CLIENT —
+		// on a developer machine routinely a client bound to another host —
+		// wins silently.
+		cmd.Env = append(cmd.Env, "PWD="+dir)
 	} else {
 		cmd.Dir = filepath.VolumeName(os.TempDir()) + string(os.PathSeparator)
 	}
-	cmd.Env = os.Environ()
 	c.logger().Debug("p4 command", "args", args)
 	return cmd, cancel, nil
 }
