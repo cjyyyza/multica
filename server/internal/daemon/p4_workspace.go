@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -170,14 +171,18 @@ func (d *Daemon) rejectTrackedSidecars(ctx context.Context, b *p4TaskBinding, wo
 
 // sidecarFstatPatterns turns sidecar paths into fstat arguments. fstat on a
 // bare directory answers "no such file(s)" even when the depot tracks files
-// under it, so every directory candidate is queried as <dir>/... as well.
+// under it, so each candidate is also queried as <path>/.... A candidate that
+// is a file on disk is left alone; one that is a directory or does not exist
+// yet (.multica, .agent_context) gets the wildcard. A name-based test cannot
+// tell them apart: ".multica" has an extension as far as filepath.Ext goes.
 func sidecarFstatPatterns(candidates []string) []string {
 	patterns := make([]string, 0, 2*len(candidates))
 	for _, path := range candidates {
 		patterns = append(patterns, path)
-		if filepath.Ext(path) == "" {
-			patterns = append(patterns, filepath.Join(path, "..."))
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			continue
 		}
+		patterns = append(patterns, filepath.Join(path, "..."))
 	}
 	return patterns
 }

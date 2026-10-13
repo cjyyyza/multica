@@ -553,3 +553,31 @@ func TestMatchTaskDepotPrefersTheLongestCoveringPath(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// ".multica" and ".agent_context" have an extension as far as filepath.Ext
+// goes, so a name-based directory test skipped the wildcard for both. They
+// must get <dir>/... whether or not they exist yet; a real file must not.
+func TestSidecarFstatPatternsQueriesDirectoriesRecursively(t *testing.T) {
+	root := t.TempDir()
+	brief := filepath.Join(root, "CLAUDE.md")
+	if err := os.WriteFile(brief, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	skills := filepath.Join(root, ".claude", "skills")
+	if err := os.MkdirAll(skills, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	multica := filepath.Join(root, ".multica")
+	agentContext := filepath.Join(root, ".agent_context")
+
+	got := sidecarFstatPatterns([]string{brief, multica, agentContext, skills})
+	want := []string{
+		brief,
+		multica, filepath.Join(multica, "..."),
+		agentContext, filepath.Join(agentContext, "..."),
+		skills, filepath.Join(skills, "..."),
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("patterns =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
