@@ -257,13 +257,42 @@ func (c *swarmClient) listReviews(ctx context.Context, changelist string) ([]Swa
 	q := url.Values{}
 	q.Set("max", "50")
 	if changelist != "" {
-		q.Set("change", changelist)
+		// Swarm reads the filter as the array change[]; a bare "change" is
+		// ignored on DJ01's Swarm 2024.2, which then answers with its 50 newest
+		// reviews instead.
+		q.Set("change[]", changelist)
 	}
 	raw, err := c.do(ctx, http.MethodGet, "/reviews?"+q.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
-	return parseReviewList(c.baseURL, raw)
+	reviews, err := parseReviewList(c.baseURL, raw)
+	if err != nil || changelist == "" {
+		return reviews, err
+	}
+	// Never trust the server-side filter alone. When it is ignored, the first
+	// review in the answer is someone else's, and treating it as this
+	// changelist's review once attached a colleague's review to a task (and
+	// would have let cleanup archive it). Keep only reviews that list the
+	// changelist.
+	return reviewsForChange(reviews, changelist), nil
+}
+
+func reviewsForChange(reviews []SwarmReview, changelist string) []SwarmReview {
+	want, err := strconv.Atoi(strings.TrimSpace(changelist))
+	if err != nil {
+		return nil
+	}
+	var out []SwarmReview
+	for _, review := range reviews {
+		for _, change := range review.Changes {
+			if change == want {
+				out = append(out, review)
+				break
+			}
+		}
+	}
+	return out
 }
 
 func (c *swarmClient) createReview(ctx context.Context, changelist, description string, reviewers []string) (*SwarmReview, error) {

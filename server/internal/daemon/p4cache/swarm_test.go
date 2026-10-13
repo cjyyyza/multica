@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -150,5 +151,63 @@ func TestSwarmDoesNotForwardTicketsThroughRedirects(t *testing.T) {
 	}
 	if redirected.Load() {
 		t.Error("request reached an unconfigured destination")
+	}
+}
+
+// On DJ01's Swarm 2024.2 the reviews list ignored a bare `change` filter and
+// returned its newest reviews. The daemon took the first one as the task
+// changelist's existing review and attached a colleague's review (795321) to
+// the issue. The list must send change[] and keep only reviews that name the
+// changelist, whatever the server returns.
+func TestSwarmListKeepsOnlyReviewsOfTheChangelist(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/reviews") {
+			gotQuery = r.URL.RawQuery
+			w.Header().Set("Content-Type", "application/json")
+			// The filter is ignored: unrelated reviews come first.
+			_, _ = w.Write([]byte(`{"error":null,"messages":[],"data":{"reviews":[
+				{"id":795321,"author":"carol","state":"needsReview","changes":[795151,795322]},
+				{"id":795233,"author":"dave","state":"needsReview","changes":[795231,795234]}
+			]}}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	t.Setenv("P4_FAKE_LOG", filepath.Join(dir, "p4.log"))
+	t.Setenv("P4USER", "alice")
+	cache := &Cache{P4Path: writeFakeP4(t, dir), HTTPClient: srv.Client()}
+	result, err := cache.Swarm(context.Background(), SwarmParams{
+		Ref:        p4depot.Ref{Port: "p4:1666", Depot: "//depot/UE", SwarmURL: srv.URL},
+		Action:     SwarmList,
+		Changelist: "795343",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Reviews) != 0 {
+		t.Fatalf("reviews = %+v, want none: no returned review lists CL 795343", result.Reviews)
+	}
+	values, _ := url.ParseQuery(gotQuery)
+	if values.Get("change[]") != "795343" {
+		t.Fatalf("query = %q, want change[]=795343", gotQuery)
+	}
+}
+
+func TestReviewsForChangeMatchesAnyListedChange(t *testing.T) {
+	reviews := []SwarmReview{
+		{ID: 1, Changes: []int{100, 101}},
+		{ID: 2, Changes: []int{795343, 795344}},
+		{ID: 3, Changes: []int{795343}},
+	}
+	got := reviewsForChange(reviews, "795343")
+	if len(got) != 2 || got[0].ID != 2 || got[1].ID != 3 {
+		t.Fatalf("got %+v, want reviews 2 and 3", got)
+	}
+	if got := reviewsForChange(reviews, "not-a-number"); got != nil {
+		t.Fatalf("non-numeric changelist matched %+v", got)
 	}
 }
