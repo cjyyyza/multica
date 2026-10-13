@@ -170,7 +170,48 @@ func (c *Cache) helixTicket(ctx context.Context, ref p4depot.Ref, user string) (
 	if ticket := ticketForPort(string(out), ref.Port, user); ticket != "" {
 		return ticket, nil
 	}
+	// A server that belongs to a cluster stores its ticket under the cluster
+	// name, not the port: DJ01's commit server lists it as
+	// "localhost:p4_dj01 (user)". Ask the server which cluster it is.
+	if cluster := c.serverCluster(ctx, ref, user); cluster != "" {
+		if ticket := ticketForCluster(string(out), cluster, user); ticket != "" {
+			return ticket, nil
+		}
+	}
 	return "", fmt.Errorf("no Helix ticket for %s (run `p4 login` on this machine)", ref.Port)
+}
+
+func (c *Cache) serverCluster(ctx context.Context, ref p4depot.Ref, user string) string {
+	out, err := c.output(ctx, ref, user, "", "-ztag", "info")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(firstZtagRecord(string(out))["serverCluster"])
+}
+
+// ticketForCluster finds the ticket `p4 tickets` lists as "<host>:<cluster>
+// (user) ticket". Only the cluster part identifies the server; the host part
+// is whatever address the login used.
+func ticketForCluster(out, cluster, user string) string {
+	cluster = strings.TrimSpace(cluster)
+	user = strings.TrimSpace(user)
+	if cluster == "" {
+		return ""
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 || !strings.HasPrefix(fields[1], "(") || !strings.HasSuffix(fields[1], ")") {
+			continue
+		}
+		hostPart, gotUser, ticket := fields[0], fields[1][1:len(fields[1])-1], fields[2]
+		if user != "" && gotUser != user {
+			continue
+		}
+		if i := strings.LastIndex(hostPart, ":"); i >= 0 && strings.EqualFold(hostPart[i+1:], cluster) {
+			return ticket
+		}
+	}
+	return ""
 }
 
 func ticketForPort(out, port, user string) string {

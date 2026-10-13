@@ -108,6 +108,30 @@ func TestTicketForPort(t *testing.T) {
 	}
 }
 
+// `p4 tickets` on the DJ01 machine prints the commit server's ticket under its
+// cluster name, so the port never matches. Swarm review creation failed with
+// "no Helix ticket" in the live acceptance test until the cluster was tried.
+func TestTicketForCluster(t *testing.T) {
+	t.Parallel()
+	real := "localhost:p4_dj01 (yujian01) 0123456789ABCDEF0123456789ABCDEF\r\n"
+	for _, tc := range []struct{ name, output, cluster, user, want string }{
+		{"DJ01 cluster-keyed ticket", real, "p4_dj01", "yujian01", "0123456789ABCDEF0123456789ABCDEF"},
+		{"cluster match is case-insensitive", real, "P4_DJ01", "yujian01", "0123456789ABCDEF0123456789ABCDEF"},
+		{"other user", real, "p4_dj01", "alice", ""},
+		{"other cluster", real, "p4_other", "yujian01", ""},
+		{"no cluster", real, "", "yujian01", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ticketForCluster(tc.output, tc.cluster, tc.user); got != tc.want {
+				t.Fatalf("ticket = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	if got := ticketForPort(real, "p4-commit.example.com:1666", "yujian01"); got != "" {
+		t.Fatalf("port lookup unexpectedly matched the cluster-keyed ticket: %q", got)
+	}
+}
+
 func TestSwarmDoesNotForwardTicketsThroughRedirects(t *testing.T) {
 	var redirected atomic.Bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
