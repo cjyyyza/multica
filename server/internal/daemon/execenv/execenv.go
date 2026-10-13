@@ -29,9 +29,23 @@ type P4DepotForEnv struct {
 	Depot       string
 	Stream      string
 	User        string
+	Charset     string
 	Changelist  string
 	Description string
 	SwarmURL    string
+}
+
+// P4WorkspaceForEnv describes the human-owned Helix client a task edits in
+// place (workspace mode). Nil when the task is not bound to one.
+type P4WorkspaceForEnv struct {
+	Port           string
+	User           string
+	Client         string
+	Root           string
+	Stream         string
+	Ticket         string // number after `refs #`; empty means files cannot be opened
+	Change         string // pending task changelist reused from an earlier run, if any
+	AllowExclusive bool   // +l files may be opened through the daemon
 }
 
 // ProjectResourceForEnv describes a single resource attached to the issue's
@@ -169,6 +183,7 @@ type TaskContextForEnv struct {
 	DisabledRuntimeSkills         []RuntimeSkillRefForEnv
 	Repos                         []RepoContextForEnv     // workspace repos available for checkout
 	P4Depots                      []P4DepotForEnv         // Perforce depots available for `multica p4 sync`
+	P4Workspace                   *P4WorkspaceForEnv      // human-owned Helix client this task edits in place; nil otherwise
 	ProjectID                     string                  // active project for this task, when present
 	ProjectTitle                  string                  // human-readable project title
 	ProjectDescription            string                  // durable project-level context, rendered into the brief's Project Context section

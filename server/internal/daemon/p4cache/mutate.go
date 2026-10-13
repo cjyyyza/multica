@@ -3,6 +3,7 @@ package p4cache
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,7 +23,6 @@ const (
 	ActionMove      = "move"
 	ActionReopen    = "reopen"
 	ActionChange    = "change"
-	ActionSubmit    = "submit"
 	ActionShelve    = "shelve"
 	ActionUnshelve  = "unshelve"
 	ActionDescribe  = "describe"
@@ -53,10 +53,12 @@ type MutateResult struct {
 	Output     string `json:"output"`
 }
 
-var (
-	changeCreated   = regexp.MustCompile(`(?i)Change\s+(\d+)\s+created`)
-	changeSubmitted = regexp.MustCompile(`(?i)Change\s+(\d+)\s+submitted`)
-)
+var changeCreated = regexp.MustCompile(`(?i)Change\s+(\d+)\s+created`)
+
+// ErrSubmitNotSupported is returned for action=submit in every mode. Multica
+// never submits on an agent's behalf: a person verifies the change in UE and
+// submits it with P4V or safesubmit.
+var ErrSubmitNotSupported = errors.New("agents do not submit; a person verifies the change in UE and submits it")
 
 // Mutate runs an allowlisted p4 verb against the task client created by Sync.
 func (c *Cache) Mutate(ctx context.Context, params MutateParams) (*MutateResult, error) {
@@ -65,6 +67,9 @@ func (c *Cache) Mutate(ctx context.Context, params MutateParams) (*MutateResult,
 		return nil, err
 	}
 	action := strings.ToLower(strings.TrimSpace(params.Action))
+	if action == "submit" {
+		return nil, ErrSubmitNotSupported
+	}
 	if !validMutateAction(action) {
 		return nil, fmt.Errorf("unsupported perforce action %q", params.Action)
 	}
@@ -146,18 +151,13 @@ func (c *Cache) Mutate(ctx context.Context, params MutateParams) (*MutateResult,
 		return nil, err
 	}
 	result.Output = strings.TrimSpace(string(out))
-	if action == ActionSubmit {
-		if match := changeSubmitted.FindStringSubmatch(result.Output); len(match) == 2 {
-			result.Changelist = match[1]
-		}
-	}
 	return result, nil
 }
 
 func validMutateAction(action string) bool {
 	switch action {
 	case ActionEdit, ActionAdd, ActionDelete, ActionRevert, ActionOpened,
-		ActionReconcile, ActionMove, ActionReopen, ActionChange, ActionSubmit,
+		ActionReconcile, ActionMove, ActionReopen, ActionChange,
 		ActionShelve, ActionUnshelve, ActionDescribe:
 		return true
 	default:
@@ -226,14 +226,6 @@ func mutateArgs(action string, files []string, params MutateParams) ([]string, e
 			return nil, fmt.Errorf("reopen requires --changelist")
 		}
 		return append([]string{"reopen", "-c", cl}, files...), nil
-	case ActionSubmit:
-		args := []string{"submit"}
-		if cl != "" {
-			args = append(args, "-c", cl)
-		} else if desc := strings.TrimSpace(params.Description); desc != "" {
-			args = append(args, "-d", desc)
-		}
-		return args, nil
 	case ActionShelve:
 		if cl == "" {
 			return nil, fmt.Errorf("shelve requires --changelist")

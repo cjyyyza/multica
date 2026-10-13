@@ -431,7 +431,8 @@ describe("PullRequestList sidebar rows", () => {
   it.each([
     ["approved", "open", "Approved"],
     ["needsRevision", "open", "Needs revision"],
-    ["committed", "merged", "Merged"],
+    // A landed Swarm review is a Perforce submit; nobody calls that a merge.
+    ["committed", "merged", "Submitted"],
     ["rejected", "closed", "Closed"],
     ["archived", "closed", "Closed"],
     ["pending", "open", "Needs review"],
@@ -455,6 +456,18 @@ describe("PullRequestList sidebar rows", () => {
     expect(screen.queryByText("backend")).not.toBeInTheDocument();
     expect(screen.queryByText("No checks yet")).not.toBeInTheDocument();
     expect(screen.getByRole("link")).toHaveAttribute("href", "https://example.test/pr/1");
+  });
+
+  it("keeps the Git wording for a merged PR beside a submitted Swarm review", async () => {
+    mockPRs = [
+      makePR({ id: "gh", number: 12, state: "merged", merged_at: new Date().toISOString() }),
+      makePR({ id: "swarm", provider: "swarm", number: 77, state: "merged", swarm_state: "committed", branch: "cl/1001" }),
+    ];
+    renderList();
+    await waitForRender();
+    const verdicts = screen.getAllByTestId("pull-request-verdict");
+    expect(verdicts[0]).toHaveTextContent("Merged");
+    expect(verdicts[1]).toHaveTextContent("Submitted");
   });
 
   it("treats an older open Swarm row with no swarm_state as needs review", async () => {

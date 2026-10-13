@@ -38,6 +38,7 @@ multica p4 sync --port <p4port> --depot <depot-path>
 multica p4 sync --port <p4port> --depot <depot-path> --fresh
 multica p4 edit --port <p4port> --depot <depot-path> -- <files>
 multica p4 add-files --port <p4port> --depot <depot-path> -- <files>
+multica p4 status --output json
 multica p4 swarm create --port <p4port> --depot <depot-path> --changelist <n> --output json
 multica p4 swarm link --port <p4port> --depot <depot-path> --review <id>
 ```
@@ -110,23 +111,67 @@ absent, you are not in the normal agent checkout path. When a project
 ref by default for the current task; an explicit
 `repo checkout <url> --ref <branch-or-sha>` overrides it.
 
+Perforce work runs in one of two modes, and the runtime brief says which one
+this task is in. **Workspace mode** is used when the project carries both an
+`in_place` `local_directory` on this daemon and a `perforce_depot`, and the
+daemon resolves a Helix client under that directory: the task edits files in
+the requesting person's own client. Otherwise the task is in **task-client
+mode** and syncs its own copy with `p4 sync`.
+
+Neither mode submits. An agent shelves; the person who owns the files verifies
+in the editor and submits.
+
+### Workspace mode
+
+The daemon creates one pending changelist for the task and every file the
+agent opens goes into it. Its description carries `refs #<ticket>` — the
+易协作 ticket number, resolved from the issue's import record or from a
+`refs #<ticket>` in the issue title or description. **Without a ticket no file
+can be opened**: `p4 edit` returns `ticket_required`, and the fix is to ask a
+human to put `refs #<ticket>` in the issue description, not to invent a
+number.
+
+`--port` and `--depot` are optional here; the daemon fills them from the
+binding, and `--changelist` may only name the task changelist. `multica p4
+status --output json` reports the client, root, stream, ticket, changelist
+number, its files, and any warnings. Submit, sync and unshelve are not
+available at all — the daemon answers them with `action_not_allowed` — and it
+also rejects a write that would touch a file already open
+in one of the human's changelists (`opened_by_you`), a file someone else has
+locked (`exclusive_locked`), an exclusive-lock file on a depot that does not
+set `allow_exclusive` (`exclusive_not_allowed`), a revert or reconcile outside
+the task changelist (`outside_task_change`), or a path outside the client root
+(`not_in_workspace`). Raw `p4` writes are blocked in the task environment
+through `P4CONFIG` / `P4CLIENT`; read-only `p4 files` / `print` / `filelog` /
+`describe` / `changes` still work and are the right way to read history.
+
+When the task ends the daemon reverts the files that were opened but not
+changed, shelves the rest, and — unless the depot sets `no_auto_review` —
+opens a Helix Swarm review and links it to the issue. Changed files stay open
+for the human.
+
+### Task-client mode
+
 `p4 sync` uses the same daemon port and task token. It creates a task-scoped
 Helix client and syncs into `workdir/p4/…`. Credentials stay on the host
 (`P4USER`, `P4TICKETS`, `P4CONFIG`); Multica does not store a Perforce
 password. The depot must be on the task allowlist (project `perforce_depot`
-resources, or workspace `p4_depots` when the project has none). `--fresh`
-deletes the previous sync directory first.
+resources, or workspace `p4_depots` when the project has neither those nor
+`github_repo` resources). `--fresh` deletes the previous sync directory first.
+A depot too large to sync is rejected with a pointer to workspace mode.
 
 The client is `noallwrite`. Open files with `multica p4 edit` (alias
 `checkout`) before modifying them; exclusive-lock files will fail otherwise.
 `multica p4 add` still registers a workspace depot — use `add-files` to
-`p4 add` new files. Submit and shelve through `multica p4 submit` /
-`multica p4 shelve`. Helix Swarm reviews go through `multica p4 swarm …`
-using the depot's `swarm_url` and the host Helix ticket. `swarm create` and
-`swarm link` attach the review to the current issue (`MULTICA_ISSUE_ID`) and
-to any issue identifier in the review description, so it shows in the issue
-sidebar next to GitHub pull requests. Do not point a host `p4` client at
-another UE workspace.
+`p4 add` new files. Shelve through `multica p4 shelve`.
+
+### Swarm
+
+Helix Swarm reviews go through `multica p4 swarm …` using the depot's
+`swarm_url` and the host Helix ticket. `swarm create` and `swarm link` attach
+the review to the current issue (`MULTICA_ISSUE_ID`) and to any issue
+identifier in the review description, so it shows in the issue sidebar next to
+GitHub pull requests. Do not point a host `p4` client at another UE workspace.
 
 ## Task CLI boundary
 
@@ -202,11 +247,14 @@ Do not add a project resource just because `repo checkout` failed. First
 determine whether the user asked for durable project context or just a task
 checkout.
 
-For Perforce work, request `multica p4 sync ... --output json`. The response's
-`path` is the checkout root and `client` is the isolated task client. Open,
-add, submit, and shelve through `multica p4 edit` / `add-files` / `submit` /
-`shelve` / `swarm create`; the host's default client may belong to another
-UE workspace. Record the changelist, Swarm review id, and the actual
-editor/build validation in the task.
+For Perforce work, check the brief for the mode first. In workspace mode you
+are already inside the human's client — open files with `multica p4 edit`,
+add new ones with `add-files`, and read the changelist number from
+`multica p4 status`. In task-client mode, request
+`multica p4 sync ... --output json`: the response's `path` is the checkout
+root and `client` is the isolated task client. Either way, open and add
+through `multica p4 edit` / `add-files` and never through a host `p4` client,
+which may belong to another UE workspace. Record the changelist, Swarm review
+id, and the actual editor/build validation in the task; a human submits.
 An imported 易协作 issue remains unassigned until a member chooses its owner.
 Result publication is a separate member-confirmed source operation.

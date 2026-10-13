@@ -36,12 +36,31 @@ Common resource types:
 
 - `github_repo` — durable GitHub repo context, with `resource_ref.url`, optional
   checkout `ref`, and optional prompt-only `default_branch_hint`;
-- `perforce_depot` — Helix depot the daemon syncs with host credentials, with
+- `perforce_depot` — Helix depot the daemon works in with host credentials, with
   `resource_ref.port`, `depot`, and optional `stream` / `user` / `charset` /
-  `changelist` / `swarm_url`;
+  `changelist` / `swarm_url` / `allow_exclusive` / `no_auto_review`;
 - `local_directory` — daemon-local path context, with `resource_ref.local_path`,
   `daemon_id`, optional label, and optional `execution_mode` (`in_place`, the
   default, or `worktree`).
+
+`allow_exclusive` lets agents open exclusive-lock (`+l`) files on that depot;
+it is off by default because an open `+l` file blocks everyone else.
+`no_auto_review` turns off the Swarm review the daemon opens when a task
+finishes with a shelved changelist.
+
+A `perforce_depot` plus an `in_place` `local_directory` on the same project is
+what puts a task into Perforce **workspace mode**: the daemon resolves the
+human's own Helix client under that path and the agent edits files there,
+inside one task changelist, without syncing or submitting. The
+`local_directory` must point at the workspace root (the directory holding
+`p4config.txt`), not at a subdirectory that is itself under version control —
+Multica writes its own sidecar files there, and a task fails rather than
+writing them into the depot. See `references/runtimes.md` for the rules the
+daemon enforces in that mode.
+
+Workspace fallback is all-or-nothing: a project with no `github_repo` and no
+`perforce_depot` resource inherits both the workspace repo list and the
+workspace `p4_depots`; a project carrying either kind inherits neither.
 
 ## CLI
 
@@ -71,7 +90,8 @@ checkout branch/tag/SHA for future tasks in that project. For `perforce_depot`,
 `--port` and `--depot` are required shortcuts; `--stream`, `--user`,
 `--charset`, `--changelist`, and `--swarm-url` are optional. JSON `--ref '<json>'`
 remains the escape hatch for full payloads or resource types not covered by
-shortcuts. `project resource update` merges shortcut edits with the existing
+shortcuts — `allow_exclusive` and `no_auto_review` have no shortcut flag and
+are set that way. `project resource update` merges shortcut edits with the existing
 `resource_ref`, so a partial edit does not clobber required fields.
 
 `--start-date` / `--due-date` are optional calendar days (`YYYY-MM-DD`, like

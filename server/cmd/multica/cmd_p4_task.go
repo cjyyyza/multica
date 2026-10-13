@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -96,13 +97,6 @@ var p4ChangeCmd = &cobra.Command{
 	RunE:  runP4Mutate("change"),
 }
 
-var p4SubmitCmd = &cobra.Command{
-	Use:   "submit",
-	Short: "Submit a pending changelist from the task client",
-	Args:  cobra.NoArgs,
-	RunE:  runP4Mutate("submit"),
-}
-
 var p4ShelveCmd = &cobra.Command{
 	Use:   "shelve",
 	Short: "Shelve a pending changelist so Swarm can review it",
@@ -122,6 +116,14 @@ var p4DescribeCmd = &cobra.Command{
 	Short: "Describe a changelist",
 	Args:  cobra.NoArgs,
 	RunE:  runP4Mutate("describe"),
+}
+
+var p4StatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show the Perforce workspace and changelist this task is bound to",
+	Long:  "Reports the Helix client, workspace root, 易协作 ticket, task changelist, its files, and any warnings. Only available while the task runs in a human-owned workspace.",
+	Args:  cobra.NoArgs,
+	RunE:  runP4Status,
 }
 
 var p4SwarmCmd = &cobra.Command{
@@ -179,7 +181,40 @@ func addP4TaskFlags(cmd *cobra.Command, files bool) {
 	}
 }
 
+// p4DaemonTimeout mirrors the daemon's own per-command Perforce budget plus a
+// minute, so the CLI never gives up while the daemon is still waiting on p4.
+func p4DaemonTimeout() time.Duration {
+	timeout := 10 * time.Minute
+	if value := strings.TrimSpace(os.Getenv("MULTICA_P4_TIMEOUT")); value != "" {
+		if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
+			timeout = parsed
+		}
+	}
+	return timeout + time.Minute
+}
+
+// p4DaemonRejection is a structured refusal from the daemon's Perforce routes:
+// an invariant the task may not cross, not a transport failure.
+type p4DaemonRejection struct {
+	Code    string   `json:"code"`
+	Message string   `json:"message"`
+	Files   []string `json:"files,omitempty"`
+	Holders []string `json:"holders,omitempty"`
+}
+
+func (e *p4DaemonRejection) Error() string {
+	return e.Message
+}
+
 func p4DaemonPost(parent context.Context, path string, body map[string]any, timeout time.Duration) ([]byte, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("encode request: %w", err)
+	}
+	return p4DaemonCall(parent, http.MethodPost, path, data, timeout)
+}
+
+func p4DaemonCall(parent context.Context, method, path string, body []byte, timeout time.Duration) ([]byte, error) {
 	daemonPort := os.Getenv("MULTICA_DAEMON_PORT")
 	if daemonPort == "" {
 		return nil, fmt.Errorf("MULTICA_DAEMON_PORT not set (this command is intended to be run by an agent inside a daemon task)")
@@ -188,20 +223,22 @@ func p4DaemonPost(parent context.Context, path string, body map[string]any, time
 	if taskToken == "" {
 		return nil, fmt.Errorf("MULTICA_TOKEN not set (p4 commands require the active task credential)")
 	}
-	data, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("encode request: %w", err)
-	}
 	if parent == nil {
 		parent = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("http://127.0.0.1:%s%s", daemonPort, path), bytes.NewReader(data))
+	var reader io.Reader
+	if len(body) > 0 {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, fmt.Sprintf("http://127.0.0.1:%s%s", daemonPort, path), reader)
 	if err != nil {
 		return nil, fmt.Errorf("create daemon request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if len(body) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("Authorization", "Bearer "+taskToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -213,9 +250,31 @@ func p4DaemonPost(parent context.Context, path string, body map[string]any, time
 		return nil, fmt.Errorf("read daemon response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		var rejection p4DaemonRejection
+		if json.Unmarshal(payload, &rejection) == nil && rejection.Code != "" {
+			return nil, &rejection
+		}
 		return nil, fmt.Errorf("%s", strings.TrimSpace(string(payload)))
 	}
 	return payload, nil
+}
+
+// reportP4Failure renders a daemon rejection the way the agent needs to read
+// it — the reason first, then every file or holder on its own line — and
+// returns a short error so the exit status still signals failure.
+func reportP4Failure(op string, err error) error {
+	var rejection *p4DaemonRejection
+	if !errors.As(err, &rejection) {
+		return fmt.Errorf("%s failed: %w", op, err)
+	}
+	fmt.Fprintln(os.Stderr, rejection.Message)
+	for _, file := range rejection.Files {
+		fmt.Fprintln(os.Stderr, file)
+	}
+	for _, holder := range rejection.Holders {
+		fmt.Fprintln(os.Stderr, holder)
+	}
+	return fmt.Errorf("%s was rejected (%s)", op, rejection.Code)
 }
 
 func p4TaskEnv(ref p4depot.Ref) (map[string]any, error) {
@@ -264,7 +323,7 @@ func printP4JSONOrText(cmd *cobra.Command, payload []byte, text string) error {
 
 func runP4Mutate(action string) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		ref, err := requireP4PortDepot()
+		ref, err := optionalP4PortDepot()
 		if err != nil {
 			return err
 		}
@@ -291,19 +350,26 @@ func runP4Mutate(action string) func(*cobra.Command, []string) error {
 		if len(args) > 0 {
 			body["files"] = args
 		}
-		payload, err := p4DaemonPost(cmd.Context(), "/p4/run", body, 10*time.Minute)
+		payload, err := p4DaemonPost(cmd.Context(), "/p4/run", body, p4DaemonTimeout())
 		if err != nil {
-			return fmt.Errorf("p4 %s failed: %w", action, err)
+			return reportP4Failure("p4 "+action, err)
 		}
 		var result struct {
 			Output     string `json:"output"`
 			Changelist string `json:"changelist"`
 			Path       string `json:"path"`
 			Client     string `json:"client"`
+			Warnings   []struct {
+				Kind  string   `json:"kind"`
+				Files []string `json:"files"`
+			} `json:"warnings"`
 		}
 		_ = json.Unmarshal(payload, &result)
 		if action == "change" && result.Changelist != "" {
 			fmt.Fprintf(os.Stderr, "Created changelist %s (client: %s)\n", result.Changelist, result.Client)
+		}
+		for _, warning := range result.Warnings {
+			fmt.Fprintf(os.Stderr, "warning: %s: %s\n", warning.Kind, strings.Join(warning.Files, " "))
 		}
 		text := result.Output
 		if text == "" && result.Changelist != "" {
@@ -313,12 +379,48 @@ func runP4Mutate(action string) func(*cobra.Command, []string) error {
 	}
 }
 
+func runP4Status(cmd *cobra.Command, _ []string) error {
+	payload, err := p4DaemonCall(cmd.Context(), http.MethodGet, "/p4/status", nil, time.Minute)
+	if err != nil {
+		return reportP4Failure("p4 status", err)
+	}
+	var status struct {
+		Client string `json:"client"`
+		Root   string `json:"root"`
+		Stream string `json:"stream"`
+		Ticket string `json:"ticket"`
+		Change string `json:"change"`
+		Files  []struct {
+			DepotFile string `json:"depot_file"`
+			Action    string `json:"action"`
+		} `json:"files"`
+		Warnings []struct {
+			Kind  string   `json:"kind"`
+			Files []string `json:"files"`
+		} `json:"warnings"`
+	}
+	_ = json.Unmarshal(payload, &status)
+	var text strings.Builder
+	fmt.Fprintf(&text, "client: %s\nroot: %s\n", status.Client, status.Root)
+	if status.Stream != "" {
+		fmt.Fprintf(&text, "stream: %s\n", status.Stream)
+	}
+	fmt.Fprintf(&text, "ticket: %s\nchangelist: %s\n", firstNonEmpty(status.Ticket, "(none)"), firstNonEmpty(status.Change, "(none)"))
+	for _, file := range status.Files {
+		fmt.Fprintf(&text, "%s\t%s\n", file.Action, file.DepotFile)
+	}
+	for _, warning := range status.Warnings {
+		fmt.Fprintf(&text, "warning: %s: %s\n", warning.Kind, strings.Join(warning.Files, " "))
+	}
+	return printP4JSONOrText(cmd, payload, strings.TrimRight(text.String(), "\n"))
+}
+
 func runP4Swarm(action string) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		if action == "link" && strings.TrimSpace(os.Getenv("MULTICA_ISSUE_ID")) == "" {
 			return fmt.Errorf("swarm link requires MULTICA_ISSUE_ID (run it inside an issue task)")
 		}
-		ref, err := requireP4PortDepot()
+		ref, err := optionalP4PortDepot()
 		if err != nil {
 			return err
 		}
@@ -354,9 +456,11 @@ func runP4Swarm(action string) func(*cobra.Command, []string) error {
 			daemonAction = "show"
 			body["action"] = "show"
 		}
-		payload, err := p4DaemonPost(cmd.Context(), "/p4/swarm", body, time.Minute)
+		// Creating a review shelves the changelist first, so this budget has to
+		// cover a Perforce shelve plus the Swarm round trip, not just the HTTP call.
+		payload, err := p4DaemonPost(cmd.Context(), "/p4/swarm", body, 3*time.Minute)
 		if err != nil {
-			return fmt.Errorf("p4 swarm %s failed: %w", action, err)
+			return reportP4Failure("p4 swarm "+action, err)
 		}
 		// Preserve the remote review receipt even if linking fails. Retrying a
 		// link must not require creating the Swarm review again.

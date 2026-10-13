@@ -23,6 +23,8 @@ func main(){
  specPath:=os.Getenv("P4_FAKE_SPEC")
  if strings.Contains(joined," info "){fmt.Println("User name: testuser");return}
  if strings.Contains(joined," client -i "){b,_:=io.ReadAll(os.Stdin);if err:=os.WriteFile(specPath,b,0600);err!=nil{panic(err)};return}
+ if strings.Contains(joined," client -d "){return}
+ if strings.Contains(joined," sizes "){size:=os.Getenv("P4_FAKE_SIZE");if size==""{size="1024"};fmt.Printf("%s 7 files %s bytes\n",args[len(args)-1],size);return}
  if strings.Contains(joined," sync "){
    b,err:=os.ReadFile(specPath);if err!=nil{panic(err)};root:="";client:=""
    for _,line:=range strings.Split(string(b),"\n"){if strings.HasPrefix(line,"Root: "){root=strings.TrimSpace(strings.TrimPrefix(line,"Root: "))};if strings.HasPrefix(line,"Client: "){client=strings.TrimSpace(strings.TrimPrefix(line,"Client: "))}}
@@ -190,6 +192,68 @@ func TestDifferentServersCannotShareCheckoutDirectory(t *testing.T) {
 	}
 	if first.Path == second.Path || first.Client == second.Client {
 		t.Fatal("different server identities share a checkout")
+	}
+}
+
+func TestSyncRejectsOversizedDepotAndRemovesTheClient(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "p4.log")
+	t.Setenv("P4_FAKE_LOG", logPath)
+	t.Setenv("P4_FAKE_SPEC", filepath.Join(dir, "client.spec"))
+	t.Setenv("P4USER", "alice")
+	t.Setenv("P4_FAKE_SIZE", "32212254720") // 30 GiB
+	cache := &Cache{P4Path: writeFakeP4(t, dir), SyncMaxBytes: 20 << 30}
+
+	_, err := cache.Sync(context.Background(), SyncParams{
+		WorkspaceID: "ws",
+		TaskID:      "task",
+		WorkDir:     filepath.Join(dir, "work"),
+		Ref:         p4depot.Ref{Port: "p4:1666", Depot: "//DJ01_Proj/Dev"},
+	})
+	if err == nil {
+		t.Fatal("expected an oversized depot to be rejected")
+	}
+	if !strings.Contains(err.Error(), "local_directory") {
+		t.Fatalf("rejection does not point at workspace mode: %v", err)
+	}
+	log, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(log), "client -d") {
+		t.Fatalf("the rejected task left its client behind: %s", log)
+	}
+	if strings.Contains(string(log), "sync //") {
+		t.Fatalf("sync ran despite the size pre-check: %s", log)
+	}
+}
+
+func TestSyncAllowsDepotUnderTheSizeLimit(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "p4.log")
+	t.Setenv("P4_FAKE_LOG", logPath)
+	t.Setenv("P4_FAKE_SPEC", filepath.Join(dir, "client.spec"))
+	t.Setenv("P4USER", "alice")
+	t.Setenv("P4_FAKE_SIZE", "1048576")
+	cache := &Cache{P4Path: writeFakeP4(t, dir), SyncMaxBytes: 20 << 30}
+
+	if _, err := cache.Sync(context.Background(), SyncParams{
+		WorkspaceID: "ws",
+		TaskID:      "task",
+		WorkDir:     filepath.Join(dir, "work"),
+		Ref:         p4depot.Ref{Port: "p4:1666", Depot: "//depot/small"},
+	}); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	log, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(log), "sizes -s //mc") {
+		t.Fatalf("the pre-check did not measure the task client view: %s", log)
+	}
+	if strings.Contains(string(log), "client -d") {
+		t.Fatalf("a sync within the limit deleted its client: %s", log)
 	}
 }
 

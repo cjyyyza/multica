@@ -1390,6 +1390,29 @@ func (c *Client) postJSONWithToken(ctx context.Context, path, token string, reqB
 	return json.NewDecoder(resp.Body).Decode(respBody)
 }
 
+// ReportTaskP4Changelist posts one task changelist. It authenticates as the
+// daemon, like the other /api/daemon/tasks/{id}/... reports (progress,
+// complete): that route group accepts daemon credentials only, and the server
+// checks the task belongs to this daemon. The agent's task token is rejected
+// there with 401.
+func (c *Client) ReportTaskP4Changelist(ctx context.Context, taskID string, body, out any) error {
+	path := "/api/daemon/tasks/" + url.PathEscape(taskID) + "/p4/changelists"
+	return c.postJSON(ctx, path, body, out)
+}
+
+// ListOpenP4Changelists loads the pending and shelved changelists this daemon
+// should poll for one workspace.
+func (c *Client) ListOpenP4Changelists(ctx context.Context, workspaceID string, out any) error {
+	path := "/api/daemon/p4/changelists/open?workspace_id=" + url.QueryEscape(workspaceID)
+	return c.getJSON(ctx, path, out)
+}
+
+// ReportP4ChangelistStatus posts one poll's worth of submit, renumber, and
+// review-state updates.
+func (c *Client) ReportP4ChangelistStatus(ctx context.Context, body, out any) error {
+	return c.postJSON(ctx, "/api/daemon/p4/changelists/status", body, out)
+}
+
 // InvokeAgentPluginHook asks the server to make one agent-triggered hook call.
 //
 // The daemon deliberately does not call the plugin itself: the signing secret

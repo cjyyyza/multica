@@ -175,6 +175,9 @@ import type {
   PluginInstallRequest,
   PluginConfigRequest,
   IssuePullRequestsResponse,
+  IssueP4ChangelistsResponse,
+  LinkIssueP4ChangelistRequest,
+  P4Changelist,
   ListGitHubInstallationsResponse,
   ListGitHubRepositoriesResponse,
   GitHubConnectResponse,
@@ -449,6 +452,10 @@ import {
   EMPTY_ISSUE_PROPERTIES_RESPONSE,
   EMPTY_ISSUE_PULL_REQUESTS_RESPONSE,
   IssuePullRequestsResponseSchema,
+  EMPTY_ISSUE_P4_CHANGELISTS_RESPONSE,
+  EMPTY_P4_CHANGELIST,
+  IssueP4ChangelistsResponseSchema,
+  P4ChangelistSchema,
   ResourceLabelsResponseSchema,
   EMPTY_LABEL,
   EMPTY_LIST_LABELS_RESPONSE,
@@ -4899,6 +4906,43 @@ export class ApiClient {
       IssuePullRequestsResponseSchema,
       EMPTY_ISSUE_PULL_REQUESTS_RESPONSE,
       { endpoint: "PUT /api/issues/:id/pr-auto-complete" },
+    );
+  }
+
+  // Perforce changelists linked to an issue
+  async listIssueP4Changelists(issueId: string): Promise<IssueP4ChangelistsResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/p4-changelists`);
+    return parseWithFallback(
+      raw,
+      IssueP4ChangelistsResponseSchema,
+      EMPTY_ISSUE_P4_CHANGELISTS_RESPONSE,
+      { endpoint: "GET /api/issues/:id/p4-changelists" },
+    );
+  }
+
+  /**
+   * Link a changelist to an issue by its number. `port` is required only when
+   * the issue's project has several Perforce depots.
+   *
+   * The row is created server-side whether or not its body reads back cleanly,
+   * and the caller refetches the list, so a drifted body degrades to an empty
+   * changelist rather than reporting a write that did happen as a failure.
+   */
+  async linkIssueP4Changelist(issueId: string, req: LinkIssueP4ChangelistRequest): Promise<P4Changelist> {
+    const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/p4-changelists`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    });
+    return parseWithFallback(raw, P4ChangelistSchema, EMPTY_P4_CHANGELIST, {
+      endpoint: "POST /api/issues/:id/p4-changelists",
+    });
+  }
+
+  /** Unlink a changelist from an issue; the changelist itself is left alone. */
+  async unlinkIssueP4Changelist(issueId: string, changelistId: string): Promise<void> {
+    await this.fetch(
+      `/api/issues/${encodeURIComponent(issueId)}/p4-changelists/${encodeURIComponent(changelistId)}`,
+      { method: "DELETE" },
     );
   }
 

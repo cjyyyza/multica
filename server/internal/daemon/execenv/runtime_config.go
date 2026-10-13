@@ -249,6 +249,13 @@ func runtimeConfigPath(workDir, provider string) string {
 	}
 }
 
+// RuntimeConfigPath is the file InjectRuntimeConfig writes for provider, or ""
+// when that provider has no file-based brief. Callers use it to ask Perforce
+// whether the brief would land on a depot file.
+func RuntimeConfigPath(workDir, provider string) string {
+	return runtimeConfigPath(workDir, provider)
+}
+
 // writeRuntimeConfigFile writes the Multica runtime brief to path without
 // clobbering any user-authored content already present. Behaviour by file
 // state:

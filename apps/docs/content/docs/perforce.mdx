@@ -1,19 +1,30 @@
 ---
 title: Perforce
-description: Sync Helix depots into agent working directories the same way Git checkouts work.
+description: Let agents open, change, and shelve files in Helix depots — in your own workspace or in a task-scoped client.
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-Multica can sync [Perforce](https://www.perforce.com/) Helix depots into a run's working directory. Git remotes stay in `workspace.repos` and `github_repo` resources. Perforce uses a separate `p4_depots` list and `perforce_depot` resources so an older daemon never tries to `git clone` a Helix port.
+Multica runs agents against [Perforce](https://www.perforce.com/) Helix depots. Git remotes stay in `workspace.repos` and `github_repo` resources. Perforce uses a separate `p4_depots` list and `perforce_depot` resources so an older daemon never tries to `git clone` a Helix port.
 
 <Callout type="info">
 Multica does not store a Perforce password. The daemon uses the host Helix login (`P4USER`, `P4TICKETS`, `P4CONFIG`). Sign in with `p4 login` on that machine first.
 </Callout>
 
+## Two modes
+
+| Mode | When a run uses it | Where the files are |
+|---|---|---|
+| **Workspace mode** | The project has an `in_place` local directory on the running daemon *and* a Perforce depot, and the daemon resolves a Helix client under that directory | Your own workspace, in one changelist per task |
+| **Task-client mode** | Everything else | A task-scoped client under the run's `p4/` directory |
+
+Workspace mode is what makes a large Unreal depot workable: a 300 GB workspace cannot be synced per task, so the agent works in the one you already have.
+
+**Agents never submit, in either mode.** The agent shelves its changelist; you verify in the editor and submit with P4V or your own script.
+
 ## Add a workspace depot
 
-Open **Settings → Repositories**. The Perforce section lists Helix depots the workspace may sync.
+Open **Settings → Code**. The Perforce section lists Helix depots the workspace may sync.
 
 Each entry needs:
 
@@ -36,9 +47,77 @@ multica project resource add <project-id> --type perforce_depot \
   --port perforce.example.com:1666 --depot //depot/project --output json
 ```
 
-When a run is claimed, project `perforce_depot` resources become the P4 list. If the project has none, the workspace `p4_depots` list is used. Git fallback is independent: a Git-only project still inherits workspace Perforce depots, and a Perforce-only project still inherits workspace Git repos.
+When a run is claimed, project `perforce_depot` resources become the P4 list. The workspace fallback is all-or-nothing: a project with no `github_repo` and no `perforce_depot` resource inherits both workspace lists, while a project carrying either kind inherits neither. A Perforce-only project therefore no longer picks up workspace Git repositories it was never meant to touch.
 
-## Sync during a run
+## Workspace mode
+
+Attach two resources to the project: a `local_directory` in `in_place` mode pointing at your workspace root (the directory holding `p4config.txt`), and the `perforce_depot` whose stream that client works in.
+
+```bash
+multica project resource add <project-id> --type local_directory \
+  --local-path 'D:\DJ' --daemon-id <daemon-id> --output json
+multica project resource add <project-id> --type perforce_depot \
+  --port perforce.example.com:1666 --depot //depot/project --output json
+```
+
+The daemon resolves the client from that directory (`p4 set -q` plus `p4 info`, so `P4CONFIG` decides, not a global `P4CLIENT`) and accepts it only when it is yours and local: the client Owner is the daemon's `P4USER`, its Host is empty or this machine, and the local path is inside the client Root. If both resources are present but the client does not resolve or does not pass those checks, the run fails and says why — it never falls back to writing read-only files in place.
+
+Point the local directory at the workspace root, not at a subdirectory that is itself in the depot. Multica writes run files (the runtime brief, `.multica/`, `.agent_context/`, skill files) next to the working directory, and a run fails rather than writing them into version control.
+
+### The changelist and its ticket
+
+The agent gets one pending changelist per task, created the first time it opens a file. Its description is:
+
+```text
+refs #<ticket> <issue title>
+
+Multica: <ISSUE-KEY>
+```
+
+`refs #<ticket>` is the 易协作 ticket number. Multica reads it from the issue's import record, or from a `refs #123456` in the issue title or description.
+
+<Callout type="warn">
+Without a ticket the agent cannot open any file: `multica p4 edit` returns `ticket_required`. Add `refs #<ticket>` to the issue description and trigger the agent again. Multica never invents a number.
+</Callout>
+
+Re-running the same issue on the same client reuses the pending changelist, matched on the `Multica: <ISSUE-KEY>` trailer.
+
+### What the agent can and cannot do
+
+The agent opens files with `multica p4 edit` and `multica p4 add-files`, and reads the changelist with `multica p4 status`. Everything it opens lands in the task changelist. `--port` and `--depot` are optional in this mode.
+
+The daemon refuses, with an explanation the agent has to report rather than work around:
+
+| Refusal | Reason |
+|---|---|
+| `ticket_required` | the task has no 易协作 ticket |
+| `opened_by_you` | the file is already open in one of your changelists, including the default one |
+| `exclusive_locked` | someone else holds the `+l` lock |
+| `exclusive_not_allowed` | a `+l` file on a depot that does not set `allow_exclusive` |
+| `outside_task_change` | a revert, reconcile, or reopen aimed outside the task changelist |
+| `action_not_allowed` | submit, sync, or unshelve |
+| `not_in_workspace` | a path outside the client Root |
+
+Raw `p4` writes are blocked in the agent's environment (`P4CONFIG` and `P4CLIENT` are pointed at names that do not exist), so `p4 edit`, `p4 sync`, and `p4 submit` fail there. Read-only queries — `p4 files`, `p4 print`, `p4 filelog`, `p4 describe`, `p4 changes` — keep working, and the agent uses them to read history. This is a guardrail, not a security boundary: the real enforcement is in the daemon routes above.
+
+One agent task runs per client at a time, so two tasks pointed at the same workspace are serialised rather than interleaved.
+
+### When the task ends
+
+Success, failure, or cancellation all run the same close-out:
+
+1. `revert -a` inside the task changelist, which returns files the agent opened but did not change;
+2. an empty changelist has any old shelf removed and is then deleted;
+3. otherwise the complete shelf is replaced with the current files (`shelve -r`, with `-p` on an edge server);
+4. unless the depot sets `no_auto_review`, a Helix Swarm review is created and linked to the issue.
+
+**Changed files stay open.** You verify in the editor and submit; the agent's final comment states what it changed, the changelist number, and how to check it. `multica p4 status` reports the same thing while a run is in flight.
+
+A close-out or report failure is shown as a task failure. The daemon retains the changelist receipt for retry after an HTTP failure or restart; it does not treat a missing server route as successful delivery. Status polling only connects to currently configured project/workspace depots and never starts an `rsh:` process.
+
+Two depot switches change this, and are set through a JSON `--ref` payload on the resource: `allow_exclusive` lets agents open `+l` files, and `no_auto_review` turns off the automatic Swarm review.
+
+## Sync during a run (task-client mode)
 
 Agents sync with the task CLI, not by talking to Helix directly:
 
@@ -52,9 +131,9 @@ The daemon creates a short task-scoped client (`mc` + 16 hex characters), runs `
 
 Use `--output json` to read both `path` and `client`. The client spec uses `noallwrite`, so files are read-only until they are opened for edit. Do not call host `p4` against another workspace client.
 
-## Edit, checkout, and submit
+## Edit, checkout, and shelve
 
-After sync, change into the returned checkout path to use relative file paths. Agents open and submit files through the same daemon client:
+After sync, change into the returned checkout path to use relative file paths. Agents open files through the same daemon client:
 
 ```bash
 multica p4 edit --port perforce.example.com:1666 --depot //depot/project -- Source/Foo.cpp
@@ -62,10 +141,12 @@ multica p4 checkout --port perforce.example.com:1666 --depot //depot/project -- 
 multica p4 add-files --port perforce.example.com:1666 --depot //depot/project -- Source/New.cpp
 multica p4 change --port perforce.example.com:1666 --depot //depot/project --description "Fix the crash"
 multica p4 shelve --port perforce.example.com:1666 --depot //depot/project --changelist 12345
-multica p4 submit --port perforce.example.com:1666 --depot //depot/project --changelist 12345
+multica p4 status --output json
 ```
 
-`checkout` is an alias of `edit`. `multica p4 add` still adds a depot to the workspace registry; `add-files` is `p4 add`. Other verbs: `delete`, `revert`, `opened`, `reconcile` (`rec`), `move --dest`, `reopen --changelist`, `unshelve`, `describe`. Exclusive-lock (`+l`) files must be edited before they can be written.
+`checkout` is an alias of `edit`. `multica p4 add` still adds a depot to the workspace registry; `add-files` is `p4 add`. Other verbs: `delete`, `revert`, `opened`, `reconcile` (`rec`), `move --dest`, `reopen --changelist`, `describe`. Exclusive-lock (`+l`) files must be edited before they can be written.
+
+There is no `multica p4 submit`. Agents shelve, and a human submits after verifying.
 
 ## Helix Swarm
 
@@ -83,7 +164,7 @@ multica p4 swarm comment --port perforce.example.com:1666 --depot //depot/projec
 
 `swarm create` shelves the pending changelist first unless you pass `--no-shelve`. Submitted changelists become post-commit reviews.
 
-A review created (or linked) during an issue task appears in the issue sidebar **Pull requests** section, next to GitHub PRs. Put the issue identifier (`DJ01-7`) in the Swarm description, or run `multica p4 swarm create` / `multica p4 swarm link` from that issue's task.
+A review created (or linked) during an issue task shows up on the issue: on its changelist card when Multica knows which changelist it reviews, and in the sidebar **Pull requests** section otherwise. Put the issue identifier (`DJ01-7`) in the Swarm description, or run `multica p4 swarm create` / `multica p4 swarm link` from that issue's task.
 
 ```bash
 multica p4 swarm link --port perforce.example.com:1666 --depot //depot/project --review 77
@@ -93,10 +174,19 @@ If review creation succeeds but linking to the issue fails, the CLI prints the r
 
 Depots are not prefetched. A Helix tree can be huge; sync happens when the agent asks for it.
 
+## In this release
+
+- Workspace mode: in-place edits in your own client, one changelist per task, automatic revert-unchanged, shelve, and Swarm review
+- Task-client mode, with a size pre-check that refuses a depot too large to sync and points at workspace mode instead
+- Changelists on the issue: a Perforce changelists section, manual linking by number, and daemon polling that notices a submit — including the new number a commit server assigns
+- Issue auto-advance once every linked changelist is submitted, on issues with no linked pull request
+
 ## Not in this release
 
 - Swarm webhook ingestion and CI status on the review card
-- Changelist auto-link on issues
+- Agents submitting, by design — see [the decisions above](#two-modes)
+- Reviewing someone else's changelist as a task
+- Moving files the Unreal editor checked out into the task changelist from the UI (the run reports them instead)
 - Create-project dialog P4 attach (attach after create)
 - Mobile Perforce UI
 - Landing-page marketing copy

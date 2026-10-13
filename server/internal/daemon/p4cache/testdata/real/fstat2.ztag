@@ -1,0 +1,35 @@
+... depotFile //DJ01_Proj/Dev/Game/DJ01/Source/DJ01/Private/AI/AISocialConversation/DJAISocialConversationDefines.cpp
+... clientFile D:\DJ\Game\DJ01\Source\DJ01\Private\AI\AISocialConversation\DJAISocialConversationDefines.cpp
+... isMapped 
+... headAction add
+... headType text
+... headTime 1744102531
+... headRev 1
+... headChange 363363
+... headModTime 1743600109
+... pathSource //DJ01_Proj/Dev
+... pathType share
+... pathPermissions readonly
+... effectiveComponentType none
+... haveRev 1
+
+... depotFile //DJ01_Proj/Dev/Game/DJ01/Source/DJ01/Private/AI/AISocialConversation/DJAISocialConversationGroup.cpp
+... clientFile D:\DJ\Game\DJ01\Source\DJ01\Private\AI\AISocialConversation\DJAISocialConversationGroup.cpp
+... isMapped 
+... headAction edit
+... headType text
+... headTime 1784219235
+... headRev 6
+... headChange 726904
+... headModTime 1784201197
+... pathSource //DJ01_Proj/Dev
+... pathType share
+... pathPermissions readonly
+... effectiveComponentType none
+... haveRev 6
+... action edit
+... change default
+... type text
+... actionOwner yujian01
+... workRev 6
+

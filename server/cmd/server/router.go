@@ -1663,6 +1663,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Get("/tasks/{taskId}/messages", h.ListTaskMessages)
 		r.Post("/tasks/{taskId}/cancel-ack", h.AckTaskCancelled)
 
+		// Perforce changelists. The task route reports the changelist a run
+		// produced; the other two are the status poll that stands in for the
+		// server trigger we have no admin rights to install.
+		r.Post("/tasks/{taskId}/p4/changelists", h.ReportTaskP4Changelist)
+		r.Get("/p4/changelists/open", h.ListOpenP4ChangelistsForDaemon)
+		r.Post("/p4/changelists/status", h.UpdateP4ChangelistStatuses)
+
 		r.Post("/workspaces/{workspaceId}/issues/gc-check", h.BatchIssueGCCheck)
 		r.Get("/issues/{issueId}/gc-check", h.GetIssueGCCheck)
 		r.Get("/chat-sessions/{sessionId}/gc-check", h.GetChatSessionGCCheck)
@@ -2166,6 +2173,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Delete("/properties/{propertyId}", h.DeleteIssueProperty)
 					r.Get("/pull-requests", h.ListPullRequestsForIssue)
 					r.Post("/swarm-reviews", h.UpsertSwarmReviewForIssue)
+					r.Get("/p4-changelists", h.ListP4ChangelistsForIssue)
+					r.Post("/p4-changelists", h.LinkIssueP4Changelist)
+					r.Delete("/p4-changelists/{changelistId}", h.UnlinkIssueP4Changelist)
 					r.Post("/pull-requests", h.LinkIssuePullRequest)
 					r.Delete("/pull-requests/{prId}", h.UnlinkIssuePullRequest)
 					r.Put("/pr-auto-complete", h.SetIssuePRAutoComplete)

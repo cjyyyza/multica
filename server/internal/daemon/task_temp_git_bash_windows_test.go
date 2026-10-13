@@ -87,7 +87,7 @@ IFS= read -r release
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = input, sink, stderr
 		cmd.Env = os.Environ()
-		for key, value := range taskMulticaEnvironment(Task{}, provider, "", "", "", "", "", 0, 0, dir) {
+		for key, value := range taskMulticaEnvironment(Task{}, provider, "", "", "", "", "", 0, 0, dir, false) {
 			cmd.Env = append(cmd.Env, key+"="+value)
 		}
 		if err := cmd.Start(); err != nil {

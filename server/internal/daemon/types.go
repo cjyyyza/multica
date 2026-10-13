@@ -44,14 +44,16 @@ type RepoData struct {
 
 // P4DepotData is one Perforce depot from the claim / workspace-repos wire.
 type P4DepotData struct {
-	Port        string `json:"port"`
-	Depot       string `json:"depot"`
-	Stream      string `json:"stream,omitempty"`
-	User        string `json:"user,omitempty"`
-	Charset     string `json:"charset,omitempty"`
-	Changelist  string `json:"changelist,omitempty"`
-	Description string `json:"description,omitempty"`
-	SwarmURL    string `json:"swarm_url,omitempty"`
+	Port           string `json:"port"`
+	Depot          string `json:"depot"`
+	Stream         string `json:"stream,omitempty"`
+	User           string `json:"user,omitempty"`
+	Charset        string `json:"charset,omitempty"`
+	Changelist     string `json:"changelist,omitempty"`
+	Description    string `json:"description,omitempty"`
+	SwarmURL       string `json:"swarm_url,omitempty"`
+	AllowExclusive bool   `json:"allow_exclusive,omitempty"`
+	NoAutoReview   bool   `json:"no_auto_review,omitempty"`
 }
 
 // ProjectResourceData mirrors handler.ProjectResourceData — a single project
@@ -115,6 +117,7 @@ type Task struct {
 	ConnectedApps                 []ConnectedAppData     `json:"connected_apps,omitempty"` // per-run app capabilities mounted through runtime MCP overlays
 	Repos                         []RepoData             `json:"repos,omitempty"`
 	P4Depots                      []P4DepotData          `json:"p4_depots,omitempty"`
+	P4Ticket                      string                 `json:"p4_ticket,omitempty"`                        // 易协作 ticket number required as `refs #<n>` in Perforce changelist descriptions; empty when unknown
 	ProjectID                     string                 `json:"project_id,omitempty"`                       // active project for this task, when present
 	ProjectTitle                  string                 `json:"project_title,omitempty"`                    // human-readable project title for context injection
 	ProjectDescription            string                 `json:"project_description,omitempty"`              // durable project-level context injected into the brief

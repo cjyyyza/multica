@@ -2802,6 +2802,13 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			}
 		}
 		projectCtx.applyTo(&resp)
+		// The ticket only means anything to a task that can open Perforce
+		// files, and the daemon reads a present p4_ticket as "this task has
+		// one". Sending it without depots would make a git-only task look
+		// Perforce-bound.
+		if len(resp.P4Depots) > 0 {
+			resp.P4Ticket = h.resolveIssueP4Ticket(r.Context(), issue)
+		}
 
 		// Load every planned input as one chronological, de-duplicated set.
 		// The trigger is included here so the delivery receipt can only contain

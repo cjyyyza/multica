@@ -114,6 +114,7 @@ import { QuickActionsSection } from "./quick-actions-section";
 import { PluginPanelSection } from "../../plugins";
 import { YixiezuoSource } from "./yixiezuo-source";
 import { PullRequestsSection } from "./pull-requests-section";
+import { P4ChangelistsSection, useIssueP4Surface } from "./p4-changelists-section";
 import { useGitHubSettings } from "@multica/core/github";
 import { DeliverablesSection } from "./deliverables/deliverables-section";
 import { DeliverablesOverview } from "./deliverables/deliverables-overview";
@@ -126,7 +127,7 @@ import { collectDeliverableFiles } from "@multica/core/attachments/deliverables"
 import { AttachmentVersionsProvider } from "./deliverables/attachment-versions";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
-import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
+import { useWorkspacePaths } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useRecentContextStore } from "@multica/core/chat";
@@ -1365,9 +1366,6 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   const [pullRequestsOpen, setPullRequestsOpen] = useState(true);
   const [metadataOpen, setMetadataOpen] = useState(false);
   const githubSettings = useGitHubSettings();
-  const workspace = useCurrentWorkspace();
-  const showReviewSidebar =
-    githubSettings.prSidebar || (workspace?.p4_depots?.length ?? 0) > 0;
 
   // Per-issue, per-session set of optional properties currently visible in
   // the sidebar Properties section. Seeded on issue switch with whichever
@@ -1541,6 +1539,10 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       return cached?.description != null ? cached : undefined;
     },
   });
+  // Pull requests for a Perforce project follow the issue, not the workspace
+  // depot list: a project depot or an already-linked changelist is enough.
+  const showP4Surface = useIssueP4Surface(id, issue?.project_id ?? null).visible;
+  const showReviewSidebar = githubSettings.prSidebar || showP4Surface;
   const descriptionSourceId = `description:${id}`;
   const descriptionAnnotations = useCommentAnnotations({
     draftKey: `new:${id}`,
@@ -2935,6 +2937,11 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           onOpenChange={setPullRequestsOpen}
         />
       )}
+
+      {/* Perforce changelists. Shown for an issue whose project has a depot,
+          or that still carries changelists from one — the workspace-level
+          depot list says nothing about either. Hides itself otherwise. */}
+      <P4ChangelistsSection issueId={id} projectId={issue.project_id} />
 
       {/* Deliverables — the files this issue's comments delivered. Hidden
           while there are none. */}

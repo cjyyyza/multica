@@ -170,7 +170,48 @@ func (c *Cache) helixTicket(ctx context.Context, ref p4depot.Ref, user string) (
 	if ticket := ticketForPort(string(out), ref.Port, user); ticket != "" {
 		return ticket, nil
 	}
+	// A server that belongs to a cluster stores its ticket under the cluster
+	// name, not the port: DJ01's commit server lists it as
+	// "localhost:p4_dj01 (user)". Ask the server which cluster it is.
+	if cluster := c.serverCluster(ctx, ref, user); cluster != "" {
+		if ticket := ticketForCluster(string(out), cluster, user); ticket != "" {
+			return ticket, nil
+		}
+	}
 	return "", fmt.Errorf("no Helix ticket for %s (run `p4 login` on this machine)", ref.Port)
+}
+
+func (c *Cache) serverCluster(ctx context.Context, ref p4depot.Ref, user string) string {
+	out, err := c.output(ctx, ref, user, "", "-ztag", "info")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(firstZtagRecord(string(out))["serverCluster"])
+}
+
+// ticketForCluster finds the ticket `p4 tickets` lists as "<host>:<cluster>
+// (user) ticket". Only the cluster part identifies the server; the host part
+// is whatever address the login used.
+func ticketForCluster(out, cluster, user string) string {
+	cluster = strings.TrimSpace(cluster)
+	user = strings.TrimSpace(user)
+	if cluster == "" {
+		return ""
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 || !strings.HasPrefix(fields[1], "(") || !strings.HasSuffix(fields[1], ")") {
+			continue
+		}
+		hostPart, gotUser, ticket := fields[0], fields[1][1:len(fields[1])-1], fields[2]
+		if user != "" && gotUser != user {
+			continue
+		}
+		if i := strings.LastIndex(hostPart, ":"); i >= 0 && strings.EqualFold(hostPart[i+1:], cluster) {
+			return ticket
+		}
+	}
+	return ""
 }
 
 func ticketForPort(out, port, user string) string {
@@ -215,14 +256,46 @@ type swarmClient struct {
 func (c *swarmClient) listReviews(ctx context.Context, changelist string) ([]SwarmReview, error) {
 	q := url.Values{}
 	q.Set("max", "50")
+	versions := []string{"v11", "v9"}
 	if changelist != "" {
-		q.Set("change", changelist)
+		// Only v9 filters reviews by changelist. v11 documents no change
+		// filter, and DJ01's Swarm 2024.2 ignores change and change[] there
+		// alike: it answers with the 50 newest reviews, so the review of an
+		// older changelist was never found.
+		q.Set("change[]", changelist)
+		versions = []string{"v9"}
 	}
-	raw, err := c.do(ctx, http.MethodGet, "/reviews?"+q.Encode(), nil)
+	raw, err := c.doVersions(ctx, versions, http.MethodGet, "/reviews?"+q.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
-	return parseReviewList(c.baseURL, raw)
+	reviews, err := parseReviewList(c.baseURL, raw)
+	if err != nil || changelist == "" {
+		return reviews, err
+	}
+	// Never trust the server-side filter alone. When it is ignored, the first
+	// review in the answer is someone else's, and treating it as this
+	// changelist's review once attached a colleague's review to a task (and
+	// would have let cleanup archive it). Keep only reviews that list the
+	// changelist.
+	return reviewsForChange(reviews, changelist), nil
+}
+
+func reviewsForChange(reviews []SwarmReview, changelist string) []SwarmReview {
+	want, err := strconv.Atoi(strings.TrimSpace(changelist))
+	if err != nil {
+		return nil
+	}
+	var out []SwarmReview
+	for _, review := range reviews {
+		for _, change := range review.Changes {
+			if change == want {
+				out = append(out, review)
+				break
+			}
+		}
+	}
+	return out
 }
 
 func (c *swarmClient) createReview(ctx context.Context, changelist, description string, reviewers []string) (*SwarmReview, error) {
@@ -257,10 +330,16 @@ func (c *swarmClient) comment(ctx context.Context, id, body string) error {
 }
 
 func (c *swarmClient) do(ctx context.Context, method, apiPath string, body any) (json.RawMessage, error) {
+	return c.doVersions(ctx, []string{"v11", "v9"}, method, apiPath, body)
+}
+
+// doVersions tries the API versions in order and moves on only when the
+// server lacks the endpoint.
+func (c *swarmClient) doVersions(ctx context.Context, versions []string, method, apiPath string, body any) (json.RawMessage, error) {
 	runCtx, cancel := context.WithTimeout(ctx, swarmTimeout)
 	defer cancel()
 	var lastErr error
-	for _, version := range []string{"v11", "v9"} {
+	for _, version := range versions {
 		raw, err := c.doVersion(runCtx, method, version, apiPath, body)
 		if err == nil {
 			return raw, nil
@@ -356,13 +435,13 @@ func parseReview(baseURL string, raw json.RawMessage) (*SwarmReview, error) {
 	}
 	for _, key := range []string{"review", "data"} {
 		if item, ok := envelope[key]; ok {
-			if review, ok := decodeOneReview(baseURL, item); ok {
+			if review, ok := decodeReviewValue(baseURL, item); ok {
 				return review, nil
 			}
 			var inner map[string]json.RawMessage
 			if err := json.Unmarshal(item, &inner); err == nil {
 				if nested, ok := inner["review"]; ok {
-					if review, ok := decodeOneReview(baseURL, nested); ok {
+					if review, ok := decodeReviewValue(baseURL, nested); ok {
 						return review, nil
 					}
 				}
@@ -372,7 +451,24 @@ func parseReview(baseURL string, raw json.RawMessage) (*SwarmReview, error) {
 	if review, ok := decodeOneReview(baseURL, raw); ok && review.ID != 0 {
 		return review, nil
 	}
-	return nil, fmt.Errorf("swarm response did not include a review")
+	body := strings.TrimSpace(string(raw))
+	if len(body) > 300 {
+		body = body[:300] + "..."
+	}
+	return nil, fmt.Errorf("swarm response did not include a review: %s", body)
+}
+
+// decodeReviewValue reads a review sent as an object (v9) or as the
+// one-element array v11 create answers with: "data":{"review":[{...}]}.
+func decodeReviewValue(baseURL string, raw json.RawMessage) (*SwarmReview, bool) {
+	if review, ok := decodeOneReview(baseURL, raw); ok {
+		return review, true
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil || len(items) != 1 {
+		return nil, false
+	}
+	return decodeOneReview(baseURL, items[0])
 }
 
 func decodeReviews(baseURL string, raw json.RawMessage) ([]SwarmReview, error) {

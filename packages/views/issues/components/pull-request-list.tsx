@@ -395,7 +395,7 @@ function PullRequestRow({
   const cfg = STATE_ICON[pr.state] ?? { icon: GitPullRequest, className: "" };
   const StateIcon = cfg.icon;
   const verdict = derivePullRequestVerdict(pr);
-  const pill = getVerdictPill(verdict, t);
+  const pill = getVerdictPill(verdict, t, pr.provider === "swarm");
   const showStats = shouldShowPullRequestStats(pr);
 
   // A stale snapshot (GitHub outage / revoked key) greys out the verdict and
@@ -548,10 +548,24 @@ function PullRequestProblems({
   );
 }
 
-function getVerdictPill(verdict: PullRequestVerdict, t: IssuesT): VerdictPillConfig | null {
+/**
+ * `isSwarm` only changes wording: a landed Swarm review is a Perforce submit,
+ * which nobody calls a merge. The verdict itself is shared with Git PRs.
+ */
+function getVerdictPill(
+  verdict: PullRequestVerdict,
+  t: IssuesT,
+  isSwarm = false,
+): VerdictPillConfig | null {
   switch (verdict.kind) {
     case "merged":
-      return { icon: GitMerge, tone: "violet", label: t(($) => $.detail.pull_request_state_merged) };
+      return {
+        icon: GitMerge,
+        tone: "violet",
+        label: isSwarm
+          ? t(($) => $.detail.pull_request_state_submitted)
+          : t(($) => $.detail.pull_request_state_merged),
+      };
     case "closed":
       return { icon: GitPullRequestClosed, tone: "muted", label: t(($) => $.detail.pull_request_state_closed) };
     case "failed":

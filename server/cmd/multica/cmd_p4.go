@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"time"
+	"strings"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/p4depot"
@@ -87,7 +87,7 @@ func init() {
 
 	mutateCmds := []*cobra.Command{
 		p4EditCmd, p4AddFilesCmd, p4DeleteCmd, p4RevertCmd, p4OpenedCmd,
-		p4ReconcileCmd, p4MoveCmd, p4ReopenCmd, p4ChangeCmd, p4SubmitCmd,
+		p4ReconcileCmd, p4MoveCmd, p4ReopenCmd, p4ChangeCmd,
 		p4ShelveCmd, p4UnshelveCmd, p4DescribeCmd,
 	}
 	for _, cmd := range mutateCmds {
@@ -121,6 +121,8 @@ func init() {
 	p4Cmd.AddCommand(p4AddCmd)
 	p4Cmd.AddCommand(p4RemoveCmd)
 	p4Cmd.AddCommand(p4SyncCmd)
+	p4StatusCmd.Flags().String("output", "text", "Output format: text or json")
+	p4Cmd.AddCommand(p4StatusCmd)
 	for _, cmd := range mutateCmds {
 		p4Cmd.AddCommand(cmd)
 	}
@@ -171,6 +173,28 @@ func requireP4PortDepot() (p4depot.Ref, error) {
 		return p4depot.Ref{}, err
 	}
 	return ref, nil
+}
+
+// optionalP4PortDepot validates the depot flags only when the caller passed
+// them. A task bound to a human-owned Perforce workspace omits --port/--depot
+// and the daemon fills both from the binding; outside workspace mode the
+// daemon still refuses a request with no depot.
+func optionalP4PortDepot() (p4depot.Ref, error) {
+	if strings.TrimSpace(p4Port) != "" || strings.TrimSpace(p4DepotPath) != "" {
+		return requireP4PortDepot()
+	}
+	changelist := strings.TrimSpace(p4Changelist)
+	if changelist != "" && !p4depot.ValidChangelist(changelist) {
+		return p4depot.Ref{}, fmt.Errorf("changelist must be a changelist number, label, or #head")
+	}
+	return p4depot.Ref{
+		Stream:      strings.TrimSpace(p4Stream),
+		User:        strings.TrimSpace(p4User),
+		Charset:     strings.TrimSpace(p4Charset),
+		Changelist:  changelist,
+		Description: strings.TrimSpace(p4Desc),
+		SwarmURL:    strings.TrimRight(strings.TrimSpace(p4SwarmURL), "/"),
+	}, nil
 }
 
 func runP4List(cmd *cobra.Command, _ []string) error {
@@ -280,7 +304,7 @@ func printP4Mutation(cmd *cobra.Command, depots []p4depot.Ref, action string) er
 }
 
 func runP4Sync(cmd *cobra.Command, _ []string) error {
-	ref, err := requireP4PortDepot()
+	ref, err := optionalP4PortDepot()
 	if err != nil {
 		return err
 	}
@@ -290,9 +314,9 @@ func runP4Sync(cmd *cobra.Command, _ []string) error {
 	}
 	body["changelist"] = ref.Changelist
 	body["fresh"] = p4Fresh
-	payload, err := p4DaemonPost(cmd.Context(), "/p4/sync", body, 5*time.Minute)
+	payload, err := p4DaemonPost(cmd.Context(), "/p4/sync", body, p4DaemonTimeout())
 	if err != nil {
-		return fmt.Errorf("p4 sync failed: %w", err)
+		return reportP4Failure("p4 sync", err)
 	}
 	var result struct {
 		Path   string `json:"path"`

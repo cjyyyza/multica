@@ -2,6 +2,7 @@ package p4cache
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,6 +129,39 @@ func TestMutateRequiresSyncFirst(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "p4 sync") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestMutateRefusesToSubmit(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("P4_FAKE_LOG", filepath.Join(dir, "p4.log"))
+	t.Setenv("P4_FAKE_SPEC", filepath.Join(dir, "client.spec"))
+	t.Setenv("P4USER", "alice")
+	cache := &Cache{P4Path: writeFakeP4(t, dir)}
+	work := filepath.Join(dir, "work")
+	ref := p4depot.Ref{Port: "p4:1666", Depot: "//depot/UE"}
+	if _, err := cache.Sync(context.Background(), SyncParams{
+		WorkspaceID: "ws", TaskID: "task", WorkDir: work, Ref: ref,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := cache.Mutate(context.Background(), MutateParams{
+		WorkspaceID: "ws",
+		TaskID:      "task",
+		WorkDir:     work,
+		Ref:         ref,
+		Action:      "submit",
+		Changelist:  "1001",
+	})
+	if !errors.Is(err, ErrSubmitNotSupported) {
+		t.Fatalf("error = %v", err)
+	}
+	log, readErr := os.ReadFile(filepath.Join(dir, "p4.log"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(log), "submit") {
+		t.Fatalf("a submit reached the server: %s", log)
 	}
 }
 
