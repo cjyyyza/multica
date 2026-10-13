@@ -510,6 +510,12 @@ func (c *Cache) inputAt(ctx context.Context, dir string, args []string, spec str
 
 // parseZtag splits `p4 -ztag` output into one map per record. A key with no
 // value (otherLock) is kept with an empty string so callers can test presence.
+//
+// A blank line is not a record boundary: `p4 -ztag client -o` prints one right
+// after the multi-line Description field, and treating it as the end of the
+// record dropped Root, Stream and View. A record starts again only when a key
+// repeats, which is how fstat and opened lay out consecutive files (each begins
+// with depotFile).
 func parseZtag(out string) []map[string]string {
 	var records []map[string]string
 	current := map[string]string{}
@@ -521,10 +527,6 @@ func parseZtag(out string) []map[string]string {
 	}
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimRight(line, "\r")
-		if strings.TrimSpace(line) == "" {
-			flush()
-			continue
-		}
 		rest, ok := strings.CutPrefix(line, "... ")
 		if !ok {
 			continue

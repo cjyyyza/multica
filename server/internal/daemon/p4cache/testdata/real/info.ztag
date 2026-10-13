@@ -1,0 +1,44 @@
+... userName yujian01
+... clientName yujian01_HIH-D-35258Z_Dev
+... clientRoot D:\DJ
+... clientLock none
+... clientStream //DJ01_Proj/Dev
+... clientCwd D:/DJ
+... clientHost HIH-D-35258Z
+... clientCase insensitive
+... peerAddress 192.0.2.10:6386
+... clientAddress 192.0.2.10
+... serverName master.dj01
+... unicode enabled
+... monitor enabled
+... security enabled
+... externalAuth enabled
+... ssoAuth optional
+... serverAddress p4-commit:1666
+... serverRoot /p4/root
+... serverDate 2026/10/13 09:44:53 +0800 CST
+... tzoffset 28800
+... serverUptime 23154:04:56
+... serverVersion P4D/LINUX26X86_64/2023.1/2513900 (2023/11/03)
+... ServerID master.dj01
+... serverServices commit-server
+... serverCluster p4_dj01
+... serverLicense Example Licensee 100 users (support ends 2027/01/05) (expires 2027/01/05) 
+... serverLicense-ip 192.0.2.20:1666
+... caseHandling sensitive
+... allowStreamSpecInteg 1
+... maxParallel 10
+... parentViewDefault inheritAll
+... unloadSupport enabled
+... extensionsSupport enabled
+... memoryManager mimalloc 207
+... transportInfo retransmits 0	probes 0	backoff 0
+options sack wscale
+sscale 8	rscale 7
+rto 204000	ato 40000	snd_mss 1460	rcv_mss 536
+unacked 0	sacked 0	lost 0	retrans 0	fackets 0
+last_data_sent 4	last_data_recv 0	last_ack_recv 0	
+pmtu 1500	rcv_ssthresh 64076	rtt 472	rttvar 549	
+snd_ssthresh 2147483647	snd_cwnd 10	advmss 1460	reordering 3	
+
+

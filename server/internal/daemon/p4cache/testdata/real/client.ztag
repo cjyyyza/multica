@@ -1,0 +1,33 @@
+... Client yujian01_HIH-D-35258Z_Dev
+... Update 2026/07/04 13:39:59
+... Access 2026/10/13 09:42:23
+... Owner yujian01
+... Host HIH-D-35258Z
+... Description Workspace created by Game Assist Tool v1.4.35 on HIH-D-35258Z for yujian01 (yujian01)
+
+... Root D:\DJ
+... Options noallwrite noclobber nocompress unlocked nomodtime rmdir noaltsync
+... SubmitOptions leaveunchanged
+... LineEnd local
+... Stream //DJ01_Proj/Dev
+... View0 //DJ01_Proj/Dev/... //yujian01_HIH-D-35258Z_Dev/...
+... View1 //DJ01_Proj/Engine57Stable/.editorconfig //yujian01_HIH-D-35258Z_Dev/.editorconfig
+... View2 //DJ01_Proj/Engine57Stable/Engine/... //yujian01_HIH-D-35258Z_Dev/Engine/...
+... View3 //DJ01_Proj/Dev/Game/DJ01/Build/UnrealGameSync.%%1 //yujian01_HIH-D-35258Z_Dev/Game/DJ01/Build/UnrealGameSync.%%1
+... View4 //DJ01_Proj/Engine57Stable/GenerateProjectFiles.bat //yujian01_HIH-D-35258Z_Dev/GenerateProjectFiles.bat
+... View5 //DJ01_Raw/ArtDep/Tools/... //yujian01_HIH-D-35258Z_Dev/Raw/ArtDep/Tools/...
+... View6 //DJ01_Res/Extern/pypi/py311/... //yujian01_HIH-D-35258Z_Dev/Res/Extern/pypi/py311/...
+... View7 //DJ01_Res/Extern/pypi/py311_houdini/... //yujian01_HIH-D-35258Z_Dev/Res/Extern/pypi/py311_houdini/...
+... View8 //DJ01_Res/Extern/pypi/py311_win64/... //yujian01_HIH-D-35258Z_Dev/Res/Extern/pypi/py311_win64/...
+... View9 //DJ01_Proj/Engine57Stable/RunUAT.bat //yujian01_HIH-D-35258Z_Dev/RunUAT.bat
+... View10 //DJ01_Proj/Engine57Stable/RunUBT.bat //yujian01_HIH-D-35258Z_Dev/RunUBT.bat
+... View11 //DJ01_Proj/Engine57Stable/cpp.hint //yujian01_HIH-D-35258Z_Dev/cpp.hint
+... Type writeable
+... Backup enable
+... extraTag0 writable
+... extraTagType0 words
+... writable0 //DJ01_Res/Extern/pypi/py311_houdini/...
+... writable1 //DJ01_Res/Extern/pypi/py311_win64/...
+... writable2 //DJ01_Res/Extern/pypi/py311/...
+... writable3 //DJ01_Raw/ArtDep/Tools/...
+
