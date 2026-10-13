@@ -93,10 +93,12 @@ func TestFinishReportsShelvedChangelistAndReview(t *testing.T) {
 
 	var report p4ChangelistReport
 	var linkedSeparately bool
+	var reportAuth string
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		switch r.URL.Path {
 		case "/api/daemon/tasks/task/p4/changelists":
+			reportAuth = r.Header.Get("Authorization")
 			if err := json.Unmarshal(body, &report); err != nil {
 				t.Errorf("report: %v", err)
 			}
@@ -132,10 +134,18 @@ func TestFinishReportsShelvedChangelistAndReview(t *testing.T) {
 		description: "refs #5002 fix the crash\n\nMultica: DJ-123\n",
 		change:      "1001", taskID: "task",
 	}
-	d := &Daemon{logger: slog.Default(), client: NewClient(api.URL), p4Cache: &p4cache.Cache{P4Path: bin}}
+	client := NewClient(api.URL)
+	client.SetToken("mdt_daemon")
+	d := &Daemon{logger: slog.Default(), client: client, p4Cache: &p4cache.Cache{P4Path: bin}}
 	d.finishP4Workspace(t.Context(), Task{
 		ID: "task", WorkspaceID: "ws", IssueID: "issue-1", AuthToken: "mat_task",
 	}, binding)
+	// /api/daemon/* accepts daemon credentials only. Sending the agent's task
+	// token got a 401 in the live test, and the changelist never reached the
+	// issue.
+	if reportAuth != "Bearer mdt_daemon" {
+		t.Fatalf("changelist report Authorization = %q, want the daemon token", reportAuth)
+	}
 	if report.Status != "shelved" || report.Number != 1001 || report.OriginalNumber != 1001 {
 		t.Fatalf("report = %+v", report)
 	}

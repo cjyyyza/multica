@@ -195,11 +195,7 @@ func (d *Daemon) reportTaskP4Changelist(ctx context.Context, task Task, report p
 	if d.client == nil {
 		return fmt.Errorf("daemon client is not initialized")
 	}
-	token := strings.TrimSpace(task.AuthToken)
-	if token == "" {
-		return fmt.Errorf("task %s has no auth token for the changelist report", task.ID)
-	}
-	err := d.client.ReportTaskP4Changelist(ctx, task.ID, token, report, &map[string]any{})
+	err := d.client.ReportTaskP4Changelist(ctx, task.ID, report, &map[string]any{})
 	if isNotFound(err) {
 		if d.logger != nil {
 			d.logger.Warn("p4 changelist report skipped; server has no changelist route", "task_id", task.ID)

@@ -1390,11 +1390,14 @@ func (c *Client) postJSONWithToken(ctx context.Context, path, token string, reqB
 	return json.NewDecoder(resp.Body).Decode(respBody)
 }
 
-// ReportTaskP4Changelist posts one task changelist. The task token is the
-// credential: the daemon PAT must not stand in for the task.
-func (c *Client) ReportTaskP4Changelist(ctx context.Context, taskID, token string, body, out any) error {
+// ReportTaskP4Changelist posts one task changelist. It authenticates as the
+// daemon, like the other /api/daemon/tasks/{id}/... reports (progress,
+// complete): that route group accepts daemon credentials only, and the server
+// checks the task belongs to this daemon. The agent's task token is rejected
+// there with 401.
+func (c *Client) ReportTaskP4Changelist(ctx context.Context, taskID string, body, out any) error {
 	path := "/api/daemon/tasks/" + url.PathEscape(taskID) + "/p4/changelists"
-	return c.postJSONWithToken(ctx, path, token, body, out)
+	return c.postJSON(ctx, path, body, out)
 }
 
 // ListOpenP4Changelists loads the pending and shelved changelists this daemon
