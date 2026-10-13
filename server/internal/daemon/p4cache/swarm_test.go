@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -193,16 +194,16 @@ func TestSwarmDoesNotForwardTicketsThroughRedirects(t *testing.T) {
 // the issue. The list must send change[] and keep only reviews that name the
 // changelist, whatever the server returns.
 func TestSwarmListKeepsOnlyReviewsOfTheChangelist(t *testing.T) {
-	var gotQuery string
+	var gotPath, gotQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/reviews") {
-			gotQuery = r.URL.RawQuery
+			gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
 			w.Header().Set("Content-Type", "application/json")
 			// The filter is ignored: unrelated reviews come first.
-			_, _ = w.Write([]byte(`{"error":null,"messages":[],"data":{"reviews":[
+			_, _ = w.Write([]byte(`{"reviews":[
 				{"id":795321,"author":"carol","state":"needsReview","changes":[795151,795322]},
 				{"id":795233,"author":"dave","state":"needsReview","changes":[795231,795234]}
-			]}}`))
+			],"totalCount":2}`))
 			return
 		}
 		http.NotFound(w, r)
@@ -225,8 +226,55 @@ func TestSwarmListKeepsOnlyReviewsOfTheChangelist(t *testing.T) {
 		t.Fatalf("reviews = %+v, want none: no returned review lists CL 795343", result.Reviews)
 	}
 	values, _ := url.ParseQuery(gotQuery)
-	if values.Get("change[]") != "795343" {
-		t.Fatalf("query = %q, want change[]=795343", gotQuery)
+	if gotPath != "/api/v9/reviews" || values.Get("change[]") != "795343" {
+		t.Fatalf("request = %s?%s, want /api/v9/reviews?change[]=795343", gotPath, gotQuery)
+	}
+}
+
+// DJ01's Swarm 2024.2 ignores the change filter on v11 and answers with its 50
+// newest reviews, which buries the review of any older changelist; v9 filters.
+// The fixture is the v9 answer the real server gave for the run-4 changelist.
+func TestSwarmListFiltersByChangelistOnV9(t *testing.T) {
+	real, err := os.ReadFile(filepath.Join("testdata", "real", "swarm-v9-reviews-change.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path != "/api/v9/reviews" || r.URL.Query().Get("change[]") != "795543" {
+			// What v11 does on DJ01: drop the filter, list the newest reviews.
+			_, _ = w.Write([]byte(`{"error":null,"messages":[],"data":{"reviews":[{"id":1,"author":"bob","changes":[2]}]}}`))
+			return
+		}
+		_, _ = w.Write(real)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	t.Setenv("P4_FAKE_LOG", filepath.Join(dir, "p4.log"))
+	t.Setenv("P4USER", "alice")
+	cache := &Cache{P4Path: writeFakeP4(t, dir), HTTPClient: srv.Client()}
+	result, err := cache.Swarm(context.Background(), SwarmParams{
+		Ref:        p4depot.Ref{Port: "p4:1666", Depot: "//DJ01_Proj/Dev", SwarmURL: srv.URL},
+		Action:     SwarmList,
+		Changelist: "795543",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Reviews) != 1 {
+		t.Fatalf("reviews = %+v, want the one review of CL 795543 (requests: %v)", result.Reviews, paths)
+	}
+	review := result.Reviews[0]
+	if review.ID != 795547 || review.Author != "yujian01" || review.State != "needsReview" {
+		t.Fatalf("review = %+v", review)
+	}
+	if review.URL != srv.URL+"/reviews/795547" {
+		t.Fatalf("url = %q", review.URL)
+	}
+	if len(paths) != 1 || paths[0] != "/api/v9/reviews" {
+		t.Fatalf("requests = %v, want a single v9 list", paths)
 	}
 }
 

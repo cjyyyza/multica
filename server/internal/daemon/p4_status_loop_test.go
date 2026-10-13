@@ -112,10 +112,13 @@ func TestFinishReportsShelvedChangelistAndReview(t *testing.T) {
 	}))
 	defer api.Close()
 	swarm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Swarm 2024.2's v11 shapes: the list under data.reviews, the created
-		// review as a one-element array under data.review.
+		// DJ01's Swarm 2024.2 shapes: the v9 list filtered by change[], and the
+		// v11 create answer with the review as a one-element array.
 		if r.Method == http.MethodGet {
-			w.Write([]byte(`{"error":null,"messages":[],"data":{"reviews":[]}}`))
+			if r.URL.Path != "/api/v9/reviews" {
+				t.Errorf("review lookup = %s, want the v9 list that honors change[]", r.URL.Path)
+			}
+			w.Write([]byte(`{"reviews":[],"totalCount":0}`))
 			return
 		}
 		w.Write([]byte(`{"error":null,"messages":[],"data":{"review":[{"id":9,"author":"alice","state":"needsReview","description":"refs #5002","changes":[1001]}]}}`))
