@@ -426,13 +426,13 @@ func parseReview(baseURL string, raw json.RawMessage) (*SwarmReview, error) {
 	}
 	for _, key := range []string{"review", "data"} {
 		if item, ok := envelope[key]; ok {
-			if review, ok := decodeOneReview(baseURL, item); ok {
+			if review, ok := decodeReviewValue(baseURL, item); ok {
 				return review, nil
 			}
 			var inner map[string]json.RawMessage
 			if err := json.Unmarshal(item, &inner); err == nil {
 				if nested, ok := inner["review"]; ok {
-					if review, ok := decodeOneReview(baseURL, nested); ok {
+					if review, ok := decodeReviewValue(baseURL, nested); ok {
 						return review, nil
 					}
 				}
@@ -442,7 +442,24 @@ func parseReview(baseURL string, raw json.RawMessage) (*SwarmReview, error) {
 	if review, ok := decodeOneReview(baseURL, raw); ok && review.ID != 0 {
 		return review, nil
 	}
-	return nil, fmt.Errorf("swarm response did not include a review")
+	body := strings.TrimSpace(string(raw))
+	if len(body) > 300 {
+		body = body[:300] + "..."
+	}
+	return nil, fmt.Errorf("swarm response did not include a review: %s", body)
+}
+
+// decodeReviewValue reads a review sent as an object (v9) or as the
+// one-element array v11 create answers with: "data":{"review":[{...}]}.
+func decodeReviewValue(baseURL string, raw json.RawMessage) (*SwarmReview, bool) {
+	if review, ok := decodeOneReview(baseURL, raw); ok {
+		return review, true
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil || len(items) != 1 {
+		return nil, false
+	}
+	return decodeOneReview(baseURL, items[0])
 }
 
 func decodeReviews(baseURL string, raw json.RawMessage) ([]SwarmReview, error) {

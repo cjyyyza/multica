@@ -25,7 +25,8 @@ func TestSwarmCreateUsesHelixTicket(t *testing.T) {
 			raw, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(raw, &gotBody)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"data":{"review":{"id":77,"author":"alice","state":"needsReview","changes":[1001]}}}`))
+			// The v11 create answer documented for Swarm 2024.2.
+			_, _ = w.Write([]byte(`{"error":null,"messages":[],"data":{"review":[{"id":77,"author":"alice","state":"needsReview","changes":[1001]}]}}`))
 			return
 		}
 		http.NotFound(w, r)
@@ -76,6 +77,38 @@ func TestSwarmCreateUsesHelixTicket(t *testing.T) {
 	}
 	if result.SwarmURL != srv.URL {
 		t.Fatalf("effective Swarm URL = %q", result.SwarmURL)
+	}
+}
+
+// The Swarm 2024.2 API docs give the v11 create answer as a one-element array
+// under data.review. The parser read only an object there, and the create fake
+// answered with an object, so the real create would have failed after Swarm had
+// already made the review.
+func TestParseReviewAcceptsEveryDocumentedShape(t *testing.T) {
+	t.Parallel()
+	const one = `{"id":12346,"author":"bruno","state":"needsReview","changes":[12345]}`
+	for _, tc := range []struct{ name, body string }{
+		{"v11 create", `{"error":null,"messages":[],"data":{"review":[` + one + `]}}`},
+		{"v11 get", `{"error":null,"messages":[],"data":{"reviews":[` + one + `]}}`},
+		{"object under data", `{"data":{"review":` + one + `}}`},
+		{"v9", `{"review":` + one + `}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			review, err := parseReview("https://swarm.example", json.RawMessage(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if review.ID != 12346 || review.Author != "bruno" || len(review.Changes) != 1 || review.Changes[0] != 12345 {
+				t.Fatalf("review = %+v", review)
+			}
+			if review.URL != "https://swarm.example/reviews/12346" {
+				t.Fatalf("url = %q", review.URL)
+			}
+		})
+	}
+	_, err := parseReview("https://swarm.example", json.RawMessage(`{"data":{"review":[]}}`))
+	if err == nil || !strings.Contains(err.Error(), `"review":[]`) {
+		t.Fatalf("empty create answer: err = %v, want it to quote the body", err)
 	}
 }
 

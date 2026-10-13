@@ -112,11 +112,13 @@ func TestFinishReportsShelvedChangelistAndReview(t *testing.T) {
 	}))
 	defer api.Close()
 	swarm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Swarm 2024.2's v11 shapes: the list under data.reviews, the created
+		// review as a one-element array under data.review.
 		if r.Method == http.MethodGet {
-			w.Write([]byte(`{"reviews":[]}`))
+			w.Write([]byte(`{"error":null,"messages":[],"data":{"reviews":[]}}`))
 			return
 		}
-		w.Write([]byte(`{"review":{"id":9,"author":"alice","state":"needsReview","description":"refs #5002","changes":[1001]}}`))
+		w.Write([]byte(`{"error":null,"messages":[],"data":{"review":[{"id":9,"author":"alice","state":"needsReview","description":"refs #5002","changes":[1001]}]}}`))
 	}))
 	defer swarm.Close()
 
