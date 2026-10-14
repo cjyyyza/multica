@@ -86,6 +86,8 @@ func main() {
 		emit("CHANGEOUT")
 	case rest[0] == "change" && strings.Contains(joined, " -d "):
 		emit("CHANGEDEL")
+	case rest[0] == "sync":
+		emit("SYNC")
 	case rest[0] == "revert":
 		emit("REVERT")
 	case rest[0] == "shelve":
@@ -530,5 +532,87 @@ func TestDescribeChangeFollowsASubmitRenumber(t *testing.T) {
 	}
 	if !deleted.Missing {
 		t.Fatalf("a deleted changelist was not reported as missing: %+v", deleted)
+	}
+}
+
+func TestSyncClientIncludesImportsInTheClientView(t *testing.T) {
+	fixture := newWorkspaceFixture(t)
+	for _, stream := range []string{"", "//DJ01_Proj/Dev"} {
+		ws := &Workspace{Port: "p4:1666", User: "alice", Client: "alice_DEV", Root: fixture.root, Dir: fixture.root, Stream: stream}
+		if _, err := fixture.cache.SyncClient(t.Context(), ws, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log := fixture.log(t)
+	if strings.Count(log, "sync //alice_DEV/...") != 2 || strings.Contains(log, "sync //DJ01_Proj/Dev/...") {
+		t.Fatalf("sync must include all client mappings, including imported engine files: %s", log)
+	}
+}
+
+func TestPendingChangeDescriptionValidatesLiveOwnership(t *testing.T) {
+	fixture := newWorkspaceFixture(t)
+	ws := &Workspace{Port: "p4:1666", User: "alice", Client: "alice_DEV", Root: fixture.root, Dir: fixture.root}
+	const spec = "Change: 1001\r\nClient: alice_DEV\r\nUser: alice\r\nStatus: pending\r\nDescription:\r\n\tA summary\r\n\trefs #123 fix\r\n\tMultica: MUL-7\r\n\r\nFiles:\r\n\t//depot/main/a.cpp\r\n"
+	for _, tc := range []struct{ name, before, after string }{
+		{"valid", "", ""},
+		{"different client", "Client: alice_DEV", "Client: other"},
+		{"different owner", "User: alice", "User: bob"},
+		{"submitted", "Status: pending", "Status: submitted"},
+		{"missing change", "Change: 1001", "Change: new"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text := spec
+			if tc.before != "" {
+				text = strings.Replace(text, tc.before, tc.after, 1)
+			}
+			t.Setenv("P4_FAKE_CHANGEOUT", text)
+			desc, err := fixture.cache.PendingChangeDescription(t.Context(), ws, "1001")
+			if tc.name != "valid" {
+				if err == nil {
+					t.Fatalf("accepted changelist outside the bound pending client: %s", text)
+				}
+				return
+			}
+			if err != nil || desc != "A summary\nrefs #123 fix\nMultica: MUL-7" {
+				t.Fatalf("multiline description = %q, error %v", desc, err)
+			}
+		})
+	}
+}
+
+func TestSubmittedChangeReadsTheOriginalIdentityInTheBoundWorkspace(t *testing.T) {
+	fixture := newWorkspaceFixture(t)
+	ws := fixture.detect(t)
+	t.Setenv("P4_FAKE_ORIGINAL_CHANGE", "1001")
+	for _, tc := range []struct {
+		name, body, stderr, want string
+	}{
+		{"renumbered", "... change 2002\n... oldChange 1001\n... status submitted\n", "", "2002"},
+		{"same number", "... change 1001\n... status submitted\n", "", "1001"},
+		{"pending", "... change 1001\n... status pending\n", "", ""},
+		{"invalid number", "... change nope\n... status submitted\n", "", ""},
+		{"foreign original", "... change 2002\n... oldChange 999\n... status submitted\n", "", ""},
+		{"missing", "", "Change 1001 unknown.", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("P4_FAKE_DESCRIBE", tc.body+"... depotFile0 //DJ01_Proj/Dev/A.cpp\n... action0 edit\n... type0 text\n... depotFile1 //DJ01_Proj/Dev/B.cpp\n... action1 add\n... type1 text\n")
+			t.Setenv("P4_FAKE_DESCRIBE_ERR", tc.stderr)
+			got, err := fixture.cache.SubmittedChange(t.Context(), ws, "1001")
+			if tc.want == "" {
+				if err == nil {
+					t.Fatalf("unverified submission accepted: %+v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Change != tc.want || got.OriginalChange != "1001" || !got.Submitted || len(got.Files) != 2 || got.Files[1].Action != "add" {
+				t.Fatalf("submission receipt = %+v", got)
+			}
+		})
+	}
+	if log := fixture.log(t); !strings.Contains(log, ws.Dir+"\t-ztag -p "+ws.Port+" -u alice -c alice_DEV -C utf8 describe -s -O 1001") {
+		t.Fatalf("submission read did not preserve the workspace connection: %s", log)
 	}
 }

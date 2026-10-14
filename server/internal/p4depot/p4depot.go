@@ -32,6 +32,12 @@ type Ref struct {
 	// NoAutoReview skips the automatic Swarm review when a workspace-mode task
 	// shelves its changelist. The zero value keeps auto review on.
 	NoAutoReview bool `json:"no_auto_review,omitempty"`
+	// AllowSubmit, AllowSync, and AllowUnshelve are set in the workspace
+	// Perforce settings. All three default off. Sync only updates a workspace
+	// the task is already bound to; it does not create a client.
+	AllowSubmit   bool `json:"allow_submit,omitempty"`
+	AllowSync     bool `json:"allow_sync,omitempty"`
+	AllowUnshelve bool `json:"allow_unshelve,omitempty"`
 }
 
 var (

@@ -61,12 +61,12 @@ mentioning, triggering and status changes mutate durable workspace state or
 start agent runs that cost real budget. Never run one to see what happens. When
 the user has not asked for a specific mutation, propose it instead of making it.
 
-**An agent never submits a Perforce changelist.** Open files with
-`multica p4 edit`, let the task changelist shelve, and report its number
-(`multica p4 status`); the person who owns the workspace verifies in the editor
-and submits. The existing workspace binding and daemon checks are described in
-`references/runtimes.md`.
-Never create a client for the task.
+**Perforce submit, sync, and unshelve default to disabled.** Use them only when
+the runtime brief's Perforce workspace section explicitly enables the action.
+Otherwise open files with `multica p4 edit`, let the task changelist shelve,
+and report its number (`multica p4 status`) for a person to verify and submit.
+Never create a client for the task. See `references/runtimes.md` for the
+workspace binding and action permissions.
 
 **Status keys identify workflow states; categories describe lifecycle only.**
 Custom statuses do not inherit built-in automation behavior. For status side

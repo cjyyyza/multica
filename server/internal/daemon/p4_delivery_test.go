@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -13,6 +14,91 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/p4cache"
 	"github.com/multica-ai/multica/server/internal/p4depot"
 )
+
+func TestP4SubmitReportsAuthoritativeReceipt(t *testing.T) {
+	bin := writeDaemonFakeP4(t)
+	root := t.TempDir()
+	t.Setenv("P4_FAKE_CHANGEOUT", "Change: 1001\nClient: alice_main\nUser: alice\nStatus: pending\nDescription:\n\trefs #123 fix\n")
+	t.Setenv("P4_FAKE_MUTATE", "Change 1001 renamed change 2002 and submitted.\n")
+	t.Setenv("P4_FAKE_DESCRIBE", "... change 2002\n... oldChange 1001\n... status submitted\n... depotFile0 //depot/main/a.cpp\n... action0 edit\n... type0 text\n... depotFile1 //depot/main/b.cpp\n... action1 add\n... type1 text\n")
+	t.Setenv("P4_FAKE_OPENED", "... depotFile //depot/main/a.cpp\n... change 1001\n... action edit\n")
+	var got p4ChangelistReport
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer api.Close()
+	b := &p4TaskBinding{
+		ws:     &p4cache.Workspace{Port: "p4:1666", User: "alice", Client: "alice_main", Root: root, Dir: root, Stream: "//depot/main"},
+		ref:    p4depot.Ref{Port: "p4:1666", Depot: "//depot/main", AllowSubmit: true},
+		taskID: "task", ticket: "123", change: "1001",
+	}
+	d := &Daemon{client: NewClient(api.URL), p4Cache: &p4cache.Cache{P4Path: bin}, logger: slog.Default()}
+	result, rej, err := d.runWorkspaceP4(t.Context(), b, p4MutateRequest{Action: "submit"}, root)
+	if err != nil || rej != nil {
+		t.Fatalf("submit rejected: %v %+v", err, rej)
+	}
+	if result.Changelist != "2002" {
+		t.Errorf("CLI receipt uses %s instead of submitted number 2002", result.Changelist)
+	}
+	status, err := d.workspaceStatus(t.Context(), b)
+	if err != nil || status.Change != "2002" || len(status.Files) != 2 {
+		t.Errorf("submitted workspace status = %+v, %v", status, err)
+	}
+	if err := d.finishP4Workspace(t.Context(), Task{ID: "task"}, b); err != nil {
+		t.Fatal(err)
+	}
+	if got.Number != 2002 || got.OriginalNumber != 1001 || got.FilesCount != 2 || got.Status != "submitted" {
+		t.Fatalf("submitted receipt = %+v", got)
+	}
+}
+
+func TestP4SubmitReceiptFailureDoesNotResubmitOrReportCompletion(t *testing.T) {
+	bin := writeDaemonFakeP4(t)
+	root := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "p4.log")
+	t.Setenv("P4_FAKE_LOG", logPath)
+	t.Setenv("P4_FAKE_CHANGEOUT", "Change: 1001\nClient: alice_main\nUser: alice\nStatus: pending\nDescription:\n\trefs #123 fix\n")
+	t.Setenv("P4_FAKE_MUTATE", "Change 1001 submitted.\n")
+	t.Setenv("P4_FAKE_DESCRIBE_ERR", "connection lost")
+	t.Setenv("P4_FAKE_OPENED", "... depotFile //depot/main/a.cpp\n... change 1001\n... action edit\n")
+	var got p4ChangelistReport
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer api.Close()
+	b := &p4TaskBinding{
+		ws:     &p4cache.Workspace{Port: "p4:1666", User: "alice", Client: "alice_main", Root: root, Dir: root},
+		ref:    p4depot.Ref{Port: "p4:1666", Depot: "//depot/main", AllowSubmit: true},
+		taskID: "task", ticket: "123", change: "1001",
+	}
+	d := &Daemon{client: NewClient(api.URL), p4Cache: &p4cache.Cache{P4Path: bin}, logger: slog.Default()}
+	if _, _, err := d.runWorkspaceP4(t.Context(), b, p4MutateRequest{Action: "submit"}, root); err == nil {
+		t.Error("missing submission receipt was reported as success")
+	}
+	if _, rej, _ := d.runWorkspaceP4(t.Context(), b, p4MutateRequest{Action: "submit"}, root); rej == nil {
+		t.Error("submit was replayed after a receipt-read failure")
+	}
+	if err := d.finishP4Workspace(t.Context(), Task{ID: "task"}, b); err == nil {
+		t.Error("missing submission receipt did not fail delivery")
+	}
+	if got.Number != 1001 || got.Status != "pending" {
+		t.Errorf("unverified change must stay eligible for polling: %+v", got)
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterSubmit := strings.SplitN(string(log), "submit -c 1001", 2)
+	if len(afterSubmit) != 2 || strings.Contains(afterSubmit[1], "submit ") || strings.Contains(afterSubmit[1], "revert ") || strings.Contains(afterSubmit[1], "shelve ") {
+		t.Fatalf("unexpected writes after submission: %s", log)
+	}
+}
 
 func TestP4FinishFailureReportsPendingChange(t *testing.T) {
 	bin := writeDaemonFakeP4(t)

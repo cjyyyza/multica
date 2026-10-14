@@ -815,6 +815,26 @@ VALUES ($1, $2, 'owner')
 	})
 }
 
+func TestUpdateWorkspace_MachineCannotConfigureP4(t *testing.T) {
+	for _, source := range []string{"task_token", "cloud_pat"} {
+		for _, method := range []string{http.MethodPatch, http.MethodPut} {
+			t.Run(source+"/"+method, func(t *testing.T) {
+				for _, depots := range [][]map[string]any{
+					{{"port": "p4:1666", "depot": "//depot/main", "allow_submit": true, "allow_sync": true, "allow_unshelve": true}},
+					{},
+				} {
+					req := newRequest(method, "/api/workspaces/"+testWorkspaceID, map[string]any{"p4_depots": depots})
+					req = withURLParam(req, "id", testWorkspaceID)
+					req.Header.Set("X-Actor-Source", source)
+					// No database is needed: reject even the runtime owner's
+					// otherwise valid admin request before any write or lookup.
+					testutil.Call(t, (&Handler{}).UpdateWorkspace, req).Want(http.StatusForbidden)
+				}
+			})
+		}
+	}
+}
+
 func TestUpdateWorkspace_P4DepotsValidation(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -855,10 +875,13 @@ VALUES ($1, $2, 'owner')
 		req := newRequest("PATCH", "/api/workspaces/"+wsID, map[string]any{
 			"p4_depots": []map[string]any{
 				{
-					"port":        "  SSL:perforce.example.com:1666  ",
-					"depot":       "  //depot/game  ",
-					"stream":      "  //depot/game/main  ",
-					"description": "  client  ",
+					"port":           "  SSL:perforce.example.com:1666  ",
+					"depot":          "  //depot/game  ",
+					"stream":         "  //depot/game/main  ",
+					"description":    "  client  ",
+					"allow_submit":   true,
+					"allow_sync":     true,
+					"allow_unshelve": true,
 				},
 				{
 					"port":   "ssl:perforce.example.com:1666",
@@ -876,15 +899,21 @@ VALUES ($1, $2, 'owner')
 
 		var resp struct {
 			P4Depots []struct {
-				Port        string `json:"port"`
-				Depot       string `json:"depot"`
-				Stream      string `json:"stream"`
-				Description string `json:"description"`
+				Port          string `json:"port"`
+				Depot         string `json:"depot"`
+				Stream        string `json:"stream"`
+				Description   string `json:"description"`
+				AllowSubmit   bool   `json:"allow_submit"`
+				AllowSync     bool   `json:"allow_sync"`
+				AllowUnshelve bool   `json:"allow_unshelve"`
 			} `json:"p4_depots"`
 		}
 		w.JSON(&resp)
 		if len(resp.P4Depots) != 2 {
 			t.Fatalf("expected duplicate identity to be deduped, got %d depots: %+v", len(resp.P4Depots), resp.P4Depots)
+		}
+		if !resp.P4Depots[0].AllowSubmit || !resp.P4Depots[0].AllowSync || !resp.P4Depots[0].AllowUnshelve {
+			t.Fatalf("human administrator's permissions were lost: %+v", resp.P4Depots[0])
 		}
 		if resp.P4Depots[0].Port != "SSL:perforce.example.com:1666" ||
 			resp.P4Depots[0].Depot != "//depot/game" ||

@@ -57,7 +57,7 @@ func TestP4SwarmCannotSupplyURLForDepotWithoutSwarm(t *testing.T) {
 func TestP4HandlersRejectUnboundWritesEvenWithOldCheckout(t *testing.T) {
 	root := t.TempDir()
 	d := &Daemon{logger: slog.Default(), p4Cache: &p4cache.Cache{P4Path: filepath.Join(root, "missing-p4")}}
-	ref := p4depot.Ref{Port: "p4:1666", Depot: "//depot/UE", User: "alice"}
+	ref := p4depot.Ref{Port: "p4:1666", Depot: "//depot/UE", User: "alice", AllowSubmit: true, AllowSync: true}
 	d.registerTaskP4Depots("ws", "task", []P4DepotData{P4DepotData(ref)})
 	d.registerActiveRepoCheckoutTask("mat_p4_test", activeRepoCheckoutTask{WorkspaceID: "ws", TaskID: "task", WorkDir: root})
 	checkout := filepath.Join(root, "p4", "mc-legacy-task-client")
@@ -83,13 +83,14 @@ func TestP4HandlersRejectUnboundWritesEvenWithOldCheckout(t *testing.T) {
 func TestP4SwarmShelvesOnlyTheBoundChange(t *testing.T) {
 	bin := writeDaemonFakeP4(t)
 	for _, tc := range []struct {
-		name, change string
-		bound        bool
-		want         int
+		name, change     string
+		bound, submitted bool
+		want             int
 	}{
-		{"no binding", "1001", false, http.StatusConflict},
-		{"other change", "9999", true, http.StatusConflict},
-		{"pending task change", "1001", true, http.StatusOK},
+		{"no binding", "1001", false, false, http.StatusConflict},
+		{"other change", "9999", true, false, http.StatusConflict},
+		{"pending task change", "1001", true, false, http.StatusOK},
+		{"submitted task change", "1001", true, true, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -113,7 +114,7 @@ func TestP4SwarmShelvesOnlyTheBoundChange(t *testing.T) {
 			if tc.bound {
 				d.rememberP4Binding(&p4TaskBinding{
 					ws:  &p4cache.Workspace{Port: ref.Port, Client: "alice_main", User: "alice", Root: root, Dir: root},
-					ref: ref, taskID: "task", change: "1001",
+					ref: ref, taskID: "task", change: "1001", submitted: tc.submitted,
 				})
 			}
 			body, _ := json.Marshal(p4SwarmRequest{Port: ref.Port, Depot: ref.Depot, WorkspaceID: "ws", TaskID: "task", WorkDir: root, Action: "create", Changelist: tc.change, Shelve: true})
@@ -134,7 +135,7 @@ func TestP4SwarmShelvesOnlyTheBoundChange(t *testing.T) {
 				}
 				return
 			}
-			if creates.Load() != 1 || !strings.Contains(string(log), "shelve -r -c 1001") {
+			if creates.Load() != 1 || strings.Contains(string(log), "shelve -r -c 1001") == tc.submitted {
 				t.Fatalf("wrong shelf/review behavior: creates=%d calls=%s", creates.Load(), log)
 			}
 		})

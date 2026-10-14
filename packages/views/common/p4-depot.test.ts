@@ -52,7 +52,30 @@ describe("toP4DepotPayload", () => {
       }),
     ).toEqual({ port: "p4:1666", depot: "//depot/a", allow_exclusive: true, no_auto_review: true });
     expect(
-      toP4DepotPayload({ port: "p4:1666", depot: "//depot/a", allow_exclusive: false, no_auto_review: false }),
+      toP4DepotPayload({
+        port: "p4:1666",
+        depot: "//depot/a",
+        allow_submit: true,
+        allow_sync: true,
+        allow_unshelve: true,
+      }),
+    ).toEqual({
+      port: "p4:1666",
+      depot: "//depot/a",
+      allow_submit: true,
+      allow_sync: true,
+      allow_unshelve: true,
+    });
+    expect(
+      toP4DepotPayload({
+        port: "p4:1666",
+        depot: "//depot/a",
+        allow_exclusive: false,
+        no_auto_review: false,
+        allow_submit: false,
+        allow_sync: false,
+        allow_unshelve: false,
+      }),
     ).toEqual({ port: "p4:1666", depot: "//depot/a" });
   });
 });

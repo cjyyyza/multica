@@ -46,6 +46,9 @@ type P4WorkspaceForEnv struct {
 	Ticket         string // number after `refs #`; empty means files cannot be opened
 	Change         string // pending task changelist reused from an earlier run, if any
 	AllowExclusive bool   // +l files may be opened through the daemon
+	AllowSubmit    bool   // depot setting allow_submit; off until enabled in Perforce settings
+	AllowSync      bool   // depot setting allow_sync; off until enabled in Perforce settings
+	AllowUnshelve  bool   // depot setting allow_unshelve; off until enabled in Perforce settings
 }
 
 // ProjectResourceForEnv describes a single resource attached to the issue's

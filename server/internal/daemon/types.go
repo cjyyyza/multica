@@ -54,6 +54,9 @@ type P4DepotData struct {
 	SwarmURL       string `json:"swarm_url,omitempty"`
 	AllowExclusive bool   `json:"allow_exclusive,omitempty"`
 	NoAutoReview   bool   `json:"no_auto_review,omitempty"`
+	AllowSubmit    bool   `json:"allow_submit,omitempty"`
+	AllowSync      bool   `json:"allow_sync,omitempty"`
+	AllowUnshelve  bool   `json:"allow_unshelve,omitempty"`
 }
 
 // ProjectResourceData mirrors handler.ProjectResourceData — a single project

@@ -298,6 +298,20 @@ describe("CodeTab — Perforce", () => {
     });
   });
 
+  it("saves an enabled sync switch on the depot", async () => {
+    const user = userEvent.setup();
+    render(<CodeTab />, { wrapper: Wrapper });
+    await user.click(screen.getByRole("button", { name: /Add depot/ }));
+    await user.type(screen.getByLabelText("perforce.example.com:1666"), "p4.example.com:1666");
+    await user.type(screen.getByLabelText("//depot/project"), "//depot/game");
+    await user.click(screen.getByRole("switch", { name: /Agent may sync/ }));
+    await waitFor(() => {
+      expect(mockUpdateWorkspace).toHaveBeenCalledWith("workspace-1", {
+        p4_depots: [{ port: "p4.example.com:1666", depot: "//depot/game", allow_sync: true }],
+      });
+    });
+  });
+
   it("keeps Perforce configuration read-only for members", () => {
     roleRef.current = "member";
     render(<CodeTab />, { wrapper: Wrapper });

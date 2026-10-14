@@ -2629,7 +2629,13 @@ describe("WorkspaceSchema", () => {
       ...baseWorkspace,
       p4_depots: [{ port: "p4:1666", depot: "//depot/game" }],
     });
-    expect(parsed.p4_depots[0]).toMatchObject({ allow_exclusive: false, no_auto_review: false });
+    expect(parsed.p4_depots[0]).toMatchObject({
+      allow_exclusive: false,
+      no_auto_review: false,
+      allow_submit: false,
+      allow_sync: false,
+      allow_unshelve: false,
+    });
   });
 
   it("keeps a granted depot flag and drops a malformed one", () => {

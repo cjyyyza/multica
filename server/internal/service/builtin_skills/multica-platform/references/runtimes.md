@@ -115,7 +115,8 @@ project carries both an `in_place` `local_directory` on this daemon and a
 runtime brief names that client. There is no task-client mode: the daemon
 never creates a client or downloads a separate depot copy into the task directory.
 
-An agent shelves; the person who owns the files verifies in the editor and submits.
+An agent shelves by default; the person who owns the files verifies in the
+editor and submits unless the workspace settings explicitly allow agent submission.
 
 ### Workspace mode
 
@@ -130,8 +131,13 @@ number.
 `--port` and `--depot` are optional here; the daemon fills them from the
 binding, and `--changelist` may only name the task changelist. `multica p4
 status --output json` reports the client, root, stream, ticket, changelist
-number, its files, and any warnings. Submit, sync, and unshelve are refused
-with `action_not_allowed`. The daemon also
+number, its files, and any warnings. Submit, sync, and unshelve are off
+unless that depot turns on `allow_submit`, `allow_sync`, or `allow_unshelve`
+in the admin-managed Settings → Code catalog (each defaults to off, and a
+disabled one answers `action_not_allowed`). Project resources cannot grant
+these permissions; unmatched catalog entries keep all three disabled. Only
+run `multica p4 submit`, `multica p4 sync`, or `multica p4 unshelve` when the
+runtime brief explicitly enables that action. Sync never creates a client. The daemon also
 rejects a write that would touch a file already open
 in one of the human's changelists (`opened_by_you`), a file someone else has
 locked (`exclusive_locked`), an exclusive-lock file on a depot that does not
@@ -141,10 +147,12 @@ the task changelist (`outside_task_change`), or a path outside the client root
 through `P4CONFIG` / `P4CLIENT`; read-only `p4 files` / `print` / `filelog` /
 `describe` / `changes` still work and are the right way to read history.
 
-When the task ends, the daemon reverts the files that were opened but not
+When the task ends with a pending changelist, the daemon reverts the files that were opened but not
 changed, shelves the rest, and — unless the depot sets `no_auto_review` —
 opens a Helix Swarm review and links it to the issue. Changed files stay open
-for the human.
+for the human. A submitted changelist is read back with its actual submitted
+number and file list, and is not shelved again. If the submission receipt
+cannot be read, report the failure; never repeat the submit operation.
 
 Do not create a Helix client for the task.
 If the brief has no `## Perforce workspace` section, the task is not bound to
@@ -244,9 +252,11 @@ checkout.
 For Perforce work, check the brief for the mode first. In workspace mode you
 are already inside the human's client — open files with `multica p4 edit`,
 add new ones with `add-files`, and read the changelist number from
-`multica p4 status`. Open and add through
+`multica p4 status`. Submit, sync, and unshelve require the corresponding
+permission in the runtime brief. Open and add through
 `multica p4 edit` / `add-files` and never through a host `p4` client, which may
 belong to another UE workspace. Record the changelist, Swarm review
-id, and the actual editor/build validation in the task; a human submits.
+id, and the actual editor/build validation in the task; without submit permission,
+a human submits.
 An imported 易协作 issue remains unassigned until a member chooses its owner.
 Result publication is a separate member-confirmed source operation.

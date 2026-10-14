@@ -51,24 +51,43 @@ func rejectP4(code, message string, files, holders []string) *p4Rejection {
 // runWorkspaceP4 applies one agent action to the bound client. Every write
 // lands in the task changelist; the person's own opens are refused.
 func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4MutateRequest, cwd string) (*p4WorkspaceResult, *p4Rejection, error) {
+	b.opMu.Lock()
+	defer b.opMu.Unlock()
 	if b.isClosed() {
 		return nil, rejectP4(p4CodeActionNotAllowed, "this task's Perforce workspace is already closing", nil, nil), nil
 	}
 	action := strings.ToLower(strings.TrimSpace(req.Action))
-	if action == "submit" {
-		return nil, rejectP4(p4CodeActionNotAllowed, p4cache.ErrSubmitNotSupported.Error(), nil, nil), nil
+	if b.isSubmitted() && action != p4cache.ActionOpened && action != p4cache.ActionDescribe && action != "sync" {
+		return nil, rejectP4(p4CodeActionNotAllowed, "this task's changelist has already been submitted", nil, nil), nil
+	}
+	if action == "sync" {
+		if req.Changelist != "" || req.Fresh {
+			return nil, rejectP4(p4CodeActionNotAllowed, "workspace sync does not support --changelist or --fresh; a person chooses historical revisions or resets the workspace", nil, nil), nil
+		}
+	} else if rej := b.rejectForeignChangelist(req.Changelist); rej != nil {
+		return nil, rej, nil
 	}
 	switch action {
-	case "sync", p4cache.ActionUnshelve:
-		return nil, rejectP4(p4CodeActionNotAllowed, "workspace mode does not "+action+"; a person syncs this workspace", nil, nil), nil
+	case "submit":
+		if !b.ref.AllowSubmit {
+			return nil, rejectP4(p4CodeActionNotAllowed, p4cache.ErrSubmitDisabled.Error(), nil, nil), nil
+		}
+		return d.workspaceSubmit(ctx, b)
+	case "sync":
+		if !b.ref.AllowSync {
+			return nil, rejectP4(p4CodeActionNotAllowed, "workspace mode does not sync; a person syncs this workspace", nil, nil), nil
+		}
+		return d.workspaceSync(ctx, b, cwd, req.Files)
+	case p4cache.ActionUnshelve:
+		if !b.ref.AllowUnshelve {
+			return nil, rejectP4(p4CodeActionNotAllowed, "workspace mode does not unshelve; a person syncs this workspace", nil, nil), nil
+		}
+		return d.workspaceUnshelve(ctx, b)
 	case p4cache.ActionEdit, p4cache.ActionAdd, p4cache.ActionDelete, p4cache.ActionMove,
 		p4cache.ActionReopen, p4cache.ActionRevert, p4cache.ActionReconcile,
 		p4cache.ActionShelve, p4cache.ActionChange, p4cache.ActionOpened, p4cache.ActionDescribe:
 	default:
 		return nil, rejectP4(p4CodeActionNotAllowed, fmt.Sprintf("perforce action %q is not available in workspace mode", req.Action), nil, nil), nil
-	}
-	if rej := b.rejectForeignChangelist(req.Changelist); rej != nil {
-		return nil, rej, nil
 	}
 	if actionOpensFiles(action) && strings.TrimSpace(b.ticket) == "" {
 		return nil, rejectP4(p4CodeTicketRequired, "this task has no 易协作 ticket; ask a person to add refs #<number> to the task description before opening files", nil, nil), nil
@@ -170,6 +189,99 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 		},
 		Warnings: warnings,
 	}, nil, nil
+}
+
+func (d *Daemon) workspaceSubmit(ctx context.Context, b *p4TaskBinding) (*p4WorkspaceResult, *p4Rejection, error) {
+	change := b.changelist()
+	if change == "" {
+		return nil, rejectP4(p4CodeActionNotAllowed, "this task has no changelist yet; open a file first", nil, nil), nil
+	}
+	validate := func() (*p4Rejection, error) {
+		desc, err := d.p4Cache.PendingChangeDescription(ctx, b.ws, change)
+		if err != nil {
+			return nil, err
+		}
+		if !p4depot.ValidTicket(b.ticket) || p4depot.TicketFromText(desc) != b.ticket {
+			return rejectP4(p4CodeTicketRequired, "the changelist description must still reference this task's ticket refs #"+b.ticket, nil, nil), nil
+		}
+		if b.issueKey != "" && !p4depot.DescriptionHasTaskTrailer(desc, b.issueKey) {
+			return rejectP4(p4CodeOutsideTaskChange, "the changelist description no longer identifies this task's issue", nil, nil), nil
+		}
+		b.mu.Lock()
+		b.description = desc
+		b.mu.Unlock()
+		return nil, nil
+	}
+	if rej, err := validate(); rej != nil || err != nil {
+		return nil, rej, err
+	}
+	if _, err := d.p4Cache.RunInChange(ctx, b.ws, change, "revert", []string{"//" + b.ws.Client + "/..."}, "-a"); err != nil {
+		return nil, nil, err
+	}
+	opened, err := d.p4Cache.OpenedInChange(ctx, b.ws, change)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(opened) == 0 {
+		return nil, rejectP4(p4CodeActionNotAllowed, "this task's changelist has no modified files to submit", nil, nil), nil
+	}
+	// Re-read after cleanup: a person can edit the description in P4V while
+	// the task is running. Never rewrite their description to authorize submit.
+	if rej, err := validate(); rej != nil || err != nil {
+		return nil, rej, err
+	}
+	if err := d.p4Cache.DeleteShelf(ctx, b.ws, change); err != nil {
+		return nil, nil, err
+	}
+	output, err := d.p4Cache.RunInChange(ctx, b.ws, change, "submit", nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	b.markSubmitted()
+	// Once the write succeeded, a failed read must never replay submit.
+	receipt, err := d.submittedP4Change(ctx, b)
+	if err != nil {
+		return nil, nil, fmt.Errorf("changelist %s was submitted, but its receipt could not be read: %w", change, err)
+	}
+	return workspaceVerbResult(b, "submit", receipt.Change, output), nil, nil
+}
+
+func (d *Daemon) workspaceUnshelve(ctx context.Context, b *p4TaskBinding) (*p4WorkspaceResult, *p4Rejection, error) {
+	change := b.changelist()
+	if change == "" {
+		return nil, rejectP4(p4CodeActionNotAllowed, "this task has no changelist yet; open a file first", nil, nil), nil
+	}
+	// -s and -c are the same task changelist. Another shelf would land
+	// someone else's files in this workspace.
+	output, err := d.p4Cache.RunInChange(ctx, b.ws, change, "unshelve", nil, "-s", change)
+	if err != nil {
+		return nil, nil, err
+	}
+	return workspaceVerbResult(b, p4cache.ActionUnshelve, change, output), nil, nil
+}
+
+func (d *Daemon) workspaceSync(ctx context.Context, b *p4TaskBinding, cwd string, files []string) (*p4WorkspaceResult, *p4Rejection, error) {
+	paths, _, rej := b.resolveWorkspacePaths(cwd, files, "")
+	if rej != nil {
+		return nil, rej, nil
+	}
+	output, err := d.p4Cache.SyncClient(ctx, b.ws, paths)
+	if err != nil {
+		return nil, nil, err
+	}
+	return workspaceVerbResult(b, "sync", b.changelist(), output), nil, nil
+}
+
+func workspaceVerbResult(b *p4TaskBinding, action, change, output string) *p4WorkspaceResult {
+	return &p4WorkspaceResult{
+		MutateResult: p4cache.MutateResult{
+			Path:       b.ws.Dir,
+			Client:     b.ws.Client,
+			Action:     action,
+			Changelist: change,
+			Output:     output,
+		},
+	}
 }
 
 func (d *Daemon) workspaceLocalPath(ctx context.Context, b *p4TaskBinding, path string) (string, *p4Rejection, error) {

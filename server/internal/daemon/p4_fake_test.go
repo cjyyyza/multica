@@ -87,7 +87,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "111 - no such changelist.")
 			os.Exit(1)
 		}
-		if body := os.Getenv("P4_FAKE_DESCRIBE"); body != "" {
+		if body := os.Getenv("P4_FAKE_DESCRIBE"); body != "" || os.Getenv("P4_FAKE_DESCRIBE_ERR") != "" {
 			emit("DESCRIBE")
 			return
 		}
@@ -108,7 +108,15 @@ func main() {
 			return
 		}
 		fmt.Println("p4.example:1666 (alice) TICKET")
-	case "revert", "shelve", "edit", "add", "delete", "reopen", "move", "reconcile":
+	case "revert":
+        if _, ok := os.LookupEnv("P4_FAKE_REVERT_ERR"); ok { emit("REVERT"); return }
+        emit("MUTATE")
+    case "shelve":
+        if strings.Contains(joined, " -d ") {
+            if _, ok := os.LookupEnv("P4_FAKE_SHELFDELETE_ERR"); ok { emit("SHELFDELETE"); return }
+        }
+        emit("MUTATE")
+    case "edit", "add", "delete", "reopen", "move", "reconcile", "submit", "sync", "unshelve":
 		emit("MUTATE")
 	default:
 		panic("unexpected p4 command: " + joined)

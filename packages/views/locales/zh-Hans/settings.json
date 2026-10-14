@@ -1536,6 +1536,10 @@
     "delete_confirm_cancel": "取消",
     "delete_confirm_action": "删除 depot",
     "manage_hint": "只有管理员和所有者可以管理 Perforce depot。",
+    "action_switches_hint": "提交会写入共享 depot，关闭开关不能撤回已提交的修改。同步会更新已绑定 client 的完整视图，包括 stream import。",
+    "allow_submit": "智能体可以提交",
+    "allow_sync": "智能体可以同步",
+    "allow_unshelve": "智能体可以 unshelve",
     "toast_saved": "已保存 Perforce depot",
     "toast_save_failed": "保存 Perforce depot 失败"
   },

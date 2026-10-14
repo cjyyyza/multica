@@ -429,6 +429,12 @@ func (h *Handler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Task tokens authenticate as the runtime owner, but must not let an
+	// agent grant itself Perforce permissions through that owner's role.
+	if req.P4Depots != nil && isMachineCredentialActor(r) {
+		writeError(w, http.StatusForbidden, "only human workspace administrators can configure Perforce depots")
+		return
+	}
 
 	params := db.UpdateWorkspaceParams{
 		ID: idUUID,

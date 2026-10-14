@@ -27,6 +27,7 @@ type p4MutateRequest struct {
 	Dest            string   `json:"dest,omitempty"`
 	RevertUnchanged bool     `json:"revert_unchanged,omitempty"`
 	Force           bool     `json:"force,omitempty"`
+	Fresh           bool     `json:"fresh,omitempty"`
 }
 
 type p4SwarmRequest struct {
@@ -188,14 +189,16 @@ func (d *Daemon) p4SwarmHandler() http.HandlerFunc {
 				writeP4Rejection(w, *rej)
 				return
 			}
-			_, rej, err := d.runWorkspaceP4(r.Context(), binding, p4MutateRequest{Action: p4cache.ActionShelve, Changelist: req.Changelist}, binding.ws.Dir)
-			if rej != nil {
-				writeP4Rejection(w, *rej)
-				return
-			}
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
+			if !binding.isSubmitted() {
+				_, rej, err := d.runWorkspaceP4(r.Context(), binding, p4MutateRequest{Action: p4cache.ActionShelve, Changelist: req.Changelist}, binding.ws.Dir)
+				if rej != nil {
+					writeP4Rejection(w, *rej)
+					return
+				}
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
 			}
 		}
 		result, err := d.p4Cache.Swarm(r.Context(), p4cache.SwarmParams{

@@ -19,11 +19,13 @@ Multica 不保存 Perforce 密码。守护进程使用本机 Helix 登录（`P4U
 
 新建一个 Helix client 是为了接着 `p4 sync`，而 sync 会把 depot 下载下来。Multica 不这么做。目录没挂上，或者这个目录下解析不出 client 时，运行不会退回去给任务单独建一份 checkout。
 
-**智能体不提交。** 智能体只负责 shelve；你在编辑器里验证后用 P4V 或自己的脚本提交。
+**智能体默认不能提交。** 智能体负责 shelve，由你验证后提交；只有 owner 或 admin 为该 depot 开启提交权限后，智能体才能提交。
 
 ## 添加工作区 depot
 
-打开 **设置 → 代码**。Perforce 一栏列出工作区可以同步的 Helix depot。
+打开 **设置 → 代码**。Perforce 一栏列出工作区可以同步的 Helix depot。每条 depot 上可以打开「智能体可以提交」「智能体可以同步」「智能体可以 unshelve」，三项默认都是关的。同步只更新已经绑定的工作区，不会新建 client。
+
+只有工作区 owner 和 admin 能授予这些权限。项目资源按 port、depot 和 stream 从此列表匹配权限；没有匹配项时，三项都关闭。修改在下一次运行认领时生效。
 
 每条需要：
 
@@ -98,7 +100,7 @@ Multica: <任务编号>
 | `exclusive_locked` | 别人持有 `+l` 独占锁 |
 | `exclusive_not_allowed` | `+l` 文件，而该 depot 没有开 `allow_exclusive` |
 | `outside_task_change` | revert、reconcile 或 reopen 的目标在任务 changelist 之外 |
-| `action_not_allowed` | submit、sync 或 unshelve |
+| `action_not_allowed` | 未开启对应权限的 submit、sync 或 unshelve |
 | `not_in_workspace` | 路径在 client Root 之外 |
 
 智能体进程里的原生 `p4` 写操作已被屏蔽（`P4CONFIG` 和 `P4CLIENT` 指向不存在的名字），`p4 edit`、`p4 sync`、`p4 submit` 在那里都会失败。只读查询 —— `p4 files`、`p4 print`、`p4 filelog`、`p4 describe`、`p4 changes` —— 照常可用，智能体靠它们读历史。这只是护栏，不是安全边界：真正的约束是上面那些守护进程检查。
@@ -107,7 +109,7 @@ Multica: <任务编号>
 
 ### 任务结束时
 
-成功、失败、取消都走同一套收尾：
+对于待提交的 changelist，成功、失败、取消都走同一套收尾：
 
 1. 在任务 changelist 上执行 `revert -a`，把“打开了但没改”的文件退回去；
 2. changelist 变空时，先清理旧 shelf，再删除 changelist；
@@ -116,13 +118,15 @@ Multica: <任务编号>
 
 **改过的文件保持打开状态。** 你在编辑器里验证后提交；智能体的最终评论会写清改了什么、changelist 号，以及怎么验证。运行过程中用 `multica p4 status` 看到的也是这些信息。
 
+如果智能体已获授权并完成提交，Multica 会回读实际提交编号和文件列表，保留原始编号，不再 shelve。回执读取失败会明确报错，不会重复提交。
+
 收尾或上报失败会显示为任务失败。守护进程会保留 changelist 上报记录，在 HTTP 失败或重启后重试；服务端缺少上报接口也不会被当成投递成功。状态轮询只连接项目或工作区当前配置的 depot，不启动 `rsh:` 进程。
 
 两个 depot 开关会改变上述行为，通过资源上的 JSON `--ref` 设置：`allow_exclusive` 允许智能体打开 `+l` 文件，`no_auto_review` 关掉自动 Swarm review。
 
 ## 不建任务 client
 
-Multica 不为任务创建 Helix client，也不会将 depot 副本同步到运行目录。请关联已有工作区的 `in_place` 本地目录。
+同步覆盖已绑定 client 的完整视图，包括 stream import。`--changelist` 和 `--fresh` 会被明确拒绝，历史版本同步和重置由人操作。只有 depot 开启 `allow_sync` 时，`multica p4 sync` 才会更新已经绑定的工作区。缺少权限或工作区绑定时，守护进程返回 `action_not_allowed`。它不会创建任务专用 client，也不会单独下载一份 depot。
 
 ## 编辑、checkout 与 shelve
 
@@ -139,7 +143,7 @@ multica p4 status --output json
 
 `checkout` 是 `edit` 的别名。`multica p4 add` 仍然是往工作区登记 depot；新增文件用 `add-files`（即 `p4 add`）。其他命令：`delete`、`revert`、`opened`、`reconcile`（`rec`）、`move --dest`、`reopen --changelist`、`describe`。独占锁定（`+l`）的文件必须先 edit 才能写。
 
-没有 `multica p4 submit` 这个命令。智能体只 shelve，由人验证后提交。
+`multica p4 submit` 只提交本次任务的 changelist，需要人类工作区管理员授予 `allow_submit`；机器凭证不能修改工作区 depot 设置。提交前会回读并核对 client、user、任务标记和 `refs #`，退回未改动文件，拒绝空 CL，再删除整份 shelf 后提交。整份 shelf 删除会保留关联 Swarm review 的文件与链接，不会自动批准或归档 review。关闭开关不能撤回已提交的修改。`multica p4 unshelve` 只恢复本次任务自己的 shelf，需要 `allow_unshelve`。
 
 ## Helix Swarm
 
@@ -155,7 +159,7 @@ multica p4 swarm show --port perforce.example.com:1666 --depot //depot/project -
 multica p4 swarm comment --port perforce.example.com:1666 --depot //depot/project --review 77 --body "Looks good"
 ```
 
-`swarm create` 会先 shelve 待提交 changelist，除非传入 `--no-shelve`。已提交的 changelist 会建成 post-commit review。
+`swarm create` 会先 shelve 待提交 changelist，除非传入 `--no-shelve`。已提交的本任务 changelist 会建成 post-commit review；没有任务工作区绑定时，必须使用 `--no-shelve`，不会创建或操作旧的任务专用 client。
 
 在任务里创建或 `link` 的 review 会出现在任务上：Multica 知道它评审的是哪个 changelist 时，显示在对应的 changelist 卡片上；否则显示在侧栏的 **Pull Request** 区域。把任务编号（如 `DJ01-7`）写进 Swarm 说明，或在该任务的运行中执行 `multica p4 swarm create` / `multica p4 swarm link`。
 
@@ -177,7 +181,7 @@ multica p4 swarm link --port perforce.example.com:1666 --depot //depot/project -
 ## 本版未包含
 
 - Swarm webhook 接入、review 卡片上的 CI 状态
-- 智能体提交 —— 这是设计决定，见[工作区模式](#工作区模式)
+- 未经 owner 或 admin 为 depot 授权的智能体提交
 - 把别人的 changelist 作为任务来评审
 - 在界面上把 Unreal 编辑器自动 checkout 的文件移进任务 changelist（本版只在运行结果里报出来）
 - 创建项目对话框里直接挂 P4（创建后再关联）

@@ -3748,6 +3748,10 @@ export const WorkspaceP4DepotSchema = z.object({
   // automatic Swarm review.
   allow_exclusive: z.boolean().optional().default(false).catch(false),
   no_auto_review: z.boolean().optional().default(false).catch(false),
+  // Submit, sync, and unshelve stay off until someone enables them on the depot.
+  allow_submit: z.boolean().optional().default(false).catch(false),
+  allow_sync: z.boolean().optional().default(false).catch(false),
+  allow_unshelve: z.boolean().optional().default(false).catch(false),
 }).loose();
 
 export const WorkspaceSchema = z.object({

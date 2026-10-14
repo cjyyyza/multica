@@ -1546,6 +1546,10 @@
     "delete_confirm_cancel": "Cancel",
     "delete_confirm_action": "Delete depot",
     "manage_hint": "Only admins and owners can manage Perforce depots.",
+    "action_switches_hint": "Submission writes to the shared depot and cannot be undone by switching this off. Sync updates the entire bound client view, including stream imports.",
+    "allow_submit": "Agent may submit",
+    "allow_sync": "Agent may sync",
+    "allow_unshelve": "Agent may unshelve",
     "toast_saved": "Perforce depots saved",
     "toast_save_failed": "Failed to save Perforce depots"
   },

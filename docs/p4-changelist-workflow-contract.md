@@ -2,7 +2,7 @@
 
 Read with [p4-changelist-workflow-plan.md](p4-changelist-workflow-plan.md). The plan says *what* and *why*; this file fixes the shared names and wire shapes so parallel work streams stay compatible. Do not change anything here inside a work stream. If something here is wrong, report it in your final summary and implement against the contract as written.
 
-The plan's §0 decisions are binding: agents never submit; the CL description must contain `refs #<易协作单号>`; the agent works inside the human's own client and does not revert changed files at the end.
+Agents submit only when the workspace's admin-managed depot catalog enables `allow_submit`; `allow_sync` and `allow_unshelve` are also default-off. Machine credentials cannot update `p4_depots`. Project resources do not persist these action grants; claim overlays them from an exact workspace catalog match, and an unmatched entry grants none. The CL description must contain `refs #<易协作单号>`; the agent works inside the human's own client and does not revert changed files at the end.
 
 ## Already landed in the contract commit
 
@@ -33,7 +33,7 @@ The agent reaches these only through the `multica` CLI; requests carry the task 
 - File arguments must name individual files, without wildcards, revision specifiers, or directories. Depot paths are resolved with `p4 where` before checking the local root and sidecar paths, including files not added to the depot yet.
 - A new description must retain the bound ticket. A foreign or malformed `refs #...` marker is rejected before creating or updating a CL.
 - Allowed actions: `edit`, `add`, `delete`, `move`, `reopen`, `revert`, `reconcile`, `shelve`, `change`, `opened`, `describe`.
-- Rejected actions: `submit` (removed in every mode), `sync`, `unshelve`.
+- Additional actions: `submit`, `sync`, and `unshelve` require their corresponding workspace depot permission. Submit and unshelve use only this task's changelist; sync updates the full bound client view, including stream imports. Sync rejects `--changelist` and `--fresh` instead of silently ignoring them.
 - Success response: the existing `MutateResult` plus `"warnings": [{"kind": string, "files": [string]}]` (omitted when empty).
 - Rejection: HTTP 409 with JSON body `{"code": string, "message": string, "files": [string]?, "holders": [string]?}`. `code` is one of:
 
@@ -45,7 +45,7 @@ The agent reaches these only through the `multica` CLI; requests carry the task 
 | `exclusive_not_allowed` | +l file, and the depot does not set `allow_exclusive` |
 | `outside_task_change` | revert/reconcile/reopen target outside the task CL |
 | `sidecar_path` | the path is a Multica-written file |
-| `action_not_allowed` | submit/sync/unshelve |
+| `action_not_allowed` | submit/sync/unshelve without permission, or writes after submission |
 | `not_in_workspace` | the path is outside the client root |
 
 - The CLI prints `message`, then `files` / `holders` one per line, and exits non-zero.
@@ -56,11 +56,15 @@ The agent reaches these only through the `multica` CLI; requests carry the task 
 {"port":"","user":"","client":"","root":"","stream":"","edge":false,"ticket":"","change":"","files":[{"depot_file":"","action":"","type":""}],"warnings":[{"kind":"","files":[]}]}
 ```
 
-`POST /p4/sync`: rejected with 409 `action_not_allowed`. Multica never creates a task client or syncs a depot copy.
+`POST /p4/sync`: rejected with 409 `action_not_allowed` unless a binding exists and its depot enables `allow_sync`. Without a binding, Multica never creates a task client or syncs a depot copy, because that downloads the depot.
 
-`POST /p4/swarm`: a request to shelve before creating a review requires the bound task workspace and its changelist. Requests without a binding must use `--no-shelve`.
+`POST /p4/swarm`: a request to shelve before creating a review requires the bound task workspace and its changelist. Requests without a binding must use `--no-shelve`. Submitted task changelists can create post-commit reviews without shelving.
+
+Before submit, read the pending changelist spec from the bound workspace and verify its client, owner, ticket (`refs #<bound-ticket>`) and Multica issue trailer. Revert unchanged opens with `revert -a -c <CL> //<client>/...`, refuse an empty changelist, and re-read the spec before deleting the whole shelf with `shelve -d -c <CL>` (no file arguments). Any preflight failure prevents submit. Whole-shelf deletion preserves the associated Swarm review's files, including when shelf-file deletion processing is enabled; see [Swarm shelf deletion](https://workshop.perforce.com/docs/Content/Swarm/code_reviews.activities.html#Deleting). Keep the existing review link and recorded review state; submission does not imply review approval. Do not approve, archive or recreate the review. Swarm remains authoritative for its review state. If submit fails, normal close-out re-shelves the remaining work. Operations and close-out serialize on the binding.
 
 An `in_place` local directory keeps its binding when its depot comes from the workspace catalog. Quick-create and projectless autopilot tasks do not require a P4 directory merely because they inherited that catalog. Unbound `/p4/run` requests return 409, including when an old checkout directory exists.
+
+After submit, read the receipt with `p4 describe -s -O <original-number>` in the bound workspace. The CLI/status/report use the submitted number and file list; the report also keeps `original_number`. A failed read must not replay submit or declare a terminal receipt verified. Close-out retries the read; if it still fails, report a pending reference for reconciliation and fail delivery.
 
 Warning kinds: `not_head`, `opened_elsewhere`, `exclusive_held`, `default_changelist_files`, `unexpected_opens`.
 

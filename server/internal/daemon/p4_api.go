@@ -50,6 +50,7 @@ func (d *Daemon) changelistReport(ctx context.Context, b *p4TaskBinding, result 
 		desc = p4depot.ChangeDescription(ticket, b.title, b.issueKey)
 	}
 	number, _ := strconv.Atoi(result.Change)
+	original, _ := strconv.Atoi(firstNonEmpty(result.OriginalChange, result.Change))
 	status := "pending"
 	filesCount := len(result.Files)
 	exclusive := result.ExclusiveHeld
@@ -63,6 +64,9 @@ func (d *Daemon) changelistReport(ctx context.Context, b *p4TaskBinding, result 
 	if result.Shelved {
 		status = "shelved"
 	}
+	if result.Submitted {
+		status = "submitted"
+	}
 	if exclusive == nil {
 		exclusive = []string{}
 	}
@@ -72,7 +76,7 @@ func (d *Daemon) changelistReport(ctx context.Context, b *p4TaskBinding, result 
 		ServerKey:      p4ServerKey(b.ws),
 		Charset:        b.ws.Charset,
 		Number:         number,
-		OriginalNumber: number,
+		OriginalNumber: original,
 		Status:         status,
 		Client:         b.ws.Client,
 		P4User:         b.ws.User,
@@ -239,7 +243,17 @@ func (d *Daemon) workspaceStatus(ctx context.Context, b *p4TaskBinding) (*p4Stat
 		Files:  []p4StatusFile{},
 	}
 	if change != "" {
-		opened, err := d.p4Cache.OpenedInChange(ctx, b.ws, change)
+		var opened []p4cache.FileState
+		var err error
+		if b.isSubmitted() {
+			var receipt *p4cache.FinishResult
+			receipt, err = d.submittedP4Change(ctx, b)
+			if err == nil {
+				resp.Change, opened = receipt.Change, receipt.Files
+			}
+		} else {
+			opened, err = d.p4Cache.OpenedInChange(ctx, b.ws, change)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -252,8 +266,10 @@ func (d *Daemon) workspaceStatus(ctx context.Context, b *p4TaskBinding) (*p4Stat
 			})
 			paths = append(paths, file.DepotFile)
 		}
-		if states, err := d.p4Cache.FileStates(ctx, b.ws, paths); err == nil {
-			resp.Warnings = append(resp.Warnings, workspaceFileWarnings(states, b.ref.AllowExclusive)...)
+		if !b.isSubmitted() {
+			if states, err := d.p4Cache.FileStates(ctx, b.ws, paths); err == nil {
+				resp.Warnings = append(resp.Warnings, workspaceFileWarnings(states, b.ref.AllowExclusive)...)
+			}
 		}
 	}
 	resp.Warnings = append(resp.Warnings, d.workspaceDriftWarnings(ctx, b)...)

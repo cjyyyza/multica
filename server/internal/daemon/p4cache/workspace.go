@@ -62,10 +62,10 @@ func (s FileState) AtHead() bool {
 
 // FinishResult is the outcome of closing out a task changelist.
 type FinishResult struct {
-	Change                 string
-	Files                  []FileState
-	Deleted, Shelved       bool
-	ExclusiveHeld, NotHead []string
+	Change, OriginalChange      string
+	Files                       []FileState
+	Deleted, Shelved, Submitted bool
+	ExclusiveHeld, NotHead      []string
 }
 
 // ChangeInfo is the subset of `p4 describe` the status loop needs. A submit
@@ -235,8 +235,8 @@ func (c *Cache) opened(ctx context.Context, ws *Workspace, extra []string) ([]Fi
 	args = append(args, extra...)
 	stdout, stderr, err := c.runAt(ctx, ws.Dir, args)
 	records := parseZtag(stdout)
-	if err != nil && len(records) == 0 {
-		if onlyMissingFiles(stderr) {
+	if err != nil {
+		if len(records) == 0 && onlyMissingFiles(stderr) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("p4 opened: %w: %s", err, strings.TrimSpace(stderr))
@@ -313,6 +313,79 @@ func (c *Cache) SetChangeDescription(ctx context.Context, ws *Workspace, change,
 	return nil
 }
 
+// PendingChangeDescription reads the current spec, including multiline
+// descriptions, and refuses a change outside the bound user's client.
+func (c *Cache) PendingChangeDescription(ctx context.Context, ws *Workspace, change string) (string, error) {
+	if ws == nil {
+		return "", fmt.Errorf("perforce workspace is required")
+	}
+	if number, err := strconv.Atoi(change); err != nil || number <= 0 {
+		return "", fmt.Errorf("a positive pending changelist number is required")
+	}
+	stdout, stderr, err := c.runAt(ctx, ws.Dir, append(ws.baseArgs(), "change", "-o", change))
+	if err != nil {
+		return "", fmt.Errorf("p4 change -o %s: %w: %s", change, err, strings.TrimSpace(stderr))
+	}
+	fields := changeSpecFields(stdout)
+	if fields["Change"] != change || fields["Status"] != "pending" || fields["Client"] != ws.Client || !strings.EqualFold(fields["User"], ws.User) {
+		return "", fmt.Errorf("changelist %s is not pending in the bound user's client %s", change, ws.Client)
+	}
+	return fields["Description"], nil
+}
+
+func changeSpecFields(spec string) map[string]string {
+	fields := map[string]string{}
+	var key string
+	for _, line := range strings.Split(spec, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.HasPrefix(line, "\t") || strings.HasPrefix(line, " ") {
+			if key != "" {
+				fields[key] = strings.TrimSpace(fields[key] + "\n" + strings.TrimSpace(line))
+			}
+			continue
+		}
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, value, ok := strings.Cut(line, ":")
+		key = ""
+		if ok {
+			key = name
+			fields[key] = strings.TrimSpace(value)
+		}
+	}
+	return fields
+}
+
+// DeleteShelf removes the whole shelf, never individual files. Swarm preserves
+// the associated review's files when the whole shelf is deleted this way.
+func (c *Cache) DeleteShelf(ctx context.Context, ws *Workspace, change string) error {
+	_, stderr, err := c.runAt(ctx, ws.Dir, append(ws.baseArgs(), "shelve", "-d", "-c", change))
+	if err != nil && !noShelvedFiles.MatchString(strings.TrimSpace(stderr)) {
+		return fmt.Errorf("p4 shelve -d %s: %w: %s", change, err, strings.TrimSpace(stderr))
+	}
+	return nil
+}
+
+// SyncClient runs `p4 sync` in the person's workspace. It does not create a
+// client. With no paths, sync the full client view, including stream imports.
+func (c *Cache) SyncClient(ctx context.Context, ws *Workspace, paths []string) (string, error) {
+	if ws == nil {
+		return "", fmt.Errorf("perforce workspace is required")
+	}
+	args := append(ws.baseArgs(), "sync")
+	paths = compactStrings(paths)
+	if len(paths) == 0 {
+		paths = []string{"//" + ws.Client + "/..."}
+	}
+	args = append(args, paths...)
+	stdout, stderr, err := c.runAt(ctx, ws.Dir, args)
+	if err != nil {
+		return strings.TrimSpace(stdout), fmt.Errorf("p4 sync: %w: %s", err, strings.TrimSpace(stderr))
+	}
+	return strings.TrimSpace(stdout), nil
+}
+
 // RunInChange executes one allowlisted verb against the task changelist. The
 // -c is not optional: without it p4 would fall back to the default changelist,
 // which on a human's client holds that person's own work.
@@ -333,6 +406,48 @@ func (c *Cache) RunInChange(ctx context.Context, ws *Workspace, change, verb str
 		return strings.TrimSpace(stdout), fmt.Errorf("p4 %s: %w: %s", verb, err, strings.TrimSpace(stderr))
 	}
 	return strings.TrimSpace(stdout), nil
+}
+
+// SubmittedChange reads the receipt by the original number, even when submit
+// assigned a new number. Keep the workspace's directory and connection so its
+// P4CONFIG and credentials are the same ones used for the write.
+func (c *Cache) SubmittedChange(ctx context.Context, ws *Workspace, original string) (*FinishResult, error) {
+	if ws == nil {
+		return nil, fmt.Errorf("perforce workspace is required")
+	}
+	original = strings.TrimSpace(original)
+	if number, err := strconv.Atoi(original); err != nil || number <= 0 {
+		return nil, fmt.Errorf("a positive original changelist number is required")
+	}
+	args := append(ws.tagArgs(), "describe", "-s", "-O", original)
+	stdout, stderr, err := c.runAt(ctx, ws.Dir, args)
+	if err != nil {
+		return nil, fmt.Errorf("read submitted changelist %s: %w: %s", original, err, strings.TrimSpace(stderr))
+	}
+	record := firstZtagRecord(stdout)
+	if !strings.EqualFold(record["status"], "submitted") {
+		return nil, fmt.Errorf("changelist %s has no confirmed submission receipt", original)
+	}
+	if number, err := strconv.Atoi(record["change"]); err != nil || number <= 0 {
+		return nil, fmt.Errorf("changelist %s has no valid submitted number", original)
+	}
+	if old := record["oldChange"]; old != "" && old != original {
+		return nil, fmt.Errorf("submission receipt belongs to changelist %s, expected %s", old, original)
+	}
+	result := &FinishResult{Change: record["change"], OriginalChange: original, Submitted: true}
+	for i := 0; ; i++ {
+		suffix := strconv.Itoa(i)
+		file, ok := record["depotFile"+suffix]
+		if !ok {
+			break
+		}
+		result.Files = append(result.Files, FileState{
+			DepotFile: file,
+			Action:    record["action"+suffix],
+			HeadType:  record["type"+suffix],
+		})
+	}
+	return result, nil
 }
 
 // FinishChange closes out a task changelist: revert what was opened but never
@@ -364,8 +479,8 @@ func (c *Cache) FinishChange(ctx context.Context, ws *Workspace, change string) 
 	if len(opened) == 0 {
 		// A previous run may have shelved files the person has since reverted.
 		// A changelist cannot be deleted until that shelf is removed as well.
-		if _, stderr, err := c.runAt(ctx, ws.Dir, append(ws.baseArgs(), "shelve", "-d", "-c", change)); err != nil && !noShelvedFiles.MatchString(strings.TrimSpace(stderr)) {
-			return result, fmt.Errorf("p4 shelve -d %s: %w: %s", change, err, strings.TrimSpace(stderr))
+		if err := c.DeleteShelf(ctx, ws, change); err != nil {
+			return result, err
 		}
 		if _, _, err := c.runAt(ctx, ws.Dir, append(ws.baseArgs(), "change", "-d", change)); err != nil {
 			return nil, fmt.Errorf("p4 change -d %s: %w", change, err)

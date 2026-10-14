@@ -275,7 +275,7 @@ func writeAvailableCommands(b *strings.Builder, ctx TaskContextForEnv) {
 		b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>] [--fresh]` — repository checkout on a dedicated branch. Re-running it keeps an existing checkout that has uncommitted or unpushed work, or is already on this task's branch, and only fetches. `--fresh` discards uncommitted and untracked files and starts a new branch; commits stay on the old branch, but push any you still need first.\n")
 	}
 	// The workspace section is the single source of action permissions.
-	b.WriteString("- `multica p4 edit --port <P4PORT> --depot <//depot/path> -- <files>` — checkout files for edit (`checkout` is an alias). Also: `add-files`, `delete`, `revert`, `reopen`, `opened`, `reconcile`, `change`, `shelve`, `status`. Swarm: `multica p4 swarm create --changelist <n>`. Agents do not submit changelists — the human verifies in-editor and submits.\n\n")
+	b.WriteString("- `multica p4 edit --port <P4PORT> --depot <//depot/path> -- <files>` — checkout files for edit (`checkout` is an alias). Also: `add-files`, `delete`, `revert`, `reopen`, `opened`, `reconcile`, `change`, `shelve`, `status`. Swarm: `multica p4 swarm create --changelist <n>`. Follow the action permissions in `## Perforce workspace`; without that section, file operations are unavailable. Never create a Perforce client for the task.\n\n")
 	if !p4OnlyTask(ctx) {
 		b.WriteString("Git commits use the user's configured identity. Preserve it unless the user requests another identity. In a managed checkout, use `git config --worktree user.name` / `user.email` for an intentional task-local override; plain `git config` or `--local` can write into a shared cache and affect other tasks. Never change global Git identity for a task.\n\n")
 	}
@@ -580,14 +580,40 @@ func writeP4Workspace(b *strings.Builder, ws *P4WorkspaceForEnv) {
 	b.WriteString("- Open a file with `multica p4 edit -- <files>` BEFORE you change it, and create new files with `multica p4 add-files -- <files>`. Files on disk are read-only until Helix opens them — never clear the read-only bit to write one: Helix would not know the file changed, and the change would be lost.\n")
 	b.WriteString("- Everything you open goes into this task's changelist automatically. `multica p4 status` reports its number and the files in it; you do not pass `--changelist`.\n")
 	b.WriteString("- Do not use raw `p4` to write. Read-only queries (`p4 files`, `p4 print`, `p4 filelog`, `p4 describe`, `p4 changes`) are fine and often the fastest way to understand history.\n")
-	b.WriteString("- Never sync, never submit, and never touch a changelist other than this task's. The person who owns this workspace syncs and submits; shelved and under review is where your work stops.\n")
+	writeP4WorkspaceActionPolicy(b, ws)
 	b.WriteString("- If a command reports `opened_by_you`, `exclusive_locked`, `exclusive_not_allowed`, or `not_head`, stop on that file and explain it in the issue. These mean the human already has it open, someone else holds the lock, or your copy is behind — none of them is worked around.\n")
 	if ws.AllowExclusive {
 		b.WriteString("- This depot allows opening exclusive-lock (`+l`) files. You still hold the lock while they are open, so open them late and keep the list short.\n")
 	}
-	b.WriteString("- When the task ends the daemon reverts the files you opened but did not change, shelves the rest, and opens a Helix Swarm review. Your changes stay open in the changelist for the human to verify.\n")
+	b.WriteString("- When the task ends with a pending changelist, the daemon reverts the files you opened but did not change, shelves the rest, and opens a Helix Swarm review unless auto review is disabled. Pending changes stay open for the human to verify. A submitted changelist is reported with its actual submitted number and is not shelved again.\n")
 	b.WriteString("- Your final reply must state what you changed, the changelist number (`multica p4 status`), and how to verify it in Unreal Editor.\n")
 	b.WriteString("- Read `Game/DJ01/AGENTS.md` first when it is present: it carries the project's own rules from the depot and overrides general guidance here.\n\n")
+}
+
+// writeP4WorkspaceActionPolicy states which of submit, sync, and unshelve
+// this daemon will run. All three default to off, and that sentence is what
+// the brief tests pin.
+func writeP4WorkspaceActionPolicy(b *strings.Builder, ws *P4WorkspaceForEnv) {
+	if ws == nil || (!ws.AllowSubmit && !ws.AllowSync && !ws.AllowUnshelve) {
+		b.WriteString("- Never sync, never submit, and never touch a changelist other than this task's. The person who owns this workspace syncs and submits; shelved and under review is where your work stops.\n")
+		return
+	}
+	b.WriteString("- Never touch a changelist other than this task's.\n")
+	if ws.AllowSync {
+		b.WriteString("- This daemon allows `multica p4 sync` in this workspace.\n")
+	} else {
+		b.WriteString("- Do not sync. The person who owns this workspace syncs it.\n")
+	}
+	if ws.AllowSubmit {
+		b.WriteString("- This daemon allows `multica p4 submit` of this task's changelist.\n")
+	} else {
+		b.WriteString("- Do not submit. The person verifies in-editor and submits.\n")
+	}
+	if ws.AllowUnshelve {
+		b.WriteString("- This daemon allows `multica p4 unshelve` of this task's changelist.\n")
+	} else {
+		b.WriteString("- Do not unshelve.\n")
+	}
 }
 
 // hasProjectResourceType reports whether the project carries at least one

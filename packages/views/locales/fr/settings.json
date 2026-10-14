@@ -1546,6 +1546,10 @@
     "delete_confirm_cancel": "Annuler",
     "delete_confirm_action": "Supprimer le depot",
     "manage_hint": "Seuls les administrateurs et les propriétaires peuvent gérer les depots Perforce.",
+    "action_switches_hint": "La soumission écrit dans le depot partagé ; désactiver cette option ne l’annule pas. La synchronisation met à jour toute la vue du client lié, imports du stream compris.",
+    "allow_submit": "L'agent peut soumettre",
+    "allow_sync": "L'agent peut synchroniser",
+    "allow_unshelve": "L'agent peut unshelve",
     "toast_saved": "Depots Perforce enregistrés",
     "toast_save_failed": "Échec de l'enregistrement des depots Perforce"
   },

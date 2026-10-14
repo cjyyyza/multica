@@ -1536,6 +1536,10 @@
     "delete_confirm_cancel": "취소",
     "delete_confirm_action": "depot 삭제",
     "manage_hint": "관리자와 소유자만 Perforce depot을 관리할 수 있습니다.",
+    "action_switches_hint": "제출은 공유 depot에 기록되며, 이 설정을 꺼도 이미 제출한 변경은 취소되지 않습니다. 동기화는 stream import를 포함해 연결된 client의 전체 뷰를 갱신합니다.",
+    "allow_submit": "에이전트가 제출할 수 있음",
+    "allow_sync": "에이전트가 동기화할 수 있음",
+    "allow_unshelve": "에이전트가 unshelve 할 수 있음",
     "toast_saved": "Perforce depot을 저장했습니다",
     "toast_save_failed": "Perforce depot을 저장하지 못했습니다"
   },

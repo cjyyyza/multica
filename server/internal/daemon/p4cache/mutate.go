@@ -33,10 +33,8 @@ type MutateResult struct {
 
 var changeCreated = regexp.MustCompile(`(?i)Change\s+(\d+)\s+created`)
 
-// ErrSubmitNotSupported is returned for action=submit in every mode. Multica
-// never submits on an agent's behalf: a person verifies the change in UE and
-// submits it with P4V or safesubmit.
-var ErrSubmitNotSupported = errors.New("agents do not submit; a person verifies the change in UE and submits it")
+// ErrSubmitDisabled means a human administrator has not granted submission.
+var ErrSubmitDisabled = errors.New("submit is disabled for this depot; a human workspace administrator must enable it in Perforce settings")
 
 func buildChangeSpec(client, user, description string) string {
 	var b strings.Builder

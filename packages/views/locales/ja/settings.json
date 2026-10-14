@@ -1536,6 +1536,10 @@
     "delete_confirm_cancel": "キャンセル",
     "delete_confirm_action": "depot を削除",
     "manage_hint": "Perforce depot を管理できるのは admin と owner のみです。",
+    "action_switches_hint": "submit は共有 depot に書き込まれ、この設定をオフにしても取り消せません。sync は stream の import を含む、紐付けられた client のビュー全体を更新します。",
+    "allow_submit": "エージェントが submit できる",
+    "allow_sync": "エージェントが sync できる",
+    "allow_unshelve": "エージェントが unshelve できる",
     "toast_saved": "Perforce depot を保存しました",
     "toast_save_failed": "Perforce depot を保存できませんでした"
   },

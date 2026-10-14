@@ -370,7 +370,7 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				// D3: agents shelve, humans submit. Stated in the router
 				// because an agent that only reads this file must still not
 				// submit, and the mode detail stays in the reference.
-				"An agent never submits a Perforce changelist",
+				"Perforce submit, sync, and unshelve default to disabled",
 				"multica p4 status",
 			},
 			notWant: []string{
@@ -575,6 +575,10 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				// The per-depot switches that change what a task may do.
 				"allow_exclusive",
 				"no_auto_review",
+				"allow_submit",
+				"allow_sync",
+				"allow_unshelve",
+				"Project resources cannot grant",
 				"MULTICA_DAEMON_PORT",
 				"resource_ref.ref",
 				"github_repo",
@@ -588,9 +592,11 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"task-local Git metadata",
 			},
 			notWant: []string{
-				// Submission is still unavailable.
-				"multica p4 submit",
-				"`submit`",
+				// Default-off guidance must not contradict explicitly enabled actions.
+				"An agent never submits",
+				"Do not request `multica p4 sync`",
+				"do not run `multica p4 sync`",
+				"multica p4 sync --port <p4port> --depot <depot-path>",
 			},
 		},
 		{

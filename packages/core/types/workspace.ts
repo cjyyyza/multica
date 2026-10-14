@@ -16,6 +16,12 @@ export interface WorkspaceP4Depot {
   swarm_url?: string;
   allow_exclusive?: boolean;
   no_auto_review?: boolean;
+  /** Agent may submit this task's changelist. Off until enabled in Perforce settings. */
+  allow_submit?: boolean;
+  /** Agent may sync the workspace this depot is bound to. Does not create a client. */
+  allow_sync?: boolean;
+  /** Agent may unshelve this task's own shelf. Off until enabled in Perforce settings. */
+  allow_unshelve?: boolean;
 }
 
 export interface Workspace {

@@ -323,7 +323,7 @@ func TestWorkspaceRunInvariants(t *testing.T) {
 				if tc.wantHolder != "" && !strings.Contains(strings.Join(rej.Holders, " "), tc.wantHolder) {
 					t.Fatalf("holders = %#v", rej.Holders)
 				}
-				if tc.wantCode == p4CodeActionNotAllowed && tc.action == "submit" && !strings.Contains(rej.Message, "do not submit") {
+				if tc.wantCode == p4CodeActionNotAllowed && tc.action == "submit" && !strings.Contains(rej.Message, "submit is disabled") {
 					t.Fatalf("submit rejection = %q", rej.Message)
 				}
 				return
@@ -597,5 +597,51 @@ func TestSidecarFstatPatternsQueriesDirectoriesRecursively(t *testing.T) {
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("patterns =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestConfiguredP4ActionsReachTheBoundWorkspace(t *testing.T) {
+	t.Setenv("P4_FAKE_CHANGEOUT", "Change: 1001\nClient: alice_DEV\nUser: alice\nStatus: pending\nDescription:\n\trefs #5002 fix\n")
+	t.Setenv("P4_FAKE_OPENED", "... depotFile //DJ01_Proj/Dev/a.cpp\n... change 1001\n... action edit\n")
+	bin := writeDaemonFakeP4(t)
+	root := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "p4.log")
+	t.Setenv("P4_FAKE_LOG", logPath)
+	t.Setenv("P4_FAKE_MUTATE", "ok\n")
+	t.Setenv("P4_FAKE_DESCRIBE", "... change 1001\n... status submitted\n... depotFile0 //DJ01_Proj/Dev/a.cpp\n... action0 edit\n... type0 text\n")
+	t.Setenv("P4_FAKE_SYNC", "ok\n")
+	t.Setenv("P4USER", "alice")
+	ws := &p4cache.Workspace{
+		Port: "ssl:p4.example:1666", User: "alice", Client: "alice_DEV",
+		Root: root, Dir: root, Stream: "//DJ01_Proj/Dev",
+	}
+	binding := &p4TaskBinding{
+		ws: ws, ticket: "5002", change: "1001", taskID: "task",
+		ref: p4depot.Ref{Port: ws.Port, Depot: "//DJ01_Proj/Dev", Stream: "//DJ01_Proj/Dev"},
+	}
+	binding.ref.AllowSubmit = true
+	binding.ref.AllowSync = true
+	binding.ref.AllowUnshelve = true
+	d := &Daemon{
+		logger:  slog.Default(),
+		p4Cache: &p4cache.Cache{P4Path: bin},
+	}
+	for _, action := range []string{"unshelve", "sync", "submit"} {
+		_, rej, err := d.runWorkspaceP4(t.Context(), binding, p4MutateRequest{Action: action}, root)
+		if err != nil || rej != nil {
+			t.Fatalf("%s: err=%v rej=%v", action, err, rej)
+		}
+	}
+	if _, rej, _ := d.runWorkspaceP4(t.Context(), binding, p4MutateRequest{Action: p4cache.ActionEdit, Files: []string{"a.cpp"}}, root); rej == nil || rej.Code != p4CodeActionNotAllowed {
+		t.Fatalf("expected edit after submit to be rejected, got %+v", rej)
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"submit -c 1001", "unshelve -s 1001", "sync //alice_DEV/..."} {
+		if !strings.Contains(string(log), want) {
+			t.Errorf("log missing %q:\n%s", want, log)
+		}
 	}
 }

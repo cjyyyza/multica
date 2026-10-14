@@ -1,6 +1,6 @@
 # Multica × Perforce：以 changelist 为中心的流程优化计划
 
-状态：实现方案。任务绑定与 implementation contract 保持一致；实机验收记录另行保存。
+状态：实现方案。操作权限、任务绑定和提交前检查与 [implementation contract](p4-changelist-workflow-contract.md) 保持一致；实机验收记录另行保存。
 
 依据：
 - 三份只读调研报告：daemon 链路、服务端数据模型、前端与文档。
@@ -17,7 +17,7 @@
 |---|---|---|
 | D1 | 提交描述必须带 `refs #<易协作单号>`。没有单号时由人补填，agent 不编造 | 用户确认 |
 | D2 | agent 在人自己的 P4 工作区里改，结束后**不 revert 改动**（只 revert"打开了但没改"的文件，等同 P4V 的 Revert Unchanged） | 用户确认 |
-| D3 | **agent 不提交**。人在 UE 里验证后，照常用 P4V / safesubmit 提交 | 用户确认 |
+| D3 | **agent 默认不提交**。只有人类 owner/admin 可在工作区 depot 目录开启 `allow_submit`、`allow_sync`、`allow_unshelve`；机器凭证不能修改目录。项目资源不能授予这些权限 | 当前实现契约 |
 | D4 | CL 和 review 状态靠 daemon 轮询同步，不依赖服务器 trigger（我们没有 admin 权限） | 建议，未被否决 |
 | D5 | `+l` 独占文件默认不允许 agent 通过 daemon 打开，可以按 depot 放开 | 建议，未被否决 |
 | D6 | 项目配置 Git 或 Perforce depot 后不继承另一类资源；只有本地目录的项目仍可使用工作区目录兜底，`in_place` 必须保持 P4 绑定 | 当前实现契约 |
@@ -88,7 +88,7 @@
    - 否则 `shelve -r -c <CL>`，edge 工作区加 `-p`；
    - 自动建 Swarm review 并关联到 issue；
    - **文件保持打开状态**。
-7. 人在 UE 里验证，用 P4V / safesubmit 提交。
+7. 默认由人在 UE 里验证，用 P4V / safesubmit 提交。管理员开启 `allow_submit` 后，agent 可通过提交前检查提交本任务 CL；关闭开关不能撤回已提交的修改。
 8. 第二阶段起：daemon 轮询到 CL 已提交（包括改号后的新号），自动推进 issue；易协作回写自动带上 CL 和 review。
 9. 返工：同一个 issue 再次指派、落在同一个 client 上时，复用原来的 pending CL（按描述里的 `Multica: <DJ-123>` 查找）。
 
@@ -100,7 +100,7 @@
 | I2 | 已在人的 CL（含 default CL）里打开的文件，agent 不能碰 | 拒绝："已在你的 CL N 里打开" |
 | I3 | 被别人独占、或是 `+l` 文件且 depot 没开 `allow_exclusive` | 拒绝，并给出占用者 `user@client` |
 | I4 | `revert` / `reconcile` 必须带 `-c <任务CL>`，`reconcile` 还必须给明确路径；永远不对整个 client 执行 | 拒绝 |
-| I5 | 不提供 `submit`、`sync`、`unshelve` | 拒绝，附说明 |
+| I5 | `submit`、`sync`、`unshelve` 默认拒绝，仅在工作区目录的对应权限开启后允许；没有绑定的写操作始终拒绝 | 409 `action_not_allowed` |
 | I6 | 本次任务写入的 sidecar 路径永远不会被 add 或 reconcile 进 CL | 从文件列表里过滤掉 |
 | I7 | 没有单号（`p4_ticket` 为空）时不创建 CL、不打开文件 | 返回 409 `ticket_required` |
 | I8 | 只操作本机、本人的 client：Host 为空或等于本机，Owner 等于 P4USER，本地目录在 client Root 之内 | 任务失败，并说明原因 |
@@ -115,7 +115,7 @@
 
 | 改动 | 文件 / 函数 |
 |---|---|
-| 去掉 submit | `p4cache/mutate.go`：从 `validMutateAction` 和 `mutateArgs` 删除 `ActionSubmit` 和 `changeSubmitted`；`cmd/multica/cmd_p4_task.go` 删除 `submit` 子命令；`runtime_config_sections.go:273`、`references/runtimes.md`、`perforce.mdx` 里的 submit 字样一并删除。报错文案："agent 不提交 changelist，请由人验证后提交" |
+| 提交权限与检查 | submit 仅作用于绑定的任务 CL。提交前回读 pending spec，核对 client、user、`refs #` 和任务标记；执行 `revert -a` 并拒绝空 CL；再次核对描述，再整份 `shelve -d -c`，最后 `submit -c`。成功后通过 `describe -s -O` 回读，不因回读失败重放 submit |
 | brief 补 `reopen` 和 charset | `execenv/execenv.go` 的 `P4DepotForEnv` 加 `Charset`；`daemon.go` 的 `convertP4DepotsForEnv` 把它带上；`writeP4Depots` 输出 charset；命令行里补 `reopen` |
 | 超时对齐 | 新增 `MULTICA_P4_TIMEOUT`（默认 10m，读法同 `daemon/config.go:326` 的 `durationFromEnv`）；`p4cache.p4Timeout` 改读这个配置；CLI 的 sync / run 超时设为 daemon 超时加 1 分钟；swarm 超时改为 3 分钟 |
 | 删除任务专用 client 模式 | 不再创建 client 或下载 depot 副本，也不保留体积预检、旧 checkout mutation 或拒绝用的 Sync shim。无绑定的 `/p4/run` 和 `/p4/sync` 统一返回 409；quick-create 和无项目的 autopilot 不因工作区目录兜底而要求本地目录 |
@@ -123,7 +123,7 @@
 | 只配 P4 的任务不再注入 git 段落 | `runtime_config_sections.go`：当 `len(ctx.Repos)==0 && len(ctx.P4Depots)>0` 时省略 271 行（`repo checkout`）和 274 行（git 身份）；`writeProjectContext` 里 537 行改为只在确实存在 `github_repo` 资源时输出。103 行的 CI 段落是 review-locked 文本，**不动** |
 
 **验收**
-- P4 定向测试：缺少工作区绑定时拒绝写操作；`in_place` 兜底保持绑定；quick-create 和无项目 autopilot 不被误拦。
+- P4 定向测试：机器凭证不能修改工作区 depot；`in_place` 兜底保持绑定；quick-create 和无项目 autopilot 不被误拦；submit 前检查、整份 shelf 清理和失败停止；sync 包含 import，明确拒绝 `--changelist` / `--fresh`。
 - `handler` 测试：fallback 新规则下 4 种组合（无资源 / 只有 git / 只有 P4 / 两者都有）。
 - brief 快照测试：只配 P4 的任务不再出现 `repo checkout`。
 
@@ -212,7 +212,7 @@ func (d *Daemon) p4Binding(taskID string) *p4TaskBinding
 | `reconcile` | 必须给明确路径，带 `-c CL`，过滤 sidecar |
 | `shelve` | 只能 shelve 任务 CL；edge 工作区加 `-p` |
 | `change` | 只能改任务 CL 的描述：daemon 固定加上 `refs #<单号>` 前缀和 `Multica: <key>` 尾注 |
-| `sync` / `unshelve` | 拒绝："工作区模式下不做同步，由人自己同步" |
+| `sync` / `unshelve` | 默认拒绝；分别需要 `allow_sync` / `allow_unshelve`。sync 使用 `//<client>/...` 更新完整视图；unshelve 仅恢复本任务自己的 shelf |
 | `opened` / `describe` | 只读，允许 |
 | 新增 `/p4/status` | 返回 client、根目录、stream、单号、任务 CL、CL 里的文件和 warnings（路由注册在 `health.go:419-421` 旁边，加一行） |
 
@@ -259,7 +259,7 @@ func (h *Handler) resolveIssueP4Ticket(ctx context.Context, issue db.Issue) stri
 - 你在 `<user>` 的工作区里干活，给出 client、根目录、stream。
 - 改文件前先 `multica p4 edit`；文件默认只读，**不要改只读属性**；新建文件用 `add-files`。所有改动都会进本任务的 CL。
 - 不要用 raw `p4` 写工作区；`files/print/filelog/describe/changes` 这类只读查询可以用。
-- 不 sync，不 submit，不碰别的 CL。遇到"已在你的 CL 里打开 / 被独占 / 不在 head"之类的提示，就停下并在任务里说明。
+- submit、sync、unshelve 只在对应权限开启时可用，不碰别的 CL。遇到“已在你的 CL 里打开 / 被独占 / 不在 head”之类的提示，停下并在任务里说明。
 - 结束后 daemon 会自动 shelve 并发起 Swarm 评审。最终回复里写清：改了什么、CL 号（用 `multica p4 status` 查）、在 UE 里怎么验证。
 - 没有单号时：本任务不能打开文件；需要改文件就留言请人在描述里补 `refs #<单号>`，然后结束。
 - 项目规范在 `Game/DJ01/AGENTS.md`，开始前先读。
@@ -295,7 +295,7 @@ func (h *Handler) resolveIssueP4Ticket(ctx context.Context, issue db.Issue) stri
    - 文件在这个 CL 里；
    - CL 已 shelve，Swarm review 已关联到 issue，文件仍处于打开状态；
    - agent shell 里 raw `p4 edit` 失败；
-   - 不带参数的 `multica p4 revert` 被拒，submit 不存在；
+   - 不带参数的 `multica p4 revert` 被拒；submit、sync、unshelve 默认被拒，管理员开启后按绑定范围执行；
    - 任务前后对比 `p4 opened`，你自己的 CL 完全没变。
 3. 再验证一遍不带单号的任务：返回 `ticket_required`，不产生 CL。
 
@@ -409,6 +409,7 @@ func (h *Handler) resolveIssueP4Ticket(ctx context.Context, issue db.Issue) stri
 ## 8. 检查命令
 
 - **Go**：Windows 上用 `scripts/go-test-with-agent-cli-guard.ps1` 跑 `./internal/daemon/... ./internal/handler/... ./cmd/multica/...`；改了 SQL 之后执行 `make sqlc`。
+- **隔离 P4 集成测试**：设置 `MULTICA_TEST_P4_BIN` 和 `MULTICA_TEST_P4D_BIN` 为本机可执行文件的绝对路径，再通过同一 guard 运行 `go -C server test -tags=p4integration ./internal/daemon -run '^TestP4IsolatedServerSubmitAndImportedSync$' -count=1 -v`。测试自行创建临时目录和 loopback P4D，验证 shelf 提交、未改动文件排除和 stream import 同步；不连接共享服务器或使用已有工作区。
 - **前端**：`pnpm typecheck`、`pnpm lint`、`pnpm test`。
 - **合并前**：`make check`。移动端不涉及。
 - 每个阶段都必须做实机验收：静态测试全部通过，不等于功能验证通过。
@@ -434,7 +435,7 @@ func (h *Handler) resolveIssueP4Ticket(ctx context.Context, issue db.Issue) stri
 | 每个任务独立 client 并全量 sync | DJ01 一份工作区 328GB，不可行 | 已删除；P4 文件任务只使用既有 `in_place` 工作区 |
 | 专用 agent 机、多 slot 并行 | 磁盘和首次同步成本太高；工作区模式已能满足"每人一个 agent" | 并发需求明确之后（阶段 3） |
 | 服务器 trigger / Swarm webhook | 没有 admin 权限 | 能拿到 Swarm 管理员支持时，作为轮询的加速通道 |
-| agent 提交 / 提交策略开关 | 用户已决定 agent 不提交 | 不做 |
+| agent 无授权提交 | 默认拒绝提交；权限只由人类工作区管理员授予 | 不支持；不提供项目级授权或机器凭证自授权 |
 | task stream / sparse stream | 团队目前没用 task stream | 有分支隔离需求时 |
 | P4 Proxy | 只对专用机有意义 | 随专用 agent 机一起考虑 |
 | Swarm 卡片继续当作 PR 展示 | 语义错误（committed 显示成 "Merged"） | 阶段 2 改为 CL 卡片 |

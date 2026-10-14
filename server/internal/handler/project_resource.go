@@ -93,6 +93,11 @@ func validatePerforceDepotRef(ref json.RawMessage) (json.RawMessage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("perforce_depot: %w", err)
 	}
+	// Project resources select a depot; only the human-managed workspace
+	// catalog grants these actions at claim time. Do not persist inert grants.
+	normalized.AllowSubmit = false
+	normalized.AllowSync = false
+	normalized.AllowUnshelve = false
 	out, err := p4depot.MarshalJSON(normalized)
 	if err != nil {
 		return nil, err
@@ -1013,6 +1018,17 @@ func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, wor
 				return claimProjectContext{}, fmt.Errorf("list project resources: %w", resErr)
 			}
 			out.Resources, out.Repos, out.P4Depots = projectResourcesForClaim(rows)
+			if len(out.P4Depots) > 0 {
+				ws, wsErr := h.Queries.GetWorkspace(ctx, workspaceID)
+				if wsErr != nil {
+					return claimProjectContext{}, fmt.Errorf("get workspace: %w", wsErr)
+				}
+				var workspaceDepots []P4DepotData
+				if len(ws.P4Depots) > 0 && json.Unmarshal(ws.P4Depots, &workspaceDepots) != nil {
+					workspaceDepots = nil
+				}
+				overlayP4ActionSwitches(out.P4Depots, workspaceDepots)
+			}
 		case errors.Is(err, pgx.ErrNoRows):
 			// Stale/deleted/foreign reference: degrade to workspace context.
 		default:
@@ -1097,4 +1113,37 @@ func projectResourcesForClaim(rows []db.ProjectResource) ([]ProjectResourceData,
 		}
 	}
 	return resources, repos, depots
+}
+
+// overlayP4ActionSwitches copies submit, sync, and unshelve from the workspace
+// Perforce settings onto the project's depots. Those switches are edited in
+// Settings → Code; a project resource keeps its own port and depot, and picks
+// up a later change to the switches without being reattached. Project members
+// can edit resources, so only an exact match in the admin-managed workspace
+// catalog can grant these actions. Missing or invalid entries grant nothing.
+func overlayP4ActionSwitches(project, workspace []P4DepotData) {
+	byID := make(map[string]P4DepotData, len(workspace))
+	for _, depot := range workspace {
+		ref, err := p4depot.Normalize(p4depot.Ref(depot))
+		if err != nil {
+			continue
+		}
+		byID[p4depot.Identity(ref)] = P4DepotData(ref)
+	}
+	for i, depot := range project {
+		project[i].AllowSubmit = false
+		project[i].AllowSync = false
+		project[i].AllowUnshelve = false
+		ref, err := p4depot.Normalize(p4depot.Ref(depot))
+		if err != nil {
+			continue
+		}
+		src, ok := byID[p4depot.Identity(ref)]
+		if !ok {
+			continue
+		}
+		project[i].AllowSubmit = src.AllowSubmit
+		project[i].AllowSync = src.AllowSync
+		project[i].AllowUnshelve = src.AllowUnshelve
+	}
 }

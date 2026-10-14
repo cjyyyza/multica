@@ -19,6 +19,7 @@ import (
 // change is filled lazily on the first open, or reused from an earlier run
 // on the same issue.
 type p4TaskBinding struct {
+	opMu            sync.Mutex // Serialize writes and close-out on this client.
 	mu              sync.Mutex
 	ws              *p4cache.Workspace
 	ref             p4depot.Ref
@@ -26,6 +27,8 @@ type p4TaskBinding struct {
 	issueKey, title string
 	description     string
 	change          string
+	submitted       bool
+	submission      *p4cache.FinishResult
 	sidecars        []string
 	defaultSnapshot []string
 	release         func()
@@ -36,7 +39,22 @@ type p4TaskBinding struct {
 func (b *p4TaskBinding) changelist() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.submission != nil {
+		return b.submission.Change
+	}
 	return b.change
+}
+
+func (b *p4TaskBinding) isSubmitted() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.submitted
+}
+
+func (b *p4TaskBinding) markSubmitted() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.submitted = true
 }
 
 func (b *p4TaskBinding) isClosed() bool {
@@ -60,6 +78,9 @@ func (b *p4TaskBinding) envSpec() *execenv.P4WorkspaceForEnv {
 		Ticket:         b.ticket,
 		Change:         b.change,
 		AllowExclusive: b.ref.AllowExclusive,
+		AllowSubmit:    b.ref.AllowSubmit,
+		AllowSync:      b.ref.AllowSync,
+		AllowUnshelve:  b.ref.AllowUnshelve,
 	}
 }
 
@@ -212,6 +233,8 @@ func (d *Daemon) finishP4Workspace(ctx context.Context, task Task, b *p4TaskBind
 	if b == nil {
 		return nil
 	}
+	b.opMu.Lock()
+	defer b.opMu.Unlock()
 	defer func() {
 		if b.release != nil {
 			b.release()
@@ -226,17 +249,26 @@ func (d *Daemon) finishP4Workspace(ctx context.Context, task Task, b *p4TaskBind
 	}
 	b.closed = true
 	change := b.change
+	submitted := b.submitted
 	b.mu.Unlock()
 	if change == "" {
 		return nil
 	}
-	result, finishErr := d.p4Cache.FinishChange(ctx, b.ws, change)
-	if finishErr != nil {
-		if d.logger != nil {
-			d.logger.Error("p4 workspace finish failed", "task_id", task.ID, "change", change, "error", finishErr)
-		}
+	var (
+		result    *p4cache.FinishResult
+		finishErr error
+	)
+	if submitted {
+		result, finishErr = d.submittedP4Change(ctx, b)
+	} else {
+		result, finishErr = d.p4Cache.FinishChange(ctx, b.ws, change)
+	}
+	if finishErr != nil && d.logger != nil {
+		d.logger.Error("p4 workspace finish failed", "task_id", task.ID, "change", change, "error", finishErr)
 	}
 	if result == nil {
+		// Keep an unverified submission eligible for polling rather than
+		// permanently recording an invented terminal receipt.
 		result = &p4cache.FinishResult{Change: change}
 	}
 	report := d.changelistReport(ctx, b, result)
@@ -248,6 +280,23 @@ func (d *Daemon) finishP4Workspace(ctx context.Context, task Task, b *p4TaskBind
 		return fmt.Errorf("Perforce changelist %s delivery failed: %w", change, err)
 	}
 	return nil
+}
+
+func (d *Daemon) submittedP4Change(ctx context.Context, b *p4TaskBinding) (*p4cache.FinishResult, error) {
+	b.mu.Lock()
+	result, original := b.submission, b.change
+	b.mu.Unlock()
+	if result != nil {
+		return result, nil
+	}
+	result, err := d.p4Cache.SubmittedChange(ctx, b.ws, original)
+	if err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	b.submission = result
+	b.mu.Unlock()
+	return result, nil
 }
 
 func (d *Daemon) p4CommandTimeout() time.Duration {

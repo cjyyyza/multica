@@ -301,3 +301,30 @@ func TestProjectContextPointsAtWorkspaceSectionInWorkspaceMode(t *testing.T) {
 		t.Errorf("workspace mode cannot sync, so the sync sentence must not render; got:\n%s", out)
 	}
 }
+
+func TestP4WorkspaceBriefNamesActionsTheDaemonEnabled(t *testing.T) {
+	t.Parallel()
+	ctx := workspaceCtx()
+	ctx.P4Workspace.AllowSubmit = true
+	ctx.P4Workspace.AllowSync = true
+	ctx.P4Workspace.AllowUnshelve = true
+	out := buildMetaSkillContent("claude", ctx)
+	for _, want := range []string{
+		"`multica p4 submit`",
+		"`multica p4 sync`",
+		"`multica p4 unshelve`",
+		"Never touch a changelist other than this task's",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("enabled-action brief missing %q; got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Never sync, never submit, and never touch") {
+		t.Errorf("the all-off prohibition should not render when the daemon enabled the actions; got:\n%s", out)
+	}
+	for _, forbidden := range []string{"Agents do not submit changelists", "or sync a depot", "Do not run `multica p4 sync`"} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("enabled-action brief contains contradictory rule %q", forbidden)
+		}
+	}
+}

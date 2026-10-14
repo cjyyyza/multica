@@ -67,6 +67,7 @@ export interface ListProjectsResponse {
 //   - perforce_depot: Helix depot the daemon syncs with host p4 credentials,
 //     ref = { port, depot, stream?, user?, charset?, changelist?, swarm_url?,
 //             allow_exclusive?, no_auto_review? }
+// Submit, sync and unshelve permissions come from the workspace depot catalog.
 export type ProjectResourceType = "github_repo" | "local_directory" | "perforce_depot";
 
 export interface GithubRepoResourceRef {

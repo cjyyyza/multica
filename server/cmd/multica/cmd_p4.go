@@ -44,7 +44,7 @@ var p4RemoveCmd = &cobra.Command{
 var p4SyncCmd = &cobra.Command{
 	Use:   "sync",
 	Short: "Sync a Perforce depot into the working directory",
-	Long: "Perforce tasks edit an existing Helix workspace. Workspace sync remains unavailable. " +
+	Long: "Syncs the Helix workspace this task is already bound to, and only when that depot's allow_sync switch is on in Settings → Code (default off). " +
 		"It does not create a task client or download a new copy of the depot.",
 	Args: cobra.NoArgs,
 	RunE: runP4Sync,
@@ -86,7 +86,7 @@ func init() {
 
 	mutateCmds := []*cobra.Command{
 		p4EditCmd, p4AddFilesCmd, p4DeleteCmd, p4RevertCmd, p4OpenedCmd,
-		p4ReconcileCmd, p4MoveCmd, p4ReopenCmd, p4ChangeCmd,
+		p4ReconcileCmd, p4MoveCmd, p4ReopenCmd, p4ChangeCmd, p4SubmitCmd,
 		p4ShelveCmd, p4UnshelveCmd, p4DescribeCmd,
 	}
 	for _, cmd := range mutateCmds {
@@ -242,6 +242,13 @@ func runP4Add(cmd *cobra.Command, _ []string) error {
 	depots := append([]p4depot.Ref{}, ws.P4Depots...)
 	for i, existing := range depots {
 		if p4depot.Identity(existing) == id {
+			// `p4 add` rebuilds the depot from port and path. Keep the
+			// switches edited in Settings → Code.
+			ref.AllowExclusive = existing.AllowExclusive
+			ref.NoAutoReview = existing.NoAutoReview
+			ref.AllowSubmit = existing.AllowSubmit
+			ref.AllowSync = existing.AllowSync
+			ref.AllowUnshelve = existing.AllowUnshelve
 			depots[i] = ref
 			ws, err = patchWorkspaceP4Depots(ctx, client, workspaceID, depots)
 			if err != nil {

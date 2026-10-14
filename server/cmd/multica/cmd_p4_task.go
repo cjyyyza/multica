@@ -97,6 +97,14 @@ var p4ChangeCmd = &cobra.Command{
 	RunE:  runP4Mutate("change"),
 }
 
+var p4SubmitCmd = &cobra.Command{
+	Use:   "submit",
+	Short: "Submit the task changelist when the depot allows it",
+	Long:  "Submits this task's pending changelist through the daemon when that depot's allow_submit switch is on in Settings → Code (default off).",
+	Args:  cobra.NoArgs,
+	RunE:  runP4Mutate("submit"),
+}
+
 var p4ShelveCmd = &cobra.Command{
 	Use:   "shelve",
 	Short: "Shelve a pending changelist so Swarm can review it",

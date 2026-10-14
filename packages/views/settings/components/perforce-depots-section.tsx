@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { Input } from "@multica/ui/components/ui/input";
 import { Button } from "@multica/ui/components/ui/button";
+import { Switch } from "@multica/ui/components/ui/switch";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,6 +30,31 @@ import { useAutoSave } from "./use-auto-save";
 
 const EMPTY_DEPOTS: WorkspaceP4Depot[] = [];
 
+function DepotSwitch({
+  label,
+  checked,
+  disabled,
+  onCheckedChange,
+}: {
+  label: string;
+  checked: boolean;
+  disabled: boolean;
+  onCheckedChange: (value: boolean) => void;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-caption text-foreground">
+      <Switch
+        size="sm"
+        checked={checked}
+        disabled={disabled}
+        aria-label={label}
+        onCheckedChange={onCheckedChange}
+      />
+      {label}
+    </label>
+  );
+}
+
 function depotsEqual(left: WorkspaceP4Depot[], right: WorkspaceP4Depot[]) {
   if (left.length !== right.length) return false;
   return left.every((depot, index) => {
@@ -40,7 +66,10 @@ function depotsEqual(left: WorkspaceP4Depot[], right: WorkspaceP4Depot[]) {
       (depot.charset ?? "") === (other.charset ?? "") &&
       (depot.changelist ?? "") === (other.changelist ?? "") &&
       (depot.description ?? "") === (other.description ?? "") &&
-      (depot.swarm_url ?? "") === (other.swarm_url ?? "")
+      (depot.swarm_url ?? "") === (other.swarm_url ?? "") &&
+      Boolean(depot.allow_submit) === Boolean(other.allow_submit) &&
+      Boolean(depot.allow_sync) === Boolean(other.allow_sync) &&
+      Boolean(depot.allow_unshelve) === Boolean(other.allow_unshelve)
     );
   });
 }
@@ -109,6 +138,18 @@ export function PerforceDepotsSection() {
     index: number,
     field: keyof WorkspaceP4Depot,
     value: string,
+  ) => {
+    setDepots((current) =>
+      current.map((depot, depotIndex) =>
+        depotIndex === index ? { ...depot, [field]: value } : depot,
+      ),
+    );
+  };
+
+  const updateDepotFlag = (
+    index: number,
+    field: "allow_submit" | "allow_sync" | "allow_unshelve",
+    value: boolean,
   ) => {
     setDepots((current) =>
       current.map((depot, depotIndex) =>
@@ -243,6 +284,29 @@ export function PerforceDepotsSection() {
                 placeholder={t(($) => $.perforce.swarm_placeholder)}
                 className="font-mono text-caption"
               />
+              <div className="flex flex-wrap gap-x-4 gap-y-2">
+                <DepotSwitch
+                  label={t(($) => $.perforce.allow_submit)}
+                  checked={depot.allow_submit === true}
+                  disabled={!canManageWorkspace}
+                  onCheckedChange={(value) => updateDepotFlag(index, "allow_submit", value)}
+                />
+                <DepotSwitch
+                  label={t(($) => $.perforce.allow_sync)}
+                  checked={depot.allow_sync === true}
+                  disabled={!canManageWorkspace}
+                  onCheckedChange={(value) => updateDepotFlag(index, "allow_sync", value)}
+                />
+                <DepotSwitch
+                  label={t(($) => $.perforce.allow_unshelve)}
+                  checked={depot.allow_unshelve === true}
+                  disabled={!canManageWorkspace}
+                  onCheckedChange={(value) => updateDepotFlag(index, "allow_unshelve", value)}
+                />
+              </div>
+              <p className="text-micro text-muted-foreground">
+                {t(($) => $.perforce.action_switches_hint)}
+              </p>
             </div>
           ))}
 
