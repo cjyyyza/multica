@@ -157,7 +157,9 @@
     "p4_depot_placeholder": "//depot/project",
     "p4_stream_placeholder": "Stream（可选）",
     "p4_submit": "添加",
-    "toast_p4_attached": "已关联 Perforce depot"
+    "toast_p4_attached": "已关联 Perforce depot",
+    "p4_needs_local_directory": "关联 Perforce depot 之前，先指定这台机器上的工作区文件夹。智能体在这个文件夹里改文件，不会再同步一份。",
+    "p4_needs_in_place_directory": "请先将此目录的执行模式改为直接修改文件夹，再关联 Perforce depot。"
   },
   "delete_dialog": {
     "title": "删除项目",

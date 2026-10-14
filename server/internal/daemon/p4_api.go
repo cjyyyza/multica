@@ -126,19 +126,15 @@ func (d *Daemon) workspaceDriftWarnings(ctx context.Context, b *p4TaskBinding) [
 	)
 }
 
-func (d *Daemon) attachSwarmReview(ctx context.Context, task Task, b *p4TaskBinding, report *p4ChangelistReport) {
+func (d *Daemon) attachSwarmReview(ctx context.Context, b *p4TaskBinding, report *p4ChangelistReport) {
 	if d.p4Cache == nil || strings.TrimSpace(b.ref.SwarmURL) == "" || report.Number <= 0 {
 		return
 	}
 	change := strconv.Itoa(report.Number)
 	params := p4cache.SwarmParams{
-		WorkspaceID: task.WorkspaceID,
-		TaskID:      task.ID,
-		WorkDir:     b.ws.Dir,
 		Ref:         b.ref,
 		Changelist:  change,
 		Description: report.Description,
-		Shelve:      false,
 	}
 	existing, err := d.p4Cache.Swarm(ctx, swarmAction(params, p4cache.SwarmList))
 	if err != nil {

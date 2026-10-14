@@ -91,3 +91,21 @@ func TestReportSwarmReviewRejectsMalformedReceipt(t *testing.T) {
 		}
 	}
 }
+
+func TestP4SyncRejectsUnsupportedOptionsBeforeCallingDaemon(t *testing.T) {
+	for _, args := range [][]string{{"--changelist", "1234"}, {"--fresh"}, {"--fresh=false"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			resetP4Flags()
+			t.Cleanup(resetP4Flags)
+			cmd := &cobra.Command{}
+			cmd.Flags().StringVar(&p4Changelist, "changelist", "", "")
+			cmd.Flags().BoolVar(&p4Fresh, "fresh", false, "")
+			if err := cmd.ParseFlags(args); err != nil {
+				t.Fatal(err)
+			}
+			if err := runP4Sync(cmd, nil); err == nil || !strings.Contains(err.Error(), "does not support") {
+				t.Fatalf("unsupported option was ignored: %v", err)
+			}
+		})
+	}
+}

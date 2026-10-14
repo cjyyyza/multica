@@ -25,7 +25,7 @@ Read the invariants below, then open the reference(s) your task actually needs
 | `references/squads.md` | Squads: leader routing, roster, recording leader activity, why a squad did or did not run |
 | `references/autopilots.md` | Autopilots: schedule / webhook / manual triggers, `create_issue` vs `run_only`, why one did not fire |
 | `references/projects.md` | Projects and their durable resources (`github_repo`, `perforce_depot`, `local_directory`, worktree mode) |
-| `references/runtimes.md` | Runtimes, daemons, `repo checkout`, Perforce workspace mode vs `p4 sync`, `p4 edit` / `status` / Swarm, and the task CLI boundary |
+| `references/runtimes.md` | Runtimes, daemons, `repo checkout`, Perforce in the person's existing workspace, `p4 edit` / `status` / Swarm, and the task CLI boundary |
 | `references/skill-import.md` | Importing a skill into this workspace from a URL or a local archive |
 
 Open what the task needs. A single-domain task usually needs one; a task that
@@ -64,8 +64,9 @@ the user has not asked for a specific mutation, propose it instead of making it.
 **An agent never submits a Perforce changelist.** Open files with
 `multica p4 edit`, let the task changelist shelve, and report its number
 (`multica p4 status`); the person who owns the workspace verifies in the editor
-and submits. Which Perforce mode a task is in, and what the daemon refuses in
-each, is in `references/runtimes.md`.
+and submits. The existing workspace binding and daemon checks are described in
+`references/runtimes.md`.
+Never create a client for the task.
 
 **Status keys identify workflow states; categories describe lifecycle only.**
 Custom statuses do not inherit built-in automation behavior. For status side

@@ -778,7 +778,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		cfg:                         cfg,
 		client:                      client,
 		repoCache:                   repocache.New(cacheRoot, logger),
-		p4Cache:                     &p4cache.Cache{Logger: logger, Timeout: cfg.P4Timeout, SyncMaxBytes: cfg.P4SyncMaxBytes},
+		p4Cache:                     &p4cache.Cache{Logger: logger, Timeout: cfg.P4Timeout},
 		skillCache:                  NewSkillBundleCache(skillCacheRoot),
 		logger:                      logger,
 		terminalReports:             newTerminalReportStore(cfg),
@@ -8060,6 +8060,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// LocalWorkDir into execenv. handleTask already validated + locked the
 	// path for worker tasks; leader tasks intentionally skip the assignment.
 	localAssignment, _ := localDirectoryAssignmentForTask(task, d.cfg.DaemonID)
+	if err := requireInPlaceDirectoryForP4(task, localAssignment); err != nil {
+		return TaskResult{}, asEnvironmentSetupFailure(err)
+	}
 	// Reuse intentionally skipped for local_directory tasks: the prior
 	// WorkDir is the user's own path (always present) but the reuse path
 	// loses the envRoot association the GC loop needs, and re-running
@@ -8421,7 +8424,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			if localAssignment != nil {
 				prepParams.LocalWorkDir = localAssignment.AbsPath
 			}
-			if localAssignment != nil && !localAssignment.UsesWorktree() && len(task.P4Depots) > 0 {
+			if localAssignment != nil && !localAssignment.UsesWorktree() && taskTargetsP4(task, localAssignment) {
 				binding, bindErr := d.bindP4Workspace(prepareCtx, task, localAssignment, provider)
 				if bindErr != nil {
 					return TaskResult{}, asEnvironmentSetupFailure(fmt.Errorf("perforce workspace: %w", bindErr))

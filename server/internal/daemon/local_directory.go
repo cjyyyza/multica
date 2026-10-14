@@ -125,6 +125,47 @@ func localDirectoryAssignmentForTask(task Task, daemonID string) (*localDirector
 	return findLocalDirectoryAssignment(task.ProjectResources, daemonID)
 }
 
+// requireInPlaceDirectoryForP4 stops a file-editing task that targets Perforce
+// depots until this daemon has an in_place local directory. Creating a task
+// client would sync the depot, so the person names their existing workspace
+// folder first. Coordination tasks do not need a file-editing workspace.
+func requireInPlaceDirectoryForP4(task Task, assignment *localDirectoryAssignment) error {
+	if task.IsLeaderTask || task.ChatSessionID != "" || task.QuickCreatePrompt != "" ||
+		(task.AutopilotRunID != "" && task.ProjectID == "" && len(task.ProjectResources) == 0) {
+		return nil
+	}
+	if !taskTargetsP4(task, assignment) {
+		return nil
+	}
+	if assignment != nil && !assignment.UsesWorktree() {
+		return nil
+	}
+	if assignment != nil && assignment.UsesWorktree() {
+		return fmt.Errorf("perforce work edits your Helix workspace directly; set the local directory %q to edit the folder itself before starting this run", assignment.DisplayName())
+	}
+	return fmt.Errorf("perforce work needs the local directory of your Helix workspace; attach an in_place local_directory at the workspace root before starting this run")
+}
+
+// taskTargetsP4 reports whether a task's Perforce depots represent a
+// Perforce-targeted task rather than a workspace-level fallback catalog
+// inherited alongside Git repositories or non-Perforce project resources.
+func taskTargetsP4(task Task, assignment *localDirectoryAssignment) bool {
+	if len(task.P4Depots) == 0 {
+		return false
+	}
+	// A project's in-place directory can use the workspace depot catalog.
+	// Preserve binding (including the raw-p4 shield) for that existing setup.
+	if assignment != nil && !assignment.UsesWorktree() {
+		return true
+	}
+	for _, r := range task.ProjectResources {
+		if r.ResourceType == "perforce_depot" {
+			return true
+		}
+	}
+	return len(task.ProjectResources) == 0 && len(task.Repos) == 0
+}
+
 // localDirectoryLockExempt reports whether a task may run inside an in_place
 // local_directory WITHOUT serialising on the per-path mutex. It is asked only
 // after an assignment has been resolved and validated, so an exempt task still

@@ -274,12 +274,7 @@ func writeAvailableCommands(b *strings.Builder, ctx TaskContextForEnv) {
 	if !p4OnlyTask(ctx) {
 		b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>] [--fresh]` — repository checkout on a dedicated branch. Re-running it keeps an existing checkout that has uncommitted or unpushed work, or is already on this task's branch, and only fetches. `--fresh` discards uncommitted and untracked files and starts a new branch; commits stay on the old branch, but push any you still need first.\n")
 	}
-	// Workspace mode edits the human's own client, where the daemon refuses
-	// to sync at all — the human owns that decision. Advertising the command
-	// there only buys a rejected call.
-	if ctx.P4Workspace == nil {
-		b.WriteString("- `multica p4 sync --port <P4PORT> --depot <//depot/path> [--stream <stream>] [--changelist <n>] [--fresh]` — sync a configured Perforce depot into this task's working directory using the host's `p4` login. `--fresh` deletes the previous sync directory and runs a clean sync.\n")
-	}
+	// The workspace section is the single source of action permissions.
 	b.WriteString("- `multica p4 edit --port <P4PORT> --depot <//depot/path> -- <files>` — checkout files for edit (`checkout` is an alias). Also: `add-files`, `delete`, `revert`, `reopen`, `opened`, `reconcile`, `change`, `shelve`, `status`. Swarm: `multica p4 swarm create --changelist <n>`. Agents do not submit changelists — the human verifies in-editor and submits.\n\n")
 	if !p4OnlyTask(ctx) {
 		b.WriteString("Git commits use the user's configured identity. Preserve it unless the user requests another identity. In a managed checkout, use `git config --worktree user.name` / `user.email` for an intentional task-local override; plain `git config` or `--local` can write into a shared cache and affect other tasks. Never change global Git identity for a task.\n\n")
@@ -512,10 +507,9 @@ func p4OnlyTask(ctx TaskContextForEnv) bool {
 }
 
 func writeP4Depots(b *strings.Builder, ctx TaskContextForEnv) {
-	// Workspace mode replaces this section rather than adding to it: the
-	// depot list describes the task-scoped client the daemon creates on
-	// `p4 sync`, and in workspace mode there is no such client — the task
-	// edits files in the human's own one.
+	// Workspace mode replaces this section: the task edits files in the
+	// person's own Helix client. Without that binding there is still no
+	// task client to create — `p4 sync` would download the depot.
 	if ctx.P4Workspace != nil {
 		writeP4Workspace(b, ctx.P4Workspace)
 		return
@@ -524,8 +518,8 @@ func writeP4Depots(b *strings.Builder, ctx TaskContextForEnv) {
 		return
 	}
 	b.WriteString("## Perforce depots\n\n")
-	b.WriteString("Available to this task — `multica p4 sync --port <P4PORT> --depot <//depot/path> --output json` to fetch. Uses the host Helix login (`p4 login`); Multica does not store a Perforce password.\n\n")
-	b.WriteString("The response contains the checkout `path` and task-scoped `client`. Do not call host `p4` against another client. Open files with `multica p4 edit` / `checkout` before editing; add new files with `multica p4 add-files`. You do not submit: shelve the changelist, then record its number and your Unreal validation evidence in the task so a human can verify and submit.\n\n")
+	b.WriteString("This task is not bound to an existing Helix workspace, so you cannot open or sync these files. Do not submit or unshelve. Multica does not create a task Perforce client: a new client syncs the depot into the task directory.\n\n")
+	b.WriteString("Ask a person to attach an `in_place` local directory at the workspace root (the directory that contains `p4config`) together with the `perforce_depot`. Do not run `multica p4 sync`, and do not create a client yourself.\n\n")
 	for _, depot := range ctx.P4Depots {
 		line := fmt.Sprintf("- `%s` `%s`", depot.Port, depot.Depot)
 		if depot.Stream != "" {
@@ -643,7 +637,7 @@ func writeProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 			if ctx.P4Workspace != nil {
 				b.WriteString("The `perforce_depot` resource is already checked out in the client named under `## Perforce workspace` — work there, by the rules in that section.\n\n")
 			} else {
-				b.WriteString("For `perforce_depot` resources, use `multica p4 sync --port <P4PORT> --depot <//depot/path>`, then `multica p4 edit` / `add-files` / `shelve` / `swarm create` as needed.\n\n")
+				b.WriteString("For `perforce_depot` resources, work only in the person's existing Helix workspace. Multica does not create a task client or sync a copy of the depot. If `## Perforce workspace` is absent, ask a person to attach an `in_place` local directory at the workspace root.\n\n")
 			}
 		}
 	} else {

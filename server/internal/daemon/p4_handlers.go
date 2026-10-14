@@ -131,64 +131,10 @@ func (d *Daemon) p4RunHandler() http.HandlerFunc {
 				return
 			}
 		}
-		ref, err := p4depot.Normalize(p4depot.Ref{
-			Port:       req.Port,
-			Depot:      req.Depot,
-			Stream:     req.Stream,
-			User:       req.User,
-			Charset:    req.Charset,
-			Changelist: req.Changelist,
-			SwarmURL:   req.SwarmURL,
-		})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		if _, _, ok := d.authorizeP4Call(w, r, req.WorkspaceID, req.TaskID, req.WorkDir, "p4 run"); !ok {
 			return
 		}
-		activeTask, authorizedWorkDir, ok := d.authorizeP4Call(w, r, req.WorkspaceID, req.TaskID, req.WorkDir, "p4")
-		if !ok {
-			return
-		}
-		ref, ok = d.allowP4Ref(w, r, req.WorkspaceID, activeTask.TaskID, ref)
-		if !ok {
-			return
-		}
-		cwd := authorizedWorkDir
-		if req.Cwd != "" {
-			authorizedCwd, cwdErr := authorizeRepoCheckoutWorkDir(activeTask.WorkDir, req.Cwd)
-			if cwdErr != nil {
-				http.Error(w, "p4 cwd is not owned by the active task", http.StatusForbidden)
-				return
-			}
-			cwd = authorizedCwd
-		}
-		if d.p4Cache == nil {
-			http.Error(w, "perforce is not initialized", http.StatusInternalServerError)
-			return
-		}
-		result, err := d.p4Cache.Mutate(r.Context(), p4cache.MutateParams{
-			WorkspaceID:     req.WorkspaceID,
-			TaskID:          activeTask.TaskID,
-			WorkDir:         activeTask.WorkDir,
-			Cwd:             cwd,
-			Ref:             ref,
-			Action:          req.Action,
-			Files:           req.Files,
-			Changelist:      req.Changelist,
-			Description:     req.Description,
-			Dest:            req.Dest,
-			RevertUnchanged: req.RevertUnchanged,
-			Force:           req.Force,
-		})
-		if err != nil {
-			if r.Context().Err() != nil {
-				return
-			}
-			d.logger.Error("p4 run failed", "action", req.Action, "port", ref.Port, "depot", ref.Depot, "error", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(result)
+		writeP4Rejection(w, p4Rejection{Code: p4CodeActionNotAllowed, Message: p4cache.ErrTaskClientNotCreated.Error()})
 	}
 }
 
@@ -228,10 +174,31 @@ func (d *Daemon) p4SwarmHandler() http.HandlerFunc {
 			http.Error(w, "perforce is not initialized", http.StatusInternalServerError)
 			return
 		}
+		if req.Shelve && strings.EqualFold(strings.TrimSpace(req.Action), p4cache.SwarmCreate) {
+			binding := d.p4Binding(activeTask.TaskID)
+			if binding == nil {
+				writeP4Rejection(w, p4Rejection{Code: p4CodeActionNotAllowed, Message: p4cache.ErrTaskClientNotCreated.Error()})
+				return
+			}
+			if !strings.EqualFold(ref.Port, binding.ws.Port) || (ref.Depot != binding.ref.Depot && ref.Depot != binding.ws.Stream) {
+				writeP4Rejection(w, p4Rejection{Code: p4CodeNotInWorkspace, Message: "depot does not match the workspace this task is bound to"})
+				return
+			}
+			if rej := binding.rejectForeignChangelist(req.Changelist); rej != nil {
+				writeP4Rejection(w, *rej)
+				return
+			}
+			_, rej, err := d.runWorkspaceP4(r.Context(), binding, p4MutateRequest{Action: p4cache.ActionShelve, Changelist: req.Changelist}, binding.ws.Dir)
+			if rej != nil {
+				writeP4Rejection(w, *rej)
+				return
+			}
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
 		result, err := d.p4Cache.Swarm(r.Context(), p4cache.SwarmParams{
-			WorkspaceID: req.WorkspaceID,
-			TaskID:      activeTask.TaskID,
-			WorkDir:     activeTask.WorkDir,
 			Ref:         ref,
 			Action:      req.Action,
 			Changelist:  req.Changelist,
@@ -239,7 +206,6 @@ func (d *Daemon) p4SwarmHandler() http.HandlerFunc {
 			Body:        req.Body,
 			Description: req.Description,
 			Reviewers:   req.Reviewers,
-			Shelve:      req.Shelve,
 		})
 		if err != nil {
 			if r.Context().Err() != nil {

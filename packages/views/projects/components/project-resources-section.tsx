@@ -187,6 +187,17 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   // 409 toast.
   const hasLocalDirectoryForCurrentDaemon =
     localDaemonId !== null && attachedLocalPaths.size > 0;
+  const inPlaceLocalDirectory =
+    localDaemonId === null
+      ? resources.filter(isLocalDirectoryRef).find(
+          (r) => executionModeOf(r.resource_ref) === "in_place",
+        )
+      : resources.filter(isLocalDirectoryRef).find(
+          (r) =>
+            r.resource_ref.daemon_id === localDaemonId &&
+            executionModeOf(r.resource_ref) === "in_place",
+        );
+  const hasPerforceResource = resources.some(isPerforceRef);
 
   const attachedP4Identities = new Set(
     resources.filter(isPerforceRef).map((r) => p4RefIdentity(r.resource_ref)),
@@ -217,26 +228,96 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
     }
   };
 
-  const handleAttachP4 = async (ref: PerforceDepotResourceRef) => {
+  const createP4Resource = async (ref: PerforceDepotResourceRef) => {
+    await createResource.mutateAsync({
+      resource_type: "perforce_depot",
+      resource_ref: {
+        port: ref.port,
+        depot: ref.depot,
+        ...(ref.stream ? { stream: ref.stream } : {}),
+        ...(ref.user ? { user: ref.user } : {}),
+        ...(ref.charset ? { charset: ref.charset } : {}),
+        ...(ref.changelist ? { changelist: ref.changelist } : {}),
+        ...(ref.swarm_url ? { swarm_url: ref.swarm_url } : {}),
+        ...(ref.allow_exclusive ? { allow_exclusive: true } : {}),
+        ...(ref.no_auto_review ? { no_auto_review: true } : {}),
+      },
+    });
+    toast.success(t(($) => $.resources.toast_p4_attached));
+  };
+
+  // Perforce edits the person's existing workspace, so the depot is attached
+  // only with an in_place directory. Changing an existing directory's mode
+  // is a separate, explicit choice, never a side effect of attaching a depot.
+  const ensureP4LocalDirectory = async (): Promise<boolean> => {
+    if (inPlaceLocalDirectory) return true;
+    const existing = resources
+      .filter(isLocalDirectoryRef)
+      .find((r) => localDaemonId === null || r.resource_ref.daemon_id === localDaemonId);
+    if (existing) {
+      toast.error(t(($) => $.resources.p4_needs_in_place_directory));
+      return false;
+    }
+    if (!desktopMode || !localDaemonId || !daemonStatus.running) {
+      toast.error(t(($) => $.resources.p4_needs_local_directory));
+      return false;
+    }
+    if (picking) return false;
+    setPicking(true);
     try {
+      const picked = await pickDirectory();
+      if (!picked.ok) {
+        if (picked.reason && picked.reason !== "cancelled") {
+          toast.error(picked.error ?? t(($) => $.resources.toast_local_pick_failed));
+        }
+        return false;
+      }
+      const path = picked.path ?? "";
+      const validation = await validateLocalDirectory(path);
+      if (!validation.ok) {
+        toast.error(
+          localValidationMessage(validation, {
+            not_absolute: t(($) => $.resources.local_validate_not_absolute),
+            not_found: t(($) => $.resources.local_validate_not_found),
+            not_a_directory: t(($) => $.resources.local_validate_not_a_directory),
+            not_readable: t(($) => $.resources.local_validate_not_readable),
+            not_writable: t(($) => $.resources.local_validate_not_writable),
+            unsupported: t(($) => $.resources.local_validate_unsupported),
+            fallback: t(($) => $.resources.toast_local_pick_failed),
+          }),
+        );
+        return false;
+      }
       await createResource.mutateAsync({
-        resource_type: "perforce_depot",
+        resource_type: "local_directory",
         resource_ref: {
-          port: ref.port,
-          depot: ref.depot,
-          ...(ref.stream ? { stream: ref.stream } : {}),
-          ...(ref.user ? { user: ref.user } : {}),
-          ...(ref.charset ? { charset: ref.charset } : {}),
-          ...(ref.changelist ? { changelist: ref.changelist } : {}),
-          ...(ref.swarm_url ? { swarm_url: ref.swarm_url } : {}),
-          ...(ref.allow_exclusive ? { allow_exclusive: true } : {}),
-          ...(ref.no_auto_review ? { no_auto_review: true } : {}),
+          local_path: path,
+          daemon_id: localDaemonId,
+          label: picked.basename ?? path,
+          execution_mode: "in_place",
         },
       });
-      toast.success(t(($) => $.resources.toast_p4_attached));
+      toast.success(t(($) => $.resources.toast_local_attached));
+      return true;
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : t(($) => $.resources.toast_local_pick_failed);
+      toast.error(msg);
+      return false;
+    } finally {
+      setPicking(false);
+    }
+  };
+
+  const handleAttachP4 = async (ref: PerforceDepotResourceRef): Promise<boolean> => {
+    if (!(await ensureP4LocalDirectory())) return false;
+    try {
+      await createP4Resource(ref);
+      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : t(($) => $.resources.toast_attach_failed);
       toast.error(msg);
+      return false;
     }
   };
 
@@ -283,6 +364,22 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
             fallback: t(($) => $.resources.toast_local_pick_failed),
           }),
         );
+        return;
+      }
+      // A project that already has Perforce edits that folder directly.
+      // Parallel mode is a git worktree, and it is not offered here.
+      if (resources.some(isPerforceRef)) {
+        await createResource.mutateAsync({
+          resource_type: "local_directory",
+          resource_ref: {
+            local_path: path,
+            daemon_id: localDaemonId,
+            label: fallbackLabel,
+            execution_mode: "in_place",
+          },
+        });
+        toast.success(t(($) => $.resources.toast_local_attached));
+        setAddOpen(false);
         return;
       }
       // Ask for the execution mode before creating. It is part of what the
@@ -454,20 +551,26 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                     setRefError(null);
                     setRefDialog({ resource: target });
                   }}
-                  onEditLocalDirectoryMode={(target) => {
-                    setModeError(null);
-                    setModeDialog({
-                      path: target.resource_ref.local_path,
-                      daemonId: target.resource_ref.daemon_id,
-                      mode: executionModeOf(target.resource_ref),
-                      // The path is already saved, so there is nothing to
-                      // re-validate from the browser; the desktop check only
-                      // runs at pick time. Unknown means the option stays
-                      // available and the daemon has the final say.
-                      isGitRepo: undefined,
-                      resource: target,
-                    });
-                  }}
+                  onEditLocalDirectoryMode={
+                    hasPerforceResource &&
+                    isLocalDirectoryRef(resource) &&
+                    executionModeOf(resource.resource_ref) === "in_place"
+                      ? undefined
+                      : (target) => {
+                          setModeError(null);
+                          setModeDialog({
+                            path: target.resource_ref.local_path,
+                            daemonId: target.resource_ref.daemon_id,
+                            mode: executionModeOf(target.resource_ref),
+                            // The path is already saved, so there is nothing to
+                            // re-validate from the browser; the desktop check only
+                            // runs at pick time. Unknown means the option stays
+                            // available and the daemon has the final say.
+                            isGitRepo: undefined,
+                            resource: target,
+                          });
+                        }
+                  }
                 />
               ))}
             </div>
@@ -603,8 +706,9 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                           aria-disabled={isDisabled}
                           onClick={async () => {
                             if (isDisabled) return;
-                            await handleAttachP4(depot);
-                            setAddOpen(false);
+                            if (await handleAttachP4(depot)) {
+                              setAddOpen(false);
+                            }
                           }}
                           className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-caption text-left hover:bg-accent transition-colors aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent"
                         >
@@ -630,8 +734,9 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
               )}
               <CustomP4Form
                 onSubmit={async (ref) => {
-                  await handleAttachP4(ref);
-                  setAddOpen(false);
+                  const ok = await handleAttachP4(ref);
+                  if (ok) setAddOpen(false);
+                  return ok;
                 }}
               />
             </PopoverContent>
@@ -696,6 +801,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
           }}
           path={modeDialog.path}
           value={modeDialog.mode}
+          hideWorktree={resources.some(isPerforceRef)}
           unavailableReason={worktreeUnavailableReason(
             modeDialog.isGitRepo,
             serverValidatesWorktree,
@@ -745,7 +851,7 @@ interface ResourceRowProps {
   onEditGithubRef: (
     resource: ProjectResource & { resource_ref: GithubRepoResourceRef },
   ) => void;
-  onEditLocalDirectoryMode: (
+  onEditLocalDirectoryMode?: (
     resource: ProjectResource & { resource_ref: LocalDirectoryResourceRef },
   ) => void;
 }
@@ -907,7 +1013,7 @@ interface LocalDirectoryRowProps {
   resource: ProjectResource & { resource_ref: LocalDirectoryResourceRef };
   localDaemonId: string | null;
   onRemove: () => void;
-  onEditMode: (
+  onEditMode?: (
     resource: ProjectResource & { resource_ref: LocalDirectoryResourceRef },
   ) => void;
 }
@@ -979,15 +1085,18 @@ function LocalDirectoryRow({
       )}
       {/* Not gated on `mismatch`: switching the mode only rewrites a field, so
           it works from the web app or another device, unlike the folder
-          picker. */}
-      <button
-        type="button"
-        onClick={() => onEditMode(resource)}
-        className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
-        title={t(($) => $.resources.mode_edit_tooltip)}
-      >
-        <GitBranch className="size-3 text-muted-foreground" />
-      </button>
+          picker. Hidden when the project has a Perforce depot because Perforce
+          only runs in place. */}
+      {onEditMode && (
+        <button
+          type="button"
+          onClick={() => onEditMode(resource)}
+          className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
+          title={t(($) => $.resources.mode_edit_tooltip)}
+        >
+          <GitBranch className="size-3 text-muted-foreground" />
+        </button>
+      )}
       <button
         type="button"
         onClick={onRemove}
@@ -1075,7 +1184,7 @@ function CustomRepoForm({
 function CustomP4Form({
   onSubmit,
 }: {
-  onSubmit: (ref: PerforceDepotResourceRef) => Promise<void> | void;
+  onSubmit: (ref: PerforceDepotResourceRef) => Promise<boolean | void> | boolean | void;
 }) {
   const { t } = useT("projects");
   const [port, setPort] = useState("");
@@ -1089,14 +1198,16 @@ function CustomP4Form({
     if (!nextPort || !nextDepot) return;
     setSubmitting(true);
     try {
-      await onSubmit({
+      const ok = await onSubmit({
         port: nextPort,
         depot: nextDepot,
         ...(stream.trim() ? { stream: stream.trim() } : {}),
       });
-      setPort("");
-      setDepot("");
-      setStream("");
+      if (ok !== false) {
+        setPort("");
+        setDepot("");
+        setStream("");
+      }
     } finally {
       setSubmitting(false);
     }

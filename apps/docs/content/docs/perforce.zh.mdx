@@ -1,6 +1,6 @@
 ---
 title: Perforce
-description: 让智能体在 Helix depot 里打开、修改并 shelve 文件 —— 可以在你自己的工作区，也可以在任务专用 client。
+description: 让智能体在你已有的 Helix 工作区里打开、修改并 shelve 文件。Multica 不新建 client，也不为任务再同步一份 depot。
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
@@ -11,16 +11,15 @@ Multica 可以让智能体在 [Perforce](https://www.perforce.com/) Helix depot 
 Multica 不保存 Perforce 密码。守护进程使用本机 Helix 登录（`P4USER`、`P4TICKETS`、`P4CONFIG`）。请先在那台机器上执行 `p4 login`。
 </Callout>
 
-## 两种模式
+## 你的工作区
 
-| 模式 | 什么时候走这条路 | 文件在哪里 |
-|---|---|---|
-| **工作区模式** | 项目同时挂了本机守护进程上的 `in_place` 本地目录**和** Perforce depot，并且守护进程能在该目录下解析出 Helix client | 你自己的工作区，每条任务一个 changelist |
-| **任务 client 模式** | 其余情况 | 本次运行目录下的 `p4/` 子目录 |
+| 什么时候能改文件 | 文件在哪里 |
+|---|---|
+| 项目同时挂了本机守护进程上的 `in_place` 本地目录**和** Perforce depot，并且守护进程能在该目录下解析出 Helix client | 你自己的工作区，每条任务一个 changelist |
 
-工作区模式是大体量 Unreal depot 唯一可行的方式：300GB 的工作区不可能为每条任务同步一份，所以智能体直接在你已有的工作区里干活。
+新建一个 Helix client 是为了接着 `p4 sync`，而 sync 会把 depot 下载下来。Multica 不这么做。目录没挂上，或者这个目录下解析不出 client 时，运行不会退回去给任务单独建一份 checkout。
 
-**两种模式下智能体都不提交。** 智能体只负责 shelve；你在编辑器里验证后用 P4V 或自己的脚本提交。
+**智能体不提交。** 智能体只负责 shelve；你在编辑器里验证后用 P4V 或自己的脚本提交。
 
 ## 添加工作区 depot
 
@@ -46,6 +45,10 @@ HTTP 形式的 Git URL 不能当作 port。也可以用 `multica p4 list`、`mul
 multica project resource add <project-id> --type perforce_depot \
   --port perforce.example.com:1666 --depot //depot/project --output json
 ```
+
+在桌面应用里关联 depot 时，如果这台机器还没有「直接修改」的本地目录，会先让你指定工作区根目录。没有这个目录时，运行不会开始。
+
+已有目录如果使用并行模式，会保留隔离设置。请先通过目录的执行模式控件明确切换为直接修改，再关联 depot。
 
 认领执行时，项目上的 `perforce_depot` 会成为 P4 列表。工作区回退是全有或全无：项目上既没有 `github_repo` 也没有 `perforce_depot` 时，两类工作区资源一起继承；只要挂了其中任何一类，两类都不再继承。这样只配 Perforce 的项目不会再拿到本来用不上的工作区 Git 仓库。
 
@@ -117,23 +120,13 @@ Multica: <任务编号>
 
 两个 depot 开关会改变上述行为，通过资源上的 JSON `--ref` 设置：`allow_exclusive` 允许智能体打开 `+l` 文件，`no_auto_review` 关掉自动 Swarm review。
 
-## 执行中同步（任务 client 模式）
+## 不建任务 client
 
-智能体用任务 CLI 同步，而不是直接连 Helix：
-
-```bash
-multica p4 sync --port perforce.example.com:1666 --depot //depot/project
-multica p4 sync --port perforce.example.com:1666 --depot //depot/project --stream //depot/project/main
-multica p4 sync --port perforce.example.com:1666 --depot //depot/project --fresh
-```
-
-守护进程会创建短的任务级 client（`mc` + 16 位十六进制），在任务根目录的 `p4/<client>` 里执行 `p4 sync`，并返回该路径。从子目录执行命令时，同步位置保持不变。client 和目录同时区分服务器、depot、stream 和运行。`--fresh` 会先删除上次的同步目录，再强制下载文件，避免服务器仍保留 have list 时返回空目录。本机 `PATH` 里需要有 `p4`。
-
-使用 `--output json` 读取 `path` 和 `client`。client 使用 `noallwrite`，文件在 `edit` 之前是只读的。不要用本机默认 client 去跑 `p4`。
+Multica 不为任务创建 Helix client，也不会将 depot 副本同步到运行目录。请关联已有工作区的 `in_place` 本地目录。
 
 ## 编辑、checkout 与 shelve
 
-同步之后，先进入返回的 checkout 路径，再使用相对文件路径。通过同一个守护进程 client 打开文件：
+在你的工作区里，智能体通过守护进程打开文件：
 
 ```bash
 multica p4 edit --port perforce.example.com:1666 --depot //depot/project -- Source/Foo.cpp
@@ -172,19 +165,19 @@ multica p4 swarm link --port perforce.example.com:1666 --depot //depot/project -
 
 如果 review 创建成功但关联任务失败，CLI 会输出 review 回执并返回错误。使用该 review ID 重试 `swarm link`，无需重新创建 review。
 
-不会预先拉取 depot。Helix 树可能很大，只在智能体请求时同步。
+不会预先拉取 depot；启用同步后，也只更新已有工作区。
 
 ## 本版包含
 
-- 工作区模式：在你自己的 client 里原地改文件，每条任务一个 changelist，自动退回未改动的文件、shelve 并建 Swarm review
-- 任务 client 模式，并加了体积预检：depot 大到同步不了时直接拒绝，并提示改用工作区模式
+- 在你自己的 client 里原地改文件，每条任务一个 changelist，自动退回未改动的文件、shelve 并建 Swarm review
+- 不建任务专用 client，也不按任务同步 depot
 - 任务上的 changelist：Perforce changelist 区域、按号手动关联，以及守护进程轮询识别提交 —— 包括 commit server 改号后的新号
 - 关联的 changelist 全部提交、且任务上没有关联 Pull Request 时，自动推进任务状态
 
 ## 本版未包含
 
 - Swarm webhook 接入、review 卡片上的 CI 状态
-- 智能体提交 —— 这是设计决定，见[上面的两种模式](#两种模式)
+- 智能体提交 —— 这是设计决定，见[工作区模式](#工作区模式)
 - 把别人的 changelist 作为任务来评审
 - 在界面上把 Unreal 编辑器自动 checkout 的文件移进任务 changelist（本版只在运行结果里报出来）
 - 创建项目对话框里直接挂 P4（创建后再关联）

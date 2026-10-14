@@ -1,7 +1,6 @@
 package p4depot
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -82,55 +81,5 @@ func TestIdentityIgnoresUserAndChangelist(t *testing.T) {
 	c := Ref{Port: "ssl:p4.example.com:1666", Depot: "//depot/x", Stream: "//depot/x/main"}
 	if Identity(a) == Identity(c) {
 		t.Fatal("stream must change identity")
-	}
-}
-
-func TestClientNameIsStableAndShort(t *testing.T) {
-	t.Parallel()
-
-	r := Ref{Port: "p4:1666", Depot: "//depot/x"}
-	a := ClientName("ws-1", "task-1", r)
-	b := ClientName("ws-1", "task-1", r)
-	if a != b {
-		t.Fatalf("ClientName not stable: %q vs %q", a, b)
-	}
-	if a != ClientName("ws-1", "task-1", Ref{Port: "P4:1666", Depot: "//depot/x", User: "other"}) {
-		t.Fatal("ClientName should ignore user")
-	}
-	if len(a) > 32 || !strings.HasPrefix(a, "mc") {
-		t.Fatalf("ClientName = %q, want short mc… name", a)
-	}
-}
-
-func TestSyncPath(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		depot, cl, want string
-	}{
-		{"//depot/x", "", "//depot/x/..."},
-		{"//depot/x/...", "", "//depot/x/..."},
-		{"//depot/x/file.c", "", "//depot/x/file.c"},
-		{"//depot/x", "12", "//depot/x/...@12"},
-		{"//depot/x", "#head", "//depot/x/...#head"},
-		{"//depot/x", "@rel", "//depot/x/...@rel"},
-	}
-	for _, tc := range cases {
-		if got := SyncPath(tc.depot, tc.cl); got != tc.want {
-			t.Errorf("SyncPath(%q, %q) = %q, want %q", tc.depot, tc.cl, got, tc.want)
-		}
-	}
-}
-
-func TestViewMapsPlacesProjectAtCheckoutRoot(t *testing.T) {
-	for _, tc := range []struct{ depot, source, target string }{
-		{"//depot/UE", "//depot/UE/...", "..."},
-		{"//depot/UE/...", "//depot/UE/...", "..."},
-		{"//depot/UE/Project.uproject", "//depot/UE/Project.uproject", "Project.uproject"},
-	} {
-		source, target := ViewMaps(tc.depot)
-		if source != tc.source || target != tc.target {
-			t.Fatalf("%s mapped to %s %s", tc.depot, source, target)
-		}
 	}
 }

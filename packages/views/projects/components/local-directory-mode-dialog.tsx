@@ -40,6 +40,8 @@ interface LocalDirectoryModeDialogProps {
   path: string;
   /** Mode to preselect — the current mode when editing, in_place when adding. */
   value: LocalDirectoryExecutionMode;
+  /** Perforce edits the folder itself, so parallel mode is not a choice. */
+  hideWorktree?: boolean;
   /** Set when worktree cannot be chosen; the option renders disabled with a reason. */
   unavailableReason?: WorktreeUnavailableReason;
   /** Server-side rejection to show inline (e.g. a 422 that only the API can detect). */
@@ -64,6 +66,7 @@ export function LocalDirectoryModeDialog({
   onOpenChange,
   path,
   value,
+  hideWorktree = false,
   unavailableReason,
   errorMessage,
   saving = false,
@@ -76,8 +79,8 @@ export function LocalDirectoryModeDialog({
   // Re-sync when the dialog is reopened for a different resource, otherwise the
   // previous row's mode would be preselected for this one.
   useEffect(() => {
-    if (open) setSelected(value);
-  }, [open, value]);
+    if (open) setSelected(hideWorktree ? "in_place" : value);
+  }, [open, value, hideWorktree]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -96,6 +99,7 @@ export function LocalDirectoryModeDialog({
         <LocalDirectoryModeOptions
           value={selected}
           onChange={setSelected}
+          hideWorktree={hideWorktree}
           unavailableReason={unavailableReason}
         />
 
@@ -126,6 +130,7 @@ export function LocalDirectoryModeDialog({
 interface LocalDirectoryModeOptionsProps {
   value: LocalDirectoryExecutionMode;
   onChange: (mode: LocalDirectoryExecutionMode) => void;
+  hideWorktree?: boolean;
   unavailableReason?: WorktreeUnavailableReason;
 }
 
@@ -139,6 +144,7 @@ interface LocalDirectoryModeOptionsProps {
 export function LocalDirectoryModeOptions({
   value,
   onChange,
+  hideWorktree = false,
   unavailableReason,
 }: LocalDirectoryModeOptionsProps) {
   const { t } = useT("projects");
@@ -154,22 +160,24 @@ export function LocalDirectoryModeOptions({
         selected={value === "in_place"}
         onSelect={() => onChange("in_place")}
       />
-      <ModeOption
-        icon={<GitBranch className="size-4" />}
-        title={t(($) => $.resources.mode_worktree_title)}
-        description={t(($) => $.resources.mode_worktree_description)}
-        identifier="worktree"
-        selected={value === "worktree"}
-        disabled={worktreeDisabled}
-        disabledReason={
-          unavailableReason === "not_git"
-            ? t(($) => $.resources.mode_worktree_needs_git)
-            : unavailableReason === "server_outdated"
-              ? t(($) => $.resources.mode_worktree_needs_server_upgrade)
-              : undefined
-        }
-        onSelect={() => onChange("worktree")}
-      />
+      {!hideWorktree && (
+        <ModeOption
+          icon={<GitBranch className="size-4" />}
+          title={t(($) => $.resources.mode_worktree_title)}
+          description={t(($) => $.resources.mode_worktree_description)}
+          identifier="worktree"
+          selected={value === "worktree"}
+          disabled={worktreeDisabled}
+          disabledReason={
+            unavailableReason === "not_git"
+              ? t(($) => $.resources.mode_worktree_needs_git)
+              : unavailableReason === "server_outdated"
+                ? t(($) => $.resources.mode_worktree_needs_server_upgrade)
+                : undefined
+          }
+          onSelect={() => onChange("worktree")}
+        />
+      )}
     </div>
   );
 }

@@ -44,9 +44,8 @@ var p4RemoveCmd = &cobra.Command{
 var p4SyncCmd = &cobra.Command{
 	Use:   "sync",
 	Short: "Sync a Perforce depot into the working directory",
-	Long: "Creates a task-scoped P4 client and runs `p4 sync` through the daemon. Used by agents to fetch configured depots.\n\n" +
-		"Uses the host Helix login (`p4 login`); Multica does not store a Perforce password. " +
-		"Pass --fresh to delete the previous sync directory and start over.",
+	Long: "Perforce tasks edit an existing Helix workspace. Workspace sync remains unavailable. " +
+		"It does not create a task client or download a new copy of the depot.",
 	Args: cobra.NoArgs,
 	RunE: runP4Sync,
 }
@@ -81,8 +80,8 @@ func init() {
 
 	p4SyncCmd.Flags().StringVar(&p4User, "user", "", "Optional P4USER override")
 	p4SyncCmd.Flags().StringVar(&p4Charset, "charset", "", "Optional P4CHARSET")
-	p4SyncCmd.Flags().StringVar(&p4Changelist, "changelist", "", "Optional changelist, label, or #head")
-	p4SyncCmd.Flags().BoolVar(&p4Fresh, "fresh", false, "delete the previous sync directory and run a clean sync")
+	p4SyncCmd.Flags().StringVar(&p4Changelist, "changelist", "", "Unsupported for workspace sync; returns an error")
+	p4SyncCmd.Flags().BoolVar(&p4Fresh, "fresh", false, "Unsupported for workspace sync; returns an error")
 	p4SyncCmd.Flags().String("output", "text", "Output format: text or json")
 
 	mutateCmds := []*cobra.Command{
@@ -304,6 +303,9 @@ func printP4Mutation(cmd *cobra.Command, depots []p4depot.Ref, action string) er
 }
 
 func runP4Sync(cmd *cobra.Command, _ []string) error {
+	if p4Changelist != "" || p4Fresh || cmd.Flags().Changed("changelist") || cmd.Flags().Changed("fresh") {
+		return fmt.Errorf("workspace sync does not support --changelist or --fresh; a person chooses historical revisions or resets the workspace")
+	}
 	ref, err := optionalP4PortDepot()
 	if err != nil {
 		return err
@@ -312,8 +314,6 @@ func runP4Sync(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	body["changelist"] = ref.Changelist
-	body["fresh"] = p4Fresh
 	payload, err := p4DaemonPost(cmd.Context(), "/p4/sync", body, p4DaemonTimeout())
 	if err != nil {
 		return reportP4Failure("p4 sync", err)

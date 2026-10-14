@@ -158,7 +158,9 @@
     "p4_depot_placeholder": "//depot/projet",
     "p4_stream_placeholder": "Stream (facultatif)",
     "p4_submit": "Ajouter",
-    "toast_p4_attached": "Depot Perforce rattaché"
+    "toast_p4_attached": "Depot Perforce rattaché",
+    "p4_needs_local_directory": "Indiquez d'abord le dossier de l'espace de travail sur cette machine avant de rattacher un depot Perforce. L'agent modifie ce dossier et n'en synchronise pas une copie.",
+    "p4_needs_in_place_directory": "Passez le mode d'exécution de ce dossier à la modification directe avant de rattacher un depot Perforce."
   },
   "delete_dialog": {
     "title": "Supprimer le projet",

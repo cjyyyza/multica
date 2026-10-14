@@ -1,19 +1,19 @@
-// Package p4cache syncs Perforce depots into a task working directory.
-// It creates a unique P4 client per task and uses host credentials
-// (P4USER, P4TICKETS, P4CONFIG). It does not prefetch depots at register time.
+// Package p4cache runs the host p4 CLI for a task.
+// It uses host credentials (P4USER, P4TICKETS, P4CONFIG) and does not create a
+// Helix client or sync a depot into the task directory: that download belongs
+// to the person's existing workspace.
 package p4cache
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -25,28 +25,10 @@ import (
 // keep this.
 const defaultP4Timeout = 10 * time.Minute
 
-// defaultSyncMaxBytes mirrors daemon.DefaultP4SyncMaxBytes for a Cache built
-// without an explicit ceiling.
-const defaultSyncMaxBytes int64 = 20 << 30
-
-// sizesTotal matches the trailing "<n> bytes" of `p4 sizes -s`.
-var sizesTotal = regexp.MustCompile(`(\d+)\s+bytes`)
-
-// SyncParams is the input to a one-shot `p4 client` + `p4 sync`.
-type SyncParams struct {
-	WorkspaceID string
-	TaskID      string
-	WorkDir     string
-	Ref         p4depot.Ref
-	Fresh       bool
-}
-
-// SyncResult is the daemon /p4/sync response.
-type SyncResult struct {
-	Path       string `json:"path"`
-	Client     string `json:"client"`
-	Changelist string `json:"changelist,omitempty"`
-}
+// ErrTaskClientNotCreated is returned for every attempt to create a
+// task-scoped Helix client and sync a depot into the task directory.
+// Creating that client runs `p4 sync`, which downloads the depot.
+var ErrTaskClientNotCreated = errors.New("Multica does not create a task Perforce client or sync a depot into the task directory; that would download the depot. Attach an in_place local_directory that is your existing Helix workspace")
 
 // Cache runs the p4 CLI. P4Path defaults to "p4" on PATH.
 type Cache struct {
@@ -55,9 +37,6 @@ type Cache struct {
 	HTTPClient *http.Client
 	// Timeout bounds one p4 invocation; zero falls back to defaultP4Timeout.
 	Timeout time.Duration
-	// SyncMaxBytes caps a task-scoped client sync; zero falls back to
-	// defaultSyncMaxBytes and a negative value disables the pre-check.
-	SyncMaxBytes int64
 }
 
 func (c *Cache) p4bin() string {
@@ -79,129 +58,6 @@ func (c *Cache) timeout() time.Duration {
 		return c.Timeout
 	}
 	return defaultP4Timeout
-}
-
-func (c *Cache) syncMaxBytes() int64 {
-	if c == nil || c.SyncMaxBytes == 0 {
-		return defaultSyncMaxBytes
-	}
-	return c.SyncMaxBytes
-}
-
-// Sync creates a task-scoped P4 client and syncs the depot into workdir/p4/….
-func (c *Cache) Sync(ctx context.Context, params SyncParams) (*SyncResult, error) {
-	ref, err := p4depot.Normalize(params.Ref)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(params.WorkDir) == "" {
-		return nil, fmt.Errorf("workdir is required")
-	}
-	if strings.TrimSpace(params.TaskID) == "" {
-		return nil, fmt.Errorf("task_id is required")
-	}
-
-	user, err := c.resolveUser(ctx, ref)
-	if err != nil {
-		return nil, err
-	}
-
-	client := p4depot.ClientName(params.WorkspaceID, params.TaskID, ref)
-	// The client identity includes the server, depot, stream and task. Depot
-	// display names alone collide across servers and after path sanitization.
-	root := filepath.Join(params.WorkDir, "p4", client)
-	if params.Fresh {
-		if err := os.RemoveAll(root); err != nil {
-			return nil, fmt.Errorf("clear existing Perforce checkout: %w", err)
-		}
-	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return nil, fmt.Errorf("create Perforce checkout directory: %w", err)
-	}
-
-	spec := buildClientSpec(client, user, root, ref)
-	if err := c.runClientIn(ctx, ref, user, spec); err != nil {
-		return nil, err
-	}
-
-	syncDepot := ref.Depot
-	if ref.Stream != "" && strings.HasPrefix(ref.Stream, strings.TrimSuffix(ref.Depot, "/...")+"/") {
-		// A parent depot request must stay inside the selected stream's view.
-		syncDepot = ref.Stream
-	}
-	syncArg := p4depot.SyncPath(syncDepot, ref.Changelist)
-	// The client view, not the depot path, decides what a sync actually pulls,
-	// so measure through the client we just created. A depot too large for a
-	// task-scoped checkout must not leave that client behind.
-	if err := c.checkSyncSize(ctx, ref, user, client); err != nil {
-		if delErr := c.run(ctx, ref, user, "", "client", "-d", client); delErr != nil {
-			c.logger().Warn("p4 client -d after sync size pre-check", "client", client, "error", delErr)
-		}
-		return nil, err
-	}
-	syncArgs := []string{"sync"}
-	if params.Fresh {
-		// Removing the local directory does not clear the server-side have list.
-		syncArgs = append(syncArgs, "-f")
-	}
-	syncArgs = append(syncArgs, syncArg)
-	if err := c.run(ctx, ref, user, client, syncArgs...); err != nil {
-		return nil, err
-	}
-
-	return &SyncResult{
-		Path:       root,
-		Client:     client,
-		Changelist: ref.Changelist,
-	}, nil
-}
-
-// checkSyncSize refuses a task-scoped sync whose client view is larger than
-// the configured ceiling. A `sizes` call that fails or reports nothing we can
-// parse is not evidence of an oversized depot, so it only logs.
-func (c *Cache) checkSyncSize(ctx context.Context, ref p4depot.Ref, user, client string) error {
-	limit := c.syncMaxBytes()
-	if limit < 0 {
-		return nil
-	}
-	path := p4depot.SyncPath("//"+client, ref.Changelist)
-	out, err := c.output(ctx, ref, user, client, "sizes", "-s", path)
-	if err != nil {
-		c.logger().Warn("p4 sizes pre-check skipped", "client", client, "error", err)
-		return nil
-	}
-	match := sizesTotal.FindStringSubmatch(string(out))
-	if len(match) != 2 {
-		c.logger().Warn("p4 sizes pre-check skipped", "client", client, "output", strings.TrimSpace(string(out)))
-		return nil
-	}
-	total, err := strconv.ParseInt(match[1], 10, 64)
-	if err != nil || total <= limit {
-		return nil
-	}
-	return fmt.Errorf("%s is %s through a task-scoped Perforce client, above the %s limit: attach the depot alongside an in_place local_directory resource so the task runs in your own workspace, or raise MULTICA_P4_SYNC_MAX_BYTES",
-		path, formatGiB(total), formatGiB(limit))
-}
-
-func formatGiB(bytes int64) string {
-	return fmt.Sprintf("%.1f GiB", float64(bytes)/float64(1<<30))
-}
-
-func buildClientSpec(client, user, root string, ref p4depot.Ref) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Client: %s\n", client)
-	fmt.Fprintf(&b, "Owner: %s\n", user)
-	fmt.Fprintf(&b, "Description: Multica task client\n")
-	fmt.Fprintf(&b, "Root: %s\n", root)
-	fmt.Fprintf(&b, "Options: noallwrite noclobber nocompress unlocked nomodtime normdir\n")
-	fmt.Fprintf(&b, "LineEnd: local\n")
-	if ref.Stream != "" {
-		fmt.Fprintf(&b, "Stream: %s\n", ref.Stream)
-		return b.String()
-	}
-	depotSide, clientRel := p4depot.ViewMaps(ref.Depot)
-	fmt.Fprintf(&b, "View:\n\t%s //%s/%s\n", depotSide, client, clientRel)
-	return b.String()
 }
 
 func (c *Cache) httpClient() *http.Client {
@@ -230,10 +86,6 @@ func (c *Cache) resolveUser(ctx context.Context, ref p4depot.Ref) (string, error
 	return user, nil
 }
 
-func ClientRoot(workDir, workspaceID, taskID string, ref p4depot.Ref) string {
-	return filepath.Join(workDir, "p4", p4depot.ClientName(workspaceID, taskID, ref))
-}
-
 func (c *Cache) whoami(ctx context.Context, ref p4depot.Ref) (string, error) {
 	out, err := c.output(ctx, ref, "", "", "info")
 	if err != nil {
@@ -249,38 +101,6 @@ func (c *Cache) whoami(ctx context.Context, ref p4depot.Ref) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("p4 info did not include User name")
-}
-
-func (c *Cache) runClientIn(ctx context.Context, ref p4depot.Ref, user, spec string) error {
-	args := c.baseArgs(ref, user, "")
-	args = append(args, "client", "-i")
-	cmd, cancel, err := c.command(ctx, args...)
-	if err != nil {
-		return err
-	}
-	defer cancel()
-	cmd.Stdin = strings.NewReader(spec)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("p4 client -i: %w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-	return nil
-}
-
-func (c *Cache) run(ctx context.Context, ref p4depot.Ref, user, client string, args ...string) error {
-	full := append(c.baseArgs(ref, user, client), args...)
-	cmd, cancel, err := c.command(ctx, full...)
-	if err != nil {
-		return err
-	}
-	defer cancel()
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("p4 %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
-	}
-	return nil
 }
 
 func (c *Cache) output(ctx context.Context, ref p4depot.Ref, user, client string, args ...string) ([]byte, error) {
@@ -315,10 +135,6 @@ func (c *Cache) baseArgs(ref p4depot.Ref, user, client string) []string {
 		args = append(args, "-C", ref.Charset)
 	}
 	return args
-}
-
-func (c *Cache) command(ctx context.Context, args ...string) (*exec.Cmd, context.CancelFunc, error) {
-	return c.commandAt(ctx, "", args...)
 }
 
 func (c *Cache) commandAt(ctx context.Context, dir string, args ...string) (*exec.Cmd, context.CancelFunc, error) {

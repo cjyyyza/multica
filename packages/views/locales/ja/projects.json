@@ -157,7 +157,9 @@
     "p4_depot_placeholder": "//depot/project",
     "p4_stream_placeholder": "Stream（任意）",
     "p4_submit": "追加",
-    "toast_p4_attached": "Perforce depot を添付しました"
+    "toast_p4_attached": "Perforce depot を添付しました",
+    "p4_needs_local_directory": "Perforce depot を添付する前に、このマシンのワークスペースフォルダを指定してください。エージェントはそのフォルダを編集し、コピーは同期しません。",
+    "p4_needs_in_place_directory": "Perforce depot を添付する前に、このディレクトリの実行モードをフォルダの直接編集に変更してください。"
   },
   "delete_dialog": {
     "title": "プロジェクトを削除",

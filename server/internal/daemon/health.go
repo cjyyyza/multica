@@ -15,7 +15,6 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/daemon/p4cache"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
-	"github.com/multica-ai/multica/server/internal/p4depot"
 	"github.com/multica-ai/multica/server/internal/util"
 )
 
@@ -563,89 +562,37 @@ func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
 	}
 }
 
-type p4SyncRequest struct {
-	Port        string `json:"port"`
-	Depot       string `json:"depot"`
-	Stream      string `json:"stream,omitempty"`
-	User        string `json:"user,omitempty"`
-	Charset     string `json:"charset,omitempty"`
-	Changelist  string `json:"changelist,omitempty"`
-	WorkspaceID string `json:"workspace_id"`
-	WorkDir     string `json:"workdir"`
-	TaskID      string `json:"task_id"`
-	Fresh       bool   `json:"fresh,omitempty"`
-}
-
 func (d *Daemon) p4SyncHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		var req p4SyncRequest
+		var req p4MutateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if activeTask, authResult := d.activeRepoCheckoutTask(r); authResult == repoCheckoutAuthOK {
-			if d.p4Binding(activeTask.TaskID) != nil {
-				writeP4Rejection(w, p4Rejection{
-					Code:    p4CodeActionNotAllowed,
-					Message: "workspace mode does not sync; a person syncs this workspace",
-				})
-				return
-			}
+		activeTask, authResult := d.activeRepoCheckoutTask(r)
+		if authResult != repoCheckoutAuthOK {
+			d.writeRepoCheckoutAuthError(w, authResult)
+			return
 		}
-		ref, err := p4depot.Normalize(p4depot.Ref{
-			Port:       req.Port,
-			Depot:      req.Depot,
-			Stream:     req.Stream,
-			User:       req.User,
-			Charset:    req.Charset,
-			Changelist: req.Changelist,
+		if binding := d.p4Binding(activeTask.TaskID); binding != nil {
+			req.Action = "sync"
+			d.serveWorkspaceP4Run(w, r, activeTask, binding, req)
+			return
+		}
+		if _, _, ok := d.authorizeP4Call(w, r, req.WorkspaceID, req.TaskID, req.WorkDir, "p4 sync"); !ok {
+			return
+		}
+		// A new Helix client is created only so it can be synced, and syncing
+		// downloads the depot. The allow-sync switch does not bring that back:
+		// it only syncs a workspace the task is already bound to.
+		writeP4Rejection(w, p4Rejection{
+			Code:    p4CodeActionNotAllowed,
+			Message: p4cache.ErrTaskClientNotCreated.Error(),
 		})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		activeTask, _, ok := d.authorizeP4Call(w, r, req.WorkspaceID, req.TaskID, req.WorkDir, "p4 sync")
-		if !ok {
-			return
-		}
-
-		if !d.workspaceP4Allowed(req.WorkspaceID, activeTask.TaskID, ref) {
-			if refreshErr := d.refreshWorkspaceP4Allowlist(r.Context(), req.WorkspaceID); refreshErr != nil {
-				d.logger.Debug("p4 allowlist refresh failed", "error", refreshErr)
-			}
-		}
-		if !d.workspaceP4Allowed(req.WorkspaceID, activeTask.TaskID, ref) {
-			http.Error(w, "perforce depot is not configured for this workspace or task", http.StatusBadRequest)
-			return
-		}
-
-		ref = d.overlayP4Ref(req.WorkspaceID, activeTask.TaskID, ref, true)
-
-		if d.p4Cache == nil {
-			http.Error(w, "perforce sync is not initialized", http.StatusInternalServerError)
-			return
-		}
-		result, err := d.p4Cache.Sync(r.Context(), p4cache.SyncParams{
-			WorkspaceID: req.WorkspaceID,
-			TaskID:      activeTask.TaskID,
-			WorkDir:     activeTask.WorkDir,
-			Ref:         ref,
-			Fresh:       req.Fresh,
-		})
-		if err != nil {
-			if r.Context().Err() != nil {
-				return
-			}
-			d.logger.Error("p4 sync failed", "port", ref.Port, "depot", ref.Depot, "error", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(result)
 	}
 }
 

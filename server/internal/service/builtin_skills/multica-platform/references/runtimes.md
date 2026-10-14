@@ -21,7 +21,7 @@ The chain is:
    session/workdir hints, and a task token;
 6. the daemon prepares a workdir and launches the provider CLI;
 7. `multica repo checkout` talks to the local daemon, not directly to GitHub.
-   `multica p4 sync` talks to the local daemon, not directly to Helix.
+   Perforce edits go through the local daemon, in the person's existing Helix workspace. The daemon does not create a task client or sync a separate depot copy.
 
 ## CLI
 
@@ -34,8 +34,6 @@ multica runtime delete <runtime-id>
 multica repo checkout <url>
 multica repo checkout <url> --ref <branch-or-sha>
 multica repo checkout <url> --fresh
-multica p4 sync --port <p4port> --depot <depot-path>
-multica p4 sync --port <p4port> --depot <depot-path> --fresh
 multica p4 edit --port <p4port> --depot <depot-path> -- <files>
 multica p4 add-files --port <p4port> --depot <depot-path> -- <files>
 multica p4 status --output json
@@ -111,15 +109,13 @@ absent, you are not in the normal agent checkout path. When a project
 ref by default for the current task; an explicit
 `repo checkout <url> --ref <branch-or-sha>` overrides it.
 
-Perforce work runs in one of two modes, and the runtime brief says which one
-this task is in. **Workspace mode** is used when the project carries both an
-`in_place` `local_directory` on this daemon and a `perforce_depot`, and the
-daemon resolves a Helix client under that directory: the task edits files in
-the requesting person's own client. Otherwise the task is in **task-client
-mode** and syncs its own copy with `p4 sync`.
+Perforce work runs in the requesting person's own Helix client when the
+project carries both an `in_place` `local_directory` on this daemon and a
+`perforce_depot`, and the daemon resolves a client under that directory. The
+runtime brief names that client. There is no task-client mode: the daemon
+never creates a client or downloads a separate depot copy into the task directory.
 
-Neither mode submits. An agent shelves; the person who owns the files verifies
-in the editor and submits.
+An agent shelves; the person who owns the files verifies in the editor and submits.
 
 ### Workspace mode
 
@@ -134,9 +130,9 @@ number.
 `--port` and `--depot` are optional here; the daemon fills them from the
 binding, and `--changelist` may only name the task changelist. `multica p4
 status --output json` reports the client, root, stream, ticket, changelist
-number, its files, and any warnings. Submit, sync and unshelve are not
-available at all — the daemon answers them with `action_not_allowed` — and it
-also rejects a write that would touch a file already open
+number, its files, and any warnings. Submit, sync, and unshelve are refused
+with `action_not_allowed`. The daemon also
+rejects a write that would touch a file already open
 in one of the human's changelists (`opened_by_you`), a file someone else has
 locked (`exclusive_locked`), an exclusive-lock file on a depot that does not
 set `allow_exclusive` (`exclusive_not_allowed`), a revert or reconcile outside
@@ -145,25 +141,21 @@ the task changelist (`outside_task_change`), or a path outside the client root
 through `P4CONFIG` / `P4CLIENT`; read-only `p4 files` / `print` / `filelog` /
 `describe` / `changes` still work and are the right way to read history.
 
-When the task ends the daemon reverts the files that were opened but not
+When the task ends, the daemon reverts the files that were opened but not
 changed, shelves the rest, and — unless the depot sets `no_auto_review` —
 opens a Helix Swarm review and links it to the issue. Changed files stay open
 for the human.
 
-### Task-client mode
+Do not create a Helix client for the task.
+If the brief has no `## Perforce workspace` section, the task is not bound to
+an existing workspace: ask a person to attach an `in_place` local directory at
+the workspace root, then stop. Credentials stay on the host (`P4USER`,
+`P4TICKETS`, `P4CONFIG`); Multica does not store a Perforce password.
 
-`p4 sync` uses the same daemon port and task token. It creates a task-scoped
-Helix client and syncs into `workdir/p4/…`. Credentials stay on the host
-(`P4USER`, `P4TICKETS`, `P4CONFIG`); Multica does not store a Perforce
-password. The depot must be on the task allowlist (project `perforce_depot`
-resources, or workspace `p4_depots` when the project has neither those nor
-`github_repo` resources). `--fresh` deletes the previous sync directory first.
-A depot too large to sync is rejected with a pointer to workspace mode.
-
-The client is `noallwrite`. Open files with `multica p4 edit` (alias
-`checkout`) before modifying them; exclusive-lock files will fail otherwise.
-`multica p4 add` still registers a workspace depot — use `add-files` to
-`p4 add` new files. Shelve through `multica p4 shelve`.
+Open files with `multica p4 edit` (alias `checkout`) before modifying them;
+exclusive-lock files will fail otherwise. `multica p4 add` still registers a
+workspace depot — use `add-files` to `p4 add` new files. Shelve through
+`multica p4 shelve`.
 
 ### Swarm
 
@@ -223,7 +215,8 @@ Check in this order:
 4. Is the runtime online? `multica runtime list --output json`.
 5. Did the daemon heartbeat recently? Runtime `last_seen_at` is the visible clue.
 6. Did the task get claimed or is it stuck pending/running/waiting for local directory?
-7. If repo checkout or `p4 sync` failed, classify it after checking whether
+7. If repo checkout failed, or a Perforce command was refused because the task
+   is not bound to an existing workspace, classify it after checking whether
    repo / Perforce context was present in the task/project context.
 
 ## Repos
@@ -238,8 +231,9 @@ Workspace repos and project resources are not the same thing:
 - `github_repo` project resources are durable project context and can affect
   future tasks; optional `resource_ref.ref` pins the default checkout ref for
   tasks in that project;
-- `perforce_depot` project resources are durable Helix context; `multica p4
-  sync` uses `resource_ref.port` and `depot`;
+- `perforce_depot` project resources are durable Helix context. The daemon
+  edits `resource_ref.port` and `depot` only inside the person's existing
+  workspace; it does not sync a task copy;
 - `local_directory` resources point at a path owned by a daemon and carry
   local-machine assumptions.
 
@@ -250,11 +244,9 @@ checkout.
 For Perforce work, check the brief for the mode first. In workspace mode you
 are already inside the human's client — open files with `multica p4 edit`,
 add new ones with `add-files`, and read the changelist number from
-`multica p4 status`. In task-client mode, request
-`multica p4 sync ... --output json`: the response's `path` is the checkout
-root and `client` is the isolated task client. Either way, open and add
-through `multica p4 edit` / `add-files` and never through a host `p4` client,
-which may belong to another UE workspace. Record the changelist, Swarm review
+`multica p4 status`. Open and add through
+`multica p4 edit` / `add-files` and never through a host `p4` client, which may
+belong to another UE workspace. Record the changelist, Swarm review
 id, and the actual editor/build validation in the task; a human submits.
 An imported 易协作 issue remains unassigned until a member chooses its owner.
 Result publication is a separate member-confirmed source operation.

@@ -56,9 +56,11 @@ The agent reaches these only through the `multica` CLI; requests carry the task 
 {"port":"","user":"","client":"","root":"","stream":"","edge":false,"ticket":"","change":"","files":[{"depot_file":"","action":"","type":""}],"warnings":[{"kind":"","files":[]}]}
 ```
 
-`POST /p4/sync`: rejected with 409 `action_not_allowed` while a binding exists. Otherwise it keeps the legacy task-client behavior, plus the size pre-check.
+`POST /p4/sync`: rejected with 409 `action_not_allowed`. Multica never creates a task client or syncs a depot copy.
 
-`POST /p4/swarm`: unchanged.
+`POST /p4/swarm`: a request to shelve before creating a review requires the bound task workspace and its changelist. Requests without a binding must use `--no-shelve`.
+
+An `in_place` local directory keeps its binding when its depot comes from the workspace catalog. Quick-create and projectless autopilot tasks do not require a P4 directory merely because they inherited that catalog. Unbound `/p4/run` requests return 409, including when an old checkout directory exists.
 
 Warning kinds: `not_head`, `opened_elsewhere`, `exclusive_held`, `default_changelist_files`, `unexpected_opens`.
 

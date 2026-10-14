@@ -34,7 +34,7 @@ var p4EditCmd = &cobra.Command{
 	Use:     "edit [files...]",
 	Aliases: []string{"checkout"},
 	Short:   "Open files for edit in the task Perforce client",
-	Long:    "Runs `p4 edit` (checkout) through the daemon against the task-scoped client created by `multica p4 sync`. Exclusive-lock files require this before they can be modified.",
+	Long:    "Runs `p4 edit` (checkout) through the daemon in the person's existing Helix workspace. Multica does not create a task client or sync a depot. Exclusive-lock files require this before they can be modified.",
 	Args:    cobra.MinimumNArgs(1),
 	RunE:    runP4Mutate("edit"),
 }

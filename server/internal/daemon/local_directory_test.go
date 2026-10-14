@@ -1213,3 +1213,88 @@ func TestIssueTasksStillSerialiseOnPathMutex(t *testing.T) {
 	}
 	release()
 }
+
+func TestRequireInPlaceDirectoryForP4(t *testing.T) {
+	t.Parallel()
+	withDepot := Task{P4Depots: []P4DepotData{{Port: "p4:1666", Depot: "//DJ01_Proj/Dev"}}}
+	inPlace := &localDirectoryAssignment{
+		Ref:     localDirectoryRef{LocalPath: `D:\DJ`, ExecutionMode: localDirectoryModeInPlace},
+		AbsPath: `D:\DJ`,
+	}
+	worktree := &localDirectoryAssignment{
+		Ref:     localDirectoryRef{LocalPath: `D:\DJ`, Label: "DJ", ExecutionMode: localDirectoryModeWorktree},
+		AbsPath: `D:\DJ`,
+	}
+
+	if err := requireInPlaceDirectoryForP4(Task{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireInPlaceDirectoryForP4(withDepot, inPlace); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireInPlaceDirectoryForP4(withDepot, &localDirectoryAssignment{Ref: localDirectoryRef{LocalPath: `D:\DJ`}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireInPlaceDirectoryForP4(withDepot, nil); err == nil || !strings.Contains(err.Error(), "local directory") {
+		t.Fatalf("missing directory: %v", err)
+	}
+	if err := requireInPlaceDirectoryForP4(withDepot, worktree); err == nil || !strings.Contains(err.Error(), "DJ") {
+		t.Fatalf("worktree directory: %v", err)
+	}
+	leader := withDepot
+	leader.IsLeaderTask = true
+	if err := requireInPlaceDirectoryForP4(leader, nil); err != nil {
+		t.Fatal(err)
+	}
+	chat := withDepot
+	chat.ChatSessionID = "chat-1"
+	if err := requireInPlaceDirectoryForP4(chat, nil); err != nil {
+		t.Fatal(err)
+	}
+	mixedFallback := withDepot
+	mixedFallback.Repos = []RepoData{{URL: "https://github.com/example/repo"}}
+	if err := requireInPlaceDirectoryForP4(mixedFallback, nil); err != nil {
+		t.Fatalf("workspace fallback with git repos should not block on p4 directory: %v", err)
+	}
+	gitProjectWithFallbackP4 := Task{
+		P4Depots: []P4DepotData{{Port: "p4:1666", Depot: "//DJ01_Proj/Dev"}},
+		ProjectResources: []ProjectResourceData{
+			{ResourceType: "local_directory", ResourceRef: []byte(`{"local_path":"D:\\GitRepo","execution_mode":"worktree"}`)},
+		},
+	}
+	if err := requireInPlaceDirectoryForP4(gitProjectWithFallbackP4, worktree); err != nil {
+		t.Fatalf("project with only git local_directory should not block on workspace p4 fallback: %v", err)
+	}
+	explicitP4Project := Task{
+		Repos:    []RepoData{{URL: "https://github.com/example/repo"}},
+		P4Depots: []P4DepotData{{Port: "p4:1666", Depot: "//DJ01_Proj/Dev"}},
+		ProjectResources: []ProjectResourceData{
+			{ResourceType: "perforce_depot", ResourceRef: []byte(`{"port":"p4:1666","depot":"//DJ01_Proj/Dev"}`)},
+		},
+	}
+	if err := requireInPlaceDirectoryForP4(explicitP4Project, nil); err == nil {
+		t.Fatal("project with explicit perforce_depot resource must require an in_place local directory")
+	}
+	for _, task := range []Task{
+		{QuickCreatePrompt: "Create an issue"},
+		{AutopilotRunID: "run-1"},
+	} {
+		task.P4Depots = withDepot.P4Depots
+		if err := requireInPlaceDirectoryForP4(task, nil); err != nil {
+			t.Errorf("coordination task blocked by workspace depot catalog: %v", err)
+		}
+	}
+	projectAutopilot := explicitP4Project
+	projectAutopilot.AutopilotRunID = "run-1"
+	projectAutopilot.ProjectID = "project-1"
+	if err := requireInPlaceDirectoryForP4(projectAutopilot, nil); err == nil {
+		t.Fatal("an autopilot targeting a P4 project must still require a directory")
+	}
+	gitProjectWithFallbackP4.ProjectResources[0].ResourceRef = []byte(`{"local_path":"D:\\DJ","execution_mode":"in_place"}`)
+	if !taskTargetsP4(gitProjectWithFallbackP4, inPlace) {
+		t.Fatal("in_place directory lost its workspace fallback P4 binding")
+	}
+	if taskTargetsP4(gitProjectWithFallbackP4, worktree) {
+		t.Fatal("workspace P4 catalog must not turn a Git worktree into a P4 task")
+	}
+}

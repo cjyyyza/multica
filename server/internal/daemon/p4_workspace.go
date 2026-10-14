@@ -241,7 +241,7 @@ func (d *Daemon) finishP4Workspace(ctx context.Context, task Task, b *p4TaskBind
 	}
 	report := d.changelistReport(ctx, b, result)
 	if result.Shelved && !b.ref.NoAutoReview {
-		d.attachSwarmReview(ctx, task, b, &report)
+		d.attachSwarmReview(ctx, b, &report)
 	}
 	reportErr := d.reportTaskP4Changelist(ctx, task, report)
 	if err := errors.Join(finishErr, reportErr); err != nil {

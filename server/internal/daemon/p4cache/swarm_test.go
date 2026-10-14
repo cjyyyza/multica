@@ -39,24 +39,14 @@ func TestSwarmCreateUsesHelixTicket(t *testing.T) {
 	t.Setenv("P4_FAKE_SPEC", filepath.Join(dir, "client.spec"))
 	t.Setenv("P4USER", "alice")
 	cache := &Cache{P4Path: writeFakeP4(t, dir), HTTPClient: srv.Client()}
-	work := filepath.Join(dir, "work")
 	ref := p4depot.Ref{Port: "p4:1666", Depot: "//depot/UE", SwarmURL: srv.URL}
-	if _, err := cache.Sync(context.Background(), SyncParams{
-		WorkspaceID: "ws", TaskID: "task", WorkDir: work, Ref: ref,
-	}); err != nil {
-		t.Fatal(err)
-	}
 
 	result, err := cache.Swarm(context.Background(), SwarmParams{
-		WorkspaceID: "ws",
-		TaskID:      "task",
-		WorkDir:     work,
 		Ref:         ref,
 		Action:      SwarmCreate,
 		Changelist:  "1001",
 		Description: "review the crash fix",
 		Reviewers:   []string{"bob"},
-		Shelve:      true,
 	})
 	if err != nil {
 		t.Fatal(err)

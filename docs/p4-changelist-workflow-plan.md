@@ -1,13 +1,13 @@
 # Multica × Perforce：以 changelist 为中心的流程优化计划
 
-状态：计划稿，尚未实施（2026-10-12）。
+状态：实现方案。任务绑定与 implementation contract 保持一致；实机验收记录另行保存。
 
 依据：
 - 三份只读调研报告：daemon 链路、服务端数据模型、前端与文档。
 - 对 DJ01 Helix 服务器和 Swarm 的只读实测。
 - 已和用户确认的决策。
 
-文中 `文件:行号` 均对照当前代码核对过。实施前需要实测确认的点都标了"待实测"。
+设计背景中的 `文件:行号` 来自改造前的调研；实现细节以当前代码和 implementation contract 为准。尚需现场确认的点标为“待实测”。
 
 ---
 
@@ -20,7 +20,7 @@
 | D3 | **agent 不提交**。人在 UE 里验证后，照常用 P4V / safesubmit 提交 | 用户确认 |
 | D4 | CL 和 review 状态靠 daemon 轮询同步，不依赖服务器 trigger（我们没有 admin 权限） | 建议，未被否决 |
 | D5 | `+l` 独占文件默认不允许 agent 通过 daemon 打开，可以按 depot 放开 | 建议，未被否决 |
-| D6 | 项目只要配置了任何代码资源，就不再继承 workspace 级的另一类资源 | 建议，未被否决 |
+| D6 | 项目配置 Git 或 Perforce depot 后不继承另一类资源；只有本地目录的项目仍可使用工作区目录兜底，`in_place` 必须保持 P4 绑定 | 当前实现契约 |
 
 ## 1. 现实约束（实测）
 
@@ -43,7 +43,7 @@
   - `//DJ01_Proj/Dev/.p4ignore` 没有忽略 `.multica`、`.agent_context`、`CLAUDE.md`、`AGENTS.md`。
 - **fstat 的冲突信息**：别人打开的文件会返回 `otherOpen0 user@client`、`otherAction0`、`otherChange0`。
 
-## 2. 现状中必须先解决的问题
+## 2. 设计背景：改造前的问题
 
 按严重程度排序：
 
@@ -118,12 +118,12 @@
 | 去掉 submit | `p4cache/mutate.go`：从 `validMutateAction` 和 `mutateArgs` 删除 `ActionSubmit` 和 `changeSubmitted`；`cmd/multica/cmd_p4_task.go` 删除 `submit` 子命令；`runtime_config_sections.go:273`、`references/runtimes.md`、`perforce.mdx` 里的 submit 字样一并删除。报错文案："agent 不提交 changelist，请由人验证后提交" |
 | brief 补 `reopen` 和 charset | `execenv/execenv.go` 的 `P4DepotForEnv` 加 `Charset`；`daemon.go` 的 `convertP4DepotsForEnv` 把它带上；`writeP4Depots` 输出 charset；命令行里补 `reopen` |
 | 超时对齐 | 新增 `MULTICA_P4_TIMEOUT`（默认 10m，读法同 `daemon/config.go:326` 的 `durationFromEnv`）；`p4cache.p4Timeout` 改读这个配置；CLI 的 sync / run 超时设为 daemon 超时加 1 分钟；swarm 超时改为 3 分钟 |
-| 任务专用 client 模式加体积预检 | `p4cache.Cache.Sync`：`client -i` 之后、`sync` 之前执行 `p4 -c <client> sizes -s //<client>/...<pin>`；超过 `MULTICA_P4_SYNC_MAX_BYTES`（默认 20GiB）就 `client -d` 删掉刚建的 client 并拒绝，提示改用工作区模式 |
+| 删除任务专用 client 模式 | 不再创建 client 或下载 depot 副本，也不保留体积预检、旧 checkout mutation 或拒绝用的 Sync shim。无绑定的 `/p4/run` 和 `/p4/sync` 统一返回 409；quick-create 和无项目的 autopilot 不因工作区目录兜底而要求本地目录 |
 | 收紧 fallback | `handler/project_resource.go:1020-1021`：`needGitFallback := len(out.Repos)==0 && len(out.P4Depots)==0`，`needP4Fallback := len(out.P4Depots)==0 && len(out.Repos)==0`；同步更新 `handler/daemon_test.go:2269-2369` 的预期 |
 | 只配 P4 的任务不再注入 git 段落 | `runtime_config_sections.go`：当 `len(ctx.Repos)==0 && len(ctx.P4Depots)>0` 时省略 271 行（`repo checkout`）和 274 行（git 身份）；`writeProjectContext` 里 537 行改为只在确实存在 `github_repo` 资源时输出。103 行的 CI 段落是 review-locked 文本，**不动** |
 
 **验收**
-- `p4cache` 的单元测试（复用 `cache_test.go` 里的 fake p4）：submit 被拒；超过阈值时先删 client 再拒绝；超时取自配置。
+- P4 定向测试：缺少工作区绑定时拒绝写操作；`in_place` 兜底保持绑定；quick-create 和无项目 autopilot 不被误拦。
 - `handler` 测试：fallback 新规则下 4 种组合（无资源 / 只有 git / 只有 P4 / 两者都有）。
 - brief 快照测试：只配 P4 的任务不再出现 `repo checkout`。
 
@@ -202,7 +202,7 @@ func (d *Daemon) p4Binding(taskID string) *p4TaskBinding
 
 #### 1.4 路由改造：`server/internal/daemon/p4_handlers.go`
 
-`p4RunHandler`、`p4SwarmHandler`、`p4SyncHandler` 都先检查 `d.p4Binding(taskID)`。有绑定就走工作区模式；没有就保持旧的任务专用 client 逻辑。
+`p4RunHandler` 和 `p4SyncHandler` 检查 `d.p4Binding(taskID)`：有绑定就走工作区模式，没有则返回 409。`p4SwarmHandler` 的 shelve 操作同样要求绑定；不触及工作区文件的 review 查询、关联和 `--no-shelve` 创建仍通过已授权的 Swarm 地址执行。
 
 | 动作 | 工作区模式下的行为 |
 |---|---|
@@ -402,7 +402,6 @@ func (h *Handler) resolveIssueP4Ticket(ctx context.Context, issue db.Issue) stri
 | 配置 | 默认值 | 位置 |
 |---|---|---|
 | `MULTICA_P4_TIMEOUT` | 10m | daemon 环境变量（读法同 `durationFromEnv`） |
-| `MULTICA_P4_SYNC_MAX_BYTES` | 20GiB | daemon 环境变量，仅用于旧的任务专用 client 模式 |
 | `MULTICA_P4_POLL_INTERVAL` | 5m | daemon 环境变量（阶段 2） |
 | `allow_exclusive` | false | `p4depot.Ref`，按 depot 配置（CLI `project resource add/update` 加参数；设置页在阶段 2 补） |
 | `auto_review` | true | `p4depot.Ref`，按 depot 配置 |
@@ -432,7 +431,7 @@ func (h *Handler) resolveIssueP4Ticket(ctx context.Context, issue db.Issue) stri
 
 | 想法 | 原因 | 何时重新考虑 |
 |---|---|---|
-| 每个任务独立 client 并全量 sync | DJ01 一份工作区 328GB，不可行 | 只保留给小 depot |
+| 每个任务独立 client 并全量 sync | DJ01 一份工作区 328GB，不可行 | 已删除；P4 文件任务只使用既有 `in_place` 工作区 |
 | 专用 agent 机、多 slot 并行 | 磁盘和首次同步成本太高；工作区模式已能满足"每人一个 agent" | 并发需求明确之后（阶段 3） |
 | 服务器 trigger / Swarm webhook | 没有 admin 权限 | 能拿到 Swarm 管理员支持时，作为轮询的加速通道 |
 | agent 提交 / 提交策略开关 | 用户已决定 agent 不提交 | 不做 |

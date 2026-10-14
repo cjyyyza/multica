@@ -80,21 +80,6 @@ func intFromEnv(key string, fallback int) (int, error) {
 	return n, nil
 }
 
-// int64FromEnv reads a byte-scale integer override. Separate from intFromEnv
-// because the Perforce sync ceiling is a byte count that does not fit in a
-// 32-bit int.
-func int64FromEnv(key string, fallback int64) (int64, error) {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback, nil
-	}
-	n, err := strconv.ParseInt(value, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("%s: invalid integer %q: %w", key, value, err)
-	}
-	return n, nil
-}
-
 func sleepWithContext(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()

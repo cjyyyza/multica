@@ -7,10 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/daemon/p4cache"
@@ -55,68 +54,89 @@ func TestP4SwarmCannotSupplyURLForDepotWithoutSwarm(t *testing.T) {
 	}
 }
 
-func TestP4HandlersUseStableTaskRoot(t *testing.T) {
-	dir := t.TempDir()
-	root, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := filepath.Join(t.TempDir(), "fake_p4.go")
-	program := `package main
-import("encoding/json";"io";"os")
-func main(){io.Copy(io.Discard,os.Stdin);cwd,_:=os.Getwd();json.NewEncoder(os.Stdout).Encode(map[string]any{"args":os.Args[1:],"cwd":cwd})}`
-	if err := os.WriteFile(source, []byte(program), 0600); err != nil {
-		t.Fatal(err)
-	}
-	bin := filepath.Join(filepath.Dir(source), "fake-p4")
-	if runtime.GOOS == "windows" {
-		bin += ".exe"
-	}
-	if out, err := exec.Command("go", "build", "-o", bin, source).CombinedOutput(); err != nil {
-		t.Fatalf("build fake p4: %v: %s", err, out)
-	}
-	d := &Daemon{workspaces: map[string]*workspaceState{"ws": {}}, logger: slog.Default(), p4Cache: &p4cache.Cache{P4Path: bin}}
+func TestP4HandlersRejectUnboundWritesEvenWithOldCheckout(t *testing.T) {
+	root := t.TempDir()
+	d := &Daemon{logger: slog.Default(), p4Cache: &p4cache.Cache{P4Path: filepath.Join(root, "missing-p4")}}
 	ref := p4depot.Ref{Port: "p4:1666", Depot: "//depot/UE", User: "alice"}
 	d.registerTaskP4Depots("ws", "task", []P4DepotData{P4DepotData(ref)})
 	d.registerActiveRepoCheckoutTask("mat_p4_test", activeRepoCheckoutTask{WorkspaceID: "ws", TaskID: "task", WorkDir: root})
-	call := func(handler http.HandlerFunc, workdir, action string) *httptest.ResponseRecorder {
-		t.Helper()
-		body, _ := json.Marshal(map[string]any{"workspace_id": "ws", "task_id": "task", "workdir": workdir, "cwd": workdir, "port": ref.Port, "depot": ref.Depot, "action": action, "files": []string{"Foo.cpp"}})
-		req := httptest.NewRequest(http.MethodPost, "/p4", bytes.NewReader(body))
+	checkout := filepath.Join(root, "p4", "mc-legacy-task-client")
+	if err := os.MkdirAll(checkout, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"edit", "submit", "sync"} {
+		body, _ := json.Marshal(map[string]any{"workspace_id": "ws", "task_id": "task", "workdir": checkout, "port": ref.Port, "depot": ref.Depot, "action": action, "changelist": "1001"})
+		req := httptest.NewRequest(http.MethodPost, "/p4/run", bytes.NewReader(body))
 		req.Header.Set("Authorization", "Bearer mat_p4_test")
 		rec := httptest.NewRecorder()
+		handler := d.p4RunHandler()
+		if action == "sync" {
+			handler = d.p4SyncHandler()
+		}
 		handler(rec, req)
-		return rec
-	}
-	checkout := p4cache.ClientRoot(root, "ws", "task", ref)
-	for _, cwd := range []string{root, checkout, filepath.Join(checkout, "Source")} {
-		if err := os.MkdirAll(cwd, 0755); err != nil {
-			t.Fatal(err)
-		}
-		rec := call(d.p4SyncHandler(), cwd, "")
-		var result p4cache.SyncResult
-		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &result) != nil || result.Path != checkout {
-			t.Fatalf("sync from %s moved the checkout: %d %s", cwd, rec.Code, rec.Body.String())
-		}
-		if cwd == root {
-			continue
-		}
-		rec = call(d.p4RunHandler(), cwd, "edit")
-		var mutation p4cache.MutateResult
-		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &mutation) != nil || mutation.Path != checkout {
-			t.Fatalf("edit from %s failed: %d %s", cwd, rec.Code, rec.Body.String())
-		}
-		var command struct{ Args []string }
-		if err := json.Unmarshal([]byte(mutation.Output), &command); err != nil {
-			t.Fatal(err)
-		}
-		if got := command.Args[len(command.Args)-1]; got != filepath.Join(cwd, "Foo.cpp") {
-			t.Fatalf("relative path resolved to %s", got)
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "action_not_allowed") {
+			t.Fatalf("unbound %s with old checkout: %d %s", action, rec.Code, rec.Body.String())
 		}
 	}
-	for _, handler := range []http.HandlerFunc{d.p4SyncHandler(), d.p4RunHandler(), d.p4SwarmHandler()} {
-		if rec := call(handler, t.TempDir(), "edit"); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "workdir") {
-			t.Fatalf("outside workdir accepted: %d %s", rec.Code, rec.Body.String())
-		}
+}
+
+func TestP4SwarmShelvesOnlyTheBoundChange(t *testing.T) {
+	bin := writeDaemonFakeP4(t)
+	for _, tc := range []struct {
+		name, change string
+		bound        bool
+		want         int
+	}{
+		{"no binding", "1001", false, http.StatusConflict},
+		{"other change", "9999", true, http.StatusConflict},
+		{"pending task change", "1001", true, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			logPath := filepath.Join(root, "p4.log")
+			t.Setenv("P4_FAKE_LOG", logPath)
+			t.Setenv("P4_FAKE_TICKETS", "p4:1666 (alice) TESTTICKET\n")
+			var creates atomic.Int32
+			swarm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/api/v11/reviews" {
+					t.Errorf("unexpected Swarm call: %s %s", r.Method, r.URL.Path)
+				}
+				creates.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"review":{"id":77,"changes":[1001]}}`))
+			}))
+			defer swarm.Close()
+			ref := p4depot.Ref{Port: "p4:1666", Depot: "//depot/main", User: "alice", SwarmURL: swarm.URL}
+			d := &Daemon{workspaces: map[string]*workspaceState{"ws": {}}, logger: slog.Default(), p4Cache: &p4cache.Cache{P4Path: bin, HTTPClient: swarm.Client()}}
+			d.registerTaskP4Depots("ws", "task", []P4DepotData{P4DepotData(ref)})
+			d.registerActiveRepoCheckoutTask("mat_test", activeRepoCheckoutTask{WorkspaceID: "ws", TaskID: "task", WorkDir: root})
+			if tc.bound {
+				d.rememberP4Binding(&p4TaskBinding{
+					ws:  &p4cache.Workspace{Port: ref.Port, Client: "alice_main", User: "alice", Root: root, Dir: root},
+					ref: ref, taskID: "task", change: "1001",
+				})
+			}
+			body, _ := json.Marshal(p4SwarmRequest{Port: ref.Port, Depot: ref.Depot, WorkspaceID: "ws", TaskID: "task", WorkDir: root, Action: "create", Changelist: tc.change, Shelve: true})
+			req := httptest.NewRequest(http.MethodPost, "/p4/swarm", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer mat_test")
+			rec := httptest.NewRecorder()
+			d.p4SwarmHandler()(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tc.want, rec.Body.String())
+			}
+			log, err := os.ReadFile(logPath)
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			if tc.want != http.StatusOK {
+				if creates.Load() != 0 || len(log) != 0 {
+					t.Fatalf("rejected request reached P4/Swarm: %s", log)
+				}
+				return
+			}
+			if creates.Load() != 1 || !strings.Contains(string(log), "shelve -r -c 1001") {
+				t.Fatalf("wrong shelf/review behavior: creates=%d calls=%s", creates.Load(), log)
+			}
+		})
 	}
 }

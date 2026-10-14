@@ -1,6 +1,6 @@
 ---
 title: Perforce
-description: Let agents open, change, and shelve files in Helix depots — in your own workspace or in a task-scoped client.
+description: Let agents open, change, and shelve files in your existing Helix workspace. Multica does not create a client or sync a copy of the depot.
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
@@ -11,16 +11,15 @@ Multica runs agents against [Perforce](https://www.perforce.com/) Helix depots. 
 Multica does not store a Perforce password. The daemon uses the host Helix login (`P4USER`, `P4TICKETS`, `P4CONFIG`). Sign in with `p4 login` on that machine first.
 </Callout>
 
-## Two modes
+## Your workspace
 
-| Mode | When a run uses it | Where the files are |
-|---|---|---|
-| **Workspace mode** | The project has an `in_place` local directory on the running daemon *and* a Perforce depot, and the daemon resolves a Helix client under that directory | Your own workspace, in one changelist per task |
-| **Task-client mode** | Everything else | A task-scoped client under the run's `p4/` directory |
+| When a run can edit files | Where the files are |
+|---|---|
+| The project has an `in_place` local directory on the running daemon *and* a Perforce depot, and the daemon resolves a Helix client under that directory | Your own workspace, in one changelist per task |
 
-Workspace mode is what makes a large Unreal depot workable: a 300 GB workspace cannot be synced per task, so the agent works in the one you already have.
+A new Helix client is created so it can be synced, and syncing downloads the depot. Multica does not do that. If the directory is missing, or the client under it cannot be resolved, the run does not fall back to a task-scoped checkout.
 
-**Agents never submit, in either mode.** The agent shelves its changelist; you verify in the editor and submit with P4V or your own script.
+**Agents do not submit.** The agent shelves its changelist; you verify in the editor and submit with P4V or your own script.
 
 ## Add a workspace depot
 
@@ -46,6 +45,10 @@ Open the project **Resources** panel and attach a Perforce depot already listed 
 multica project resource add <project-id> --type perforce_depot \
   --port perforce.example.com:1666 --depot //depot/project --output json
 ```
+
+Attaching a depot in the desktop app asks for this machine's workspace folder first, when the project does not already have one set to edit the folder directly. A run does not start without that directory.
+
+An existing directory in parallel mode keeps its isolation. Use its execution-mode control to explicitly switch to direct editing before attaching the depot.
 
 When a run is claimed, project `perforce_depot` resources become the P4 list. The workspace fallback is all-or-nothing: a project with no `github_repo` and no `perforce_depot` resource inherits both workspace lists, while a project carrying either kind inherits neither. A Perforce-only project therefore no longer picks up workspace Git repositories it was never meant to touch.
 
@@ -117,23 +120,13 @@ A close-out or report failure is shown as a task failure. The daemon retains the
 
 Two depot switches change this, and are set through a JSON `--ref` payload on the resource: `allow_exclusive` lets agents open `+l` files, and `no_auto_review` turns off the automatic Swarm review.
 
-## Sync during a run (task-client mode)
+## No task client
 
-Agents sync with the task CLI, not by talking to Helix directly:
-
-```bash
-multica p4 sync --port perforce.example.com:1666 --depot //depot/project
-multica p4 sync --port perforce.example.com:1666 --depot //depot/project --stream //depot/project/main
-multica p4 sync --port perforce.example.com:1666 --depot //depot/project --fresh
-```
-
-The daemon creates a short task-scoped client (`mc` + 16 hex characters), runs `p4 sync` into the task root's `p4/<client>` directory, and returns that path. This location stays fixed when commands run from a subdirectory. Client and directory identities include the server, depot, stream and task. `--fresh` deletes the previous sync directory and forces a download even when the server still records those files in its have list. `p4` must be on the daemon host `PATH`.
-
-Use `--output json` to read both `path` and `client`. The client spec uses `noallwrite`, so files are read-only until they are opened for edit. Do not call host `p4` against another workspace client.
+Multica does not create a Helix client for a task or sync a depot copy into its run directory. Attach an `in_place` local directory pointing to the existing workspace.
 
 ## Edit, checkout, and shelve
 
-After sync, change into the returned checkout path to use relative file paths. Agents open files through the same daemon client:
+In your workspace, agents open files through the daemon:
 
 ```bash
 multica p4 edit --port perforce.example.com:1666 --depot //depot/project -- Source/Foo.cpp
@@ -176,15 +169,15 @@ Depots are not prefetched. A Helix tree can be huge; sync happens when the agent
 
 ## In this release
 
-- Workspace mode: in-place edits in your own client, one changelist per task, automatic revert-unchanged, shelve, and Swarm review
-- Task-client mode, with a size pre-check that refuses a depot too large to sync and points at workspace mode instead
+- In-place edits in your own client, one changelist per task, automatic revert-unchanged, shelve, and Swarm review
+- No task-scoped client and no per-task depot sync
 - Changelists on the issue: a Perforce changelists section, manual linking by number, and daemon polling that notices a submit — including the new number a commit server assigns
 - Issue auto-advance once every linked changelist is submitted, on issues with no linked pull request
 
 ## Not in this release
 
 - Swarm webhook ingestion and CI status on the review card
-- Agents submitting, by design — see [the decisions above](#two-modes)
+- Submitting without an owner or admin enabling it for the depot
 - Reviewing someone else's changelist as a task
 - Moving files the Unreal editor checked out into the task changelist from the UI (the run reports them instead)
 - Create-project dialog P4 attach (attach after create)

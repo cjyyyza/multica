@@ -158,7 +158,9 @@
     "p4_depot_placeholder": "//depot/project",
     "p4_stream_placeholder": "Stream (optional)",
     "p4_submit": "Add",
-    "toast_p4_attached": "Perforce depot attached"
+    "toast_p4_attached": "Perforce depot attached",
+    "p4_needs_local_directory": "Specify this machine's workspace folder before attaching a Perforce depot. The agent edits that folder and does not sync a new copy.",
+    "p4_needs_in_place_directory": "Change this directory's execution mode to edit the folder directly before attaching a Perforce depot."
   },
   "delete_dialog": {
     "title": "Delete project",

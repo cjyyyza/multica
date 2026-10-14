@@ -4,8 +4,6 @@
 package p4depot
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -50,12 +48,6 @@ func Identity(r Ref) string {
 	return strings.ToLower(strings.TrimSpace(r.Port)) + "\n" +
 		strings.TrimSpace(r.Depot) + "\n" +
 		strings.TrimSpace(r.Stream)
-}
-
-// ClientName is a Helix-safe P4CLIENT for one task depot, under 64 characters.
-func ClientName(workspaceID, taskID string, r Ref) string {
-	sum := sha256.Sum256([]byte(workspaceID + "\n" + taskID + "\n" + Identity(r)))
-	return "mc" + hex.EncodeToString(sum[:8])
 }
 
 // Normalize trims fields and rejects values the daemon cannot sync.
@@ -158,37 +150,4 @@ func ParseJSON(raw []byte) (Ref, error) {
 // MarshalJSON encodes a normalized ref.
 func MarshalJSON(r Ref) ([]byte, error) {
 	return json.Marshal(r)
-}
-
-// SyncPath is the depot path passed to `p4 sync`. A directory depot gets /...
-// when the caller did not already specify a wildcard or a file.
-func SyncPath(depot, changelistNum string) string {
-	depot = strings.TrimSpace(depot)
-	if depot == "" {
-		return depot
-	}
-	last := depot
-	if i := strings.LastIndex(depot, "/"); i >= 0 {
-		last = depot[i+1:]
-	}
-	if !strings.HasSuffix(depot, "/...") && !strings.Contains(last, ".") {
-		depot += "/..."
-	}
-	cl := strings.TrimSpace(changelistNum)
-	if cl == "" {
-		return depot
-	}
-	if strings.HasPrefix(cl, "@") || strings.HasPrefix(cl, "#") {
-		return depot + cl
-	}
-	return depot + "@" + cl
-}
-
-// ViewMaps returns the left-hand depot mapping and the client-relative path
-// used in a classic (non-stream) client spec View line.
-func ViewMaps(depot string) (depotSide, clientRel string) {
-	depotSide = SyncPath(depot, "")
-	// A directory checkout starts at the returned root, not root/depot/path.
-	clientRel = depotSide[strings.LastIndex(depotSide, "/")+1:]
-	return depotSide, clientRel
 }

@@ -19,9 +19,6 @@ const swarmTimeout = 30 * time.Second
 
 // SwarmParams is one Helix Swarm API call made with the host P4 ticket.
 type SwarmParams struct {
-	WorkspaceID string
-	TaskID      string
-	WorkDir     string
 	Ref         p4depot.Ref
 	Action      string
 	Changelist  string
@@ -29,7 +26,6 @@ type SwarmParams struct {
 	Body        string
 	Description string
 	Reviewers   []string
-	Shelve      bool
 }
 
 // SwarmReview is the agent-facing subset of a Swarm review.
@@ -88,29 +84,6 @@ func (c *Cache) Swarm(ctx context.Context, params SwarmParams) (*SwarmResult, er
 		return nil, err
 	}
 
-	var shelveErr error
-	if action == SwarmCreate && params.Shelve {
-		cl := strings.TrimSpace(params.Changelist)
-		if cl == "" {
-			return nil, fmt.Errorf("create requires --changelist")
-		}
-		if strings.TrimSpace(params.WorkDir) != "" && strings.TrimSpace(params.TaskID) != "" {
-			if _, err := c.Mutate(ctx, MutateParams{
-				WorkspaceID: params.WorkspaceID,
-				TaskID:      params.TaskID,
-				WorkDir:     params.WorkDir,
-				Ref:         ref,
-				Action:      ActionShelve,
-				Changelist:  cl,
-				Force:       true,
-			}); err != nil {
-				// Pending CLs need a shelf; submitted CLs become post-commit
-				// reviews without one. Try create either way.
-				shelveErr = err
-			}
-		}
-	}
-
 	client := &swarmClient{
 		baseURL: swarmURL,
 		user:    user,
@@ -131,9 +104,6 @@ func (c *Cache) Swarm(ctx context.Context, params SwarmParams) (*SwarmResult, er
 		}
 		review, err := client.createReview(ctx, cl, params.Description, params.Reviewers)
 		if err != nil {
-			if shelveErr != nil {
-				return nil, fmt.Errorf("%w (also failed to shelve changelist %s: %v)", err, cl, shelveErr)
-			}
 			return nil, err
 		}
 		return &SwarmResult{Action: action, SwarmURL: swarmURL, Review: review}, nil

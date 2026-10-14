@@ -560,16 +560,14 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"the daemon polls and claims the task",
 				"multica runtime list --output json",
 				"multica repo checkout <url>",
-				"multica p4 sync --port <p4port> --depot <depot-path>",
 				"multica p4 edit --port <p4port> --depot <depot-path> -- <files>",
 				"multica p4 status --output json",
 				"multica p4 swarm create --port <p4port> --depot <depot-path> --changelist <n> --output json",
-				// Perforce has two modes and the daemon enforces different
-				// things in each; an agent that cannot tell which one it is in
-				// cannot follow either set of rules.
+				// The daemon edits the person's existing client and refuses to
+				// create one. An agent that syncs a new client downloads the depot.
 				"Workspace mode",
-				"task-client mode",
-				"Neither mode submits",
+				"Do not create a Helix client",
+				"An agent shelves",
 				// I7 / D1: no ticket, no changelist, no opened files — and no
 				// inventing a number.
 				"refs #<ticket>",
@@ -590,9 +588,7 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"task-local Git metadata",
 			},
 			notWant: []string{
-				// D3: the submit verb is gone from the Perforce surface, so
-				// the reference must not hand an agent a command the daemon
-				// rejects.
+				// Submission is still unavailable.
 				"multica p4 submit",
 				"`submit`",
 			},
@@ -818,6 +814,8 @@ func findSkill(t *testing.T, name string) (AgentSkillData, bool) {
 // frontmatter block, the body after it, and whether a block was found. It only
 // understands flat `key: value` lines — enough for the template's frontmatter.
 func splitFrontmatter(content string) (map[string]string, string, bool) {
+	// Git checks out embedded Markdown with CRLF on native Windows.
+	content = strings.ReplaceAll(content, "\r\n", "\n")
 	if !strings.HasPrefix(content, "---\n") {
 		return nil, content, false
 	}

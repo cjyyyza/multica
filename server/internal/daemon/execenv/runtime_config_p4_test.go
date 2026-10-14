@@ -143,8 +143,8 @@ func TestP4WorkspaceSectionNamesTheClientAndItsRules(t *testing.T) {
 		}
 	}
 
-	// The depot list and the sync command describe the task-scoped client
-	// mode, which is not what this task runs.
+	// The unbound depot list is the section that names `p4 sync` as refused.
+	// Workspace mode does not carry that section.
 	for _, banned := range []string{
 		"## Perforce depots",
 		"multica p4 sync",
@@ -205,14 +205,9 @@ func TestP4WorkspaceWithoutTicketRefusesToOpenFiles(t *testing.T) {
 	}
 }
 
-// D3: agents never submit, so the submit verb is gone from every Perforce
-// surface in the brief.
-//
-// The ban is on the COMMAND, not on the English word: the brief must still
-// tell the agent not to submit (plan §1.8), and "never submit" is how it does
-// that. What may not survive is a form an agent could run or copy — the CLI
-// invocation, or `submit` listed among the verbs that work.
-func TestP4BriefNeverOffersSubmitAsACommand(t *testing.T) {
+// Unbound tasks and workspaces without submit permission must not be offered
+// the command. Enabled workspaces are covered by the action-policy tests.
+func TestP4BriefWithoutPermissionNeverOffersSubmitAsACommand(t *testing.T) {
 	t.Parallel()
 	for name, ctx := range map[string]TaskContextForEnv{
 		"depot mode": {
@@ -261,6 +256,27 @@ func TestProjectContextP4OnlyProjectSkipsRepoCheckoutSentence(t *testing.T) {
 	}
 	if !strings.Contains(out, "For `perforce_depot` resources") {
 		t.Errorf("the attached perforce_depot resource should still be explained; got:\n%s", out)
+	}
+	if strings.Contains(out, "multica p4 sync") {
+		t.Errorf("a perforce_depot resource must not tell the agent to sync a new client; got:\n%s", out)
+	}
+}
+
+func TestP4DepotWithoutWorkspaceRefusesToCreateAClient(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("claude", TaskContextForEnv{
+		IssueID: "i-1", AgentName: "Eve", AgentID: "eve-1",
+		P4Depots: []P4DepotForEnv{{Port: "p4:1666", Depot: "//DJ01_Proj/Dev"}},
+	})
+	for _, want := range []string{
+		"## Perforce depots",
+		"does not create a task Perforce client",
+		"Do not run `multica p4 sync`",
+		"in_place",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("unbound depot brief missing %q; got:\n%s", want, out)
+		}
 	}
 }
 
