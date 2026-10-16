@@ -282,12 +282,18 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		existing, err := qtx.GetYixiezuoImportBySource(ctx, db.GetYixiezuoImportBySourceParams{WorkspaceID: p.WorkspaceID, SourceHost: source.Host, ExternalID: source.ID})
 		if err == nil {
 			issue, err := qtx.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{WorkspaceID: p.WorkspaceID, ID: existing.IssueID})
-			if err != nil {
+			if err == nil {
+				return IssueCreateResult{DuplicateIssue: &issue}, ErrYixiezuoAlreadyImported
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
 				return IssueCreateResult{}, err
 			}
-			return IssueCreateResult{DuplicateIssue: &issue}, ErrYixiezuoAlreadyImported
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
+			// An explicit member import may replace a deletion receipt. PM sync
+			// retains the receipt and refuses to recreate the issue on its own.
+			if err := qtx.DeleteYixiezuoImportForMissingIssue(ctx, db.DeleteYixiezuoImportForMissingIssueParams{WorkspaceID: p.WorkspaceID, IssueID: existing.IssueID}); err != nil {
+				return IssueCreateResult{}, err
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return IssueCreateResult{}, err
 		}
 	}

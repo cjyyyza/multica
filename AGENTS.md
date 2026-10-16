@@ -124,6 +124,7 @@ Workspace-scoped queries filter by `workspace_id`; membership gates access and `
 ## Change and Delivery Rules
 
 - Keep changes scoped; reuse existing patterns. Code comments are English.
+- 易协作 PM automation uses the read-only `pm-sync` flow documented in [docs/yixiezuo-pm-sync.md](docs/yixiezuo-pm-sync.md). Preserve the separate member-only single-issue import and confirmed publication flow; PM must not claim bridge operations or publish to the source.
 - Do not add internal compatibility shims, dual writes, fallback paths, or legacy adapters unless requested. This does not relax API response compatibility above.
 - New global pre-workspace routes use a single word or `/{noun}/{verb}`, not hyphenated root names. Update `server/internal/handler/reserved_slugs.json`, run `pnpm generate:reserved-slugs`, and commit `packages/core/paths/reserved-slugs.ts` when changing reserved slugs.
 - Use atomic conventional commits and the repository PR template. For releases, follow [.github/RELEASING.md](.github/RELEASING.md); default to a patch bump unless specified otherwise.

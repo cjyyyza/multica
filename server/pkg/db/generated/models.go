@@ -2016,6 +2016,7 @@ type YixiezuoImport struct {
 	PublishedRevision int64              `json:"published_revision"`
 	PublishedAt       pgtype.Timestamptz `json:"published_at"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	PmState           []byte             `json:"pm_state"`
 }
 
 type YixiezuoOperation struct {
@@ -2033,4 +2034,17 @@ type YixiezuoOperation struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	CompletedAt pgtype.Timestamptz `json:"completed_at"`
 	RequestKey  pgtype.Text        `json:"request_key"`
+}
+
+type YixiezuoPmNotification struct {
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	IssueID          pgtype.UUID        `json:"issue_id"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	CommentID        pgtype.UUID        `json:"comment_id"`
+	State            string             `json:"state"`
+	Receipt          []byte             `json:"receipt"`
+	Error            string             `json:"error"`
+	OriginatorUserID pgtype.UUID        `json:"originator_user_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }

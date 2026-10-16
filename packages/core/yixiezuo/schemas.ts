@@ -43,3 +43,46 @@ export const YixiezuoImportStatesSchema = z.array(z.object({
   state: YixiezuoImportSchema.shape.state,
 }));
 export type YixiezuoImportState = z.infer<typeof YixiezuoImportStatesSchema>[number];
+
+export const YixiezuoPMResultSchema = z.object({
+  external_id: z.string().default(""),
+  issue_id: z.string().default(""),
+  identifier: z.string().default(""),
+  url: z.string().refine((value) => value === "" || /^https?:\/\//.test(value)).default(""),
+  assignee: z.string().default(""),
+  source_assignee: z.string().default(""),
+  state: z.enum(["created", "updated", "unchanged", "skipped", "failed"]).catch("failed"),
+  changes: z.array(z.object({ field: z.string(), old: z.string(), new: z.string() })).nullish().transform((value) => value ?? []),
+  warnings: z.array(z.string()).nullish().transform((value) => value ?? []),
+  error: z.string().default(""),
+}).superRefine((value, ctx) => {
+  if (["created", "updated", "unchanged"].includes(value.state)
+    && (!z.string().uuid().safeParse(value.issue_id).success || !/^[1-9][0-9]*$/.test(value.external_id))) {
+    ctx.addIssue({ code: "custom", message: "A successful sync requires source and Multica identities" });
+  }
+});
+
+export const YixiezuoPMTriageResultSchema = z.object({
+  issue_id: z.string().uuid(),
+  identifier: z.string().default(""),
+  comment_id: z.string().default(""),
+  state: z.enum(["notified", "already_notified", "skipped", "failed"]).catch("failed"),
+  reason_code: z.string().default(""),
+  error: z.string().default(""),
+}).superRefine((value, ctx) => {
+  if (["notified", "already_notified"].includes(value.state) && !z.string().uuid().safeParse(value.comment_id).success) {
+    ctx.addIssue({ code: "custom", message: "A notified result requires a comment identity" });
+  }
+});
+
+export const YixiezuoPMReconcileSchema = z.object({
+  sources: z.array(YixiezuoSnapshotSchema.shape.source),
+  errors: z.array(YixiezuoPMResultSchema).default([]),
+  has_more: z.boolean().default(false),
+  next_offset: z.number().int().nonnegative().default(0),
+});
+export const YixiezuoPMTriageCandidatesSchema = z.object({
+  issues: z.array(z.object({ id: z.string().uuid(), identifier: z.string().default("") })),
+  has_more: z.boolean().default(false),
+  next_offset: z.number().int().nonnegative().default(0),
+});

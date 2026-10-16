@@ -405,6 +405,9 @@ deleted_yixiezuo_operations AS (
 deleted_yixiezuo_imports AS (
     DELETE FROM yixiezuo_import WHERE workspace_id = $1
 ),
+deleted_yixiezuo_pm_notifications AS (
+    DELETE FROM yixiezuo_pm_notification WHERE workspace_id = $1
+),
 deleted_issue_pr_automation AS (
     DELETE FROM issue_pr_automation WHERE workspace_id = $1
 ),

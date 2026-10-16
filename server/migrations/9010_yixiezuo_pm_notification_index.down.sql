@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS idx_yixiezuo_pm_notification_target;

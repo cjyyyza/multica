@@ -7,6 +7,11 @@ SELECT * FROM yixiezuo_import WHERE workspace_id = $1 AND source_host = $2 AND e
 -- name: GetYixiezuoImportByIssue :one
 SELECT * FROM yixiezuo_import WHERE workspace_id = $1 AND issue_id = $2;
 
+-- name: DeleteYixiezuoImportForMissingIssue :exec
+DELETE FROM yixiezuo_import link
+WHERE link.workspace_id = $1 AND link.issue_id = $2
+  AND NOT EXISTS (SELECT 1 FROM issue i WHERE i.workspace_id = link.workspace_id AND i.id = link.issue_id);
+
 -- name: ListYixiezuoImportStates :many
 SELECT link.issue_id, link.external_id, link.source_url,
        COALESCE(link.snapshot->>'status', '')::text AS source_status,

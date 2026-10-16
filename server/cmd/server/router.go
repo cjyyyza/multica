@@ -1792,6 +1792,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/yixiezuo/imports/{issueId}", h.GetYixiezuoImport)
 					r.Post("/yixiezuo/imports/{issueId}/refresh", h.RefreshYixiezuoImport)
 					r.Post("/yixiezuo/imports/{issueId}/publish", h.PublishYixiezuoResult)
+					r.Post("/yixiezuo/pm/reconcile", h.ListYixiezuoPMReconcileSources)
+					r.Post("/yixiezuo/pm/issues", h.SyncYixiezuoPMIssue)
+					r.Post("/yixiezuo/pm/triage/candidates", h.ListYixiezuoPMTriageCandidates)
+					r.Post("/yixiezuo/pm/triage/{issueId}", h.NotifyYixiezuoPMTriage)
 					// Custom runtime profiles — listing/reading is member-visible
 					// (the Runtime page renders for everyone; create/edit/delete
 					// are admin-gated below).

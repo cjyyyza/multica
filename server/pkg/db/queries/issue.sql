@@ -504,7 +504,16 @@ cleared_yixiezuo_operations AS (
     DELETE FROM yixiezuo_operation WHERE issue_id IN (SELECT target.id FROM target)
 ),
 cleared_yixiezuo_imports AS (
-    DELETE FROM yixiezuo_import WHERE issue_id IN (SELECT target.id FROM target)
+    DELETE FROM yixiezuo_import WHERE issue_id IN (SELECT target.id FROM target) AND pm_state = '{}'::jsonb
+),
+-- A PM source key is a deletion receipt, so a later cycle cannot recreate an
+-- issue deliberately deleted by a person. Workspace deletion removes it.
+tombstoned_yixiezuo_pm_sources AS (
+    UPDATE yixiezuo_import SET pm_state = pm_state || jsonb_build_object('deleted_at', now())
+    WHERE issue_id IN (SELECT target.id FROM target) AND pm_state <> '{}'::jsonb
+),
+cleared_yixiezuo_pm_notifications AS (
+    DELETE FROM yixiezuo_pm_notification WHERE workspace_id = $2 AND issue_id IN (SELECT target.id FROM target)
 ),
 cleared_swarm_review_links AS (
     DELETE FROM issue_swarm_review WHERE issue_id IN (SELECT target.id FROM target)

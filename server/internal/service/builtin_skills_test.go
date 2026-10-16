@@ -151,7 +151,8 @@ func TestBuiltinSkillsFrontmatterIsStrictYAML(t *testing.T) {
 
 	for _, skill := range skills {
 		t.Run(skill.Name, func(t *testing.T) {
-			content := skill.Content
+			// Git checkouts on Windows may use CRLF, which YAML permits.
+			content := strings.ReplaceAll(skill.Content, "\r\n", "\n")
 			if !strings.HasPrefix(content, "---\n") {
 				t.Fatalf("SKILL.md must lead with a --- frontmatter block")
 			}

@@ -506,7 +506,14 @@ cleared_yixiezuo_operations AS (
     DELETE FROM yixiezuo_operation WHERE issue_id IN (SELECT target.id FROM target)
 ),
 cleared_yixiezuo_imports AS (
-    DELETE FROM yixiezuo_import WHERE issue_id IN (SELECT target.id FROM target)
+    DELETE FROM yixiezuo_import WHERE issue_id IN (SELECT target.id FROM target) AND pm_state = '{}'::jsonb
+),
+tombstoned_yixiezuo_pm_sources AS (
+    UPDATE yixiezuo_import SET pm_state = pm_state || jsonb_build_object('deleted_at', now())
+    WHERE issue_id IN (SELECT target.id FROM target) AND pm_state <> '{}'::jsonb
+),
+cleared_yixiezuo_pm_notifications AS (
+    DELETE FROM yixiezuo_pm_notification WHERE workspace_id = $2 AND issue_id IN (SELECT target.id FROM target)
 ),
 cleared_swarm_review_links AS (
     DELETE FROM issue_swarm_review WHERE issue_id IN (SELECT target.id FROM target)
@@ -556,6 +563,8 @@ type DeleteIssueParams struct {
 // when a caller passes a foreign issue_id with its own workspace_id (the issue
 // itself is correctly untouched, but the links are already gone) — the exact
 // cross-tenant leak the #1661 guard above exists to prevent.
+// A PM source key is a deletion receipt, so a later cycle cannot recreate an
+// issue deliberately deleted by a person. Workspace deletion removes it.
 // A changelist description can reference several issues, so the changelist row
 // itself only goes when this issue held its last link.
 func (q *Queries) DeleteIssue(ctx context.Context, arg DeleteIssueParams) error {

@@ -97,7 +97,7 @@ func (q *Queries) CompleteYixiezuoOperation(ctx context.Context, arg CompleteYix
 
 const createYixiezuoImport = `-- name: CreateYixiezuoImport :one
 INSERT INTO yixiezuo_import (workspace_id, issue_id, source_host, external_id, source_url, snapshot, imported_by)
-VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, workspace_id, issue_id, source_host, external_id, source_url, snapshot, imported_by, published_revision, published_at, created_at
+VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, workspace_id, issue_id, source_host, external_id, source_url, snapshot, imported_by, published_revision, published_at, created_at, pm_state
 `
 
 type CreateYixiezuoImportParams struct {
@@ -133,6 +133,7 @@ func (q *Queries) CreateYixiezuoImport(ctx context.Context, arg CreateYixiezuoIm
 		&i.PublishedRevision,
 		&i.PublishedAt,
 		&i.CreatedAt,
+		&i.PmState,
 	)
 	return i, err
 }
@@ -227,6 +228,22 @@ func (q *Queries) CreateYixiezuoReview(ctx context.Context, arg CreateYixiezuoRe
 	return i, err
 }
 
+const deleteYixiezuoImportForMissingIssue = `-- name: DeleteYixiezuoImportForMissingIssue :exec
+DELETE FROM yixiezuo_import link
+WHERE link.workspace_id = $1 AND link.issue_id = $2
+  AND NOT EXISTS (SELECT 1 FROM issue i WHERE i.workspace_id = link.workspace_id AND i.id = link.issue_id)
+`
+
+type DeleteYixiezuoImportForMissingIssueParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	IssueID     pgtype.UUID `json:"issue_id"`
+}
+
+func (q *Queries) DeleteYixiezuoImportForMissingIssue(ctx context.Context, arg DeleteYixiezuoImportForMissingIssueParams) error {
+	_, err := q.db.Exec(ctx, deleteYixiezuoImportForMissingIssue, arg.WorkspaceID, arg.IssueID)
+	return err
+}
+
 const expireYixiezuoOperations = `-- name: ExpireYixiezuoOperations :many
 UPDATE yixiezuo_operation SET
     state = CASE WHEN kind = 'publish' AND state = 'running' THEN 'unknown' ELSE 'failed' END,
@@ -274,7 +291,7 @@ func (q *Queries) ExpireYixiezuoOperations(ctx context.Context, workspaceID pgty
 }
 
 const getYixiezuoImportByIssue = `-- name: GetYixiezuoImportByIssue :one
-SELECT id, workspace_id, issue_id, source_host, external_id, source_url, snapshot, imported_by, published_revision, published_at, created_at FROM yixiezuo_import WHERE workspace_id = $1 AND issue_id = $2
+SELECT id, workspace_id, issue_id, source_host, external_id, source_url, snapshot, imported_by, published_revision, published_at, created_at, pm_state FROM yixiezuo_import WHERE workspace_id = $1 AND issue_id = $2
 `
 
 type GetYixiezuoImportByIssueParams struct {
@@ -297,12 +314,13 @@ func (q *Queries) GetYixiezuoImportByIssue(ctx context.Context, arg GetYixiezuoI
 		&i.PublishedRevision,
 		&i.PublishedAt,
 		&i.CreatedAt,
+		&i.PmState,
 	)
 	return i, err
 }
 
 const getYixiezuoImportBySource = `-- name: GetYixiezuoImportBySource :one
-SELECT id, workspace_id, issue_id, source_host, external_id, source_url, snapshot, imported_by, published_revision, published_at, created_at FROM yixiezuo_import WHERE workspace_id = $1 AND source_host = $2 AND external_id = $3
+SELECT id, workspace_id, issue_id, source_host, external_id, source_url, snapshot, imported_by, published_revision, published_at, created_at, pm_state FROM yixiezuo_import WHERE workspace_id = $1 AND source_host = $2 AND external_id = $3
 `
 
 type GetYixiezuoImportBySourceParams struct {
@@ -326,6 +344,7 @@ func (q *Queries) GetYixiezuoImportBySource(ctx context.Context, arg GetYixiezuo
 		&i.PublishedRevision,
 		&i.PublishedAt,
 		&i.CreatedAt,
+		&i.PmState,
 	)
 	return i, err
 }
