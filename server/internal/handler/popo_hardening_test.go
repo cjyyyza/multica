@@ -6,13 +6,16 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/multica-ai/multica/server/internal/integrations/popo"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -159,35 +162,69 @@ func TestPopoRecoveryFindsCommittedCommentAndStatusWithoutEvents(t *testing.T) {
 	}
 }
 
-func TestPopoGoHandlerPythonDeliveryContract(t *testing.T) {
-	python, root := os.Getenv("MULTICA_POPO_TEST_PYTHON"), os.Getenv("MULTICA_POPO_TEST_DJ01BOT_ROOT")
-	if python == "" || root == "" {
-		t.Skip("set explicit Python and DJ01Bot checkout for the fake-POPO cross-repository contract")
+func requirePopoTSProbe(t *testing.T) (string, string) {
+	t.Helper()
+	node, root := os.Getenv("MULTICA_POPO_TEST_NODE"), os.Getenv("MULTICA_POPO_TEST_DJ01BOT_ROOT")
+	if node == "" || root == "" {
+		t.Skip("set explicit Node and built DJ01Bot TS checkout for the fake-POPO cross-repository contract")
 	}
-	e := popoP2Setup(t)
-	command := hardeningCommand(t, e, "send", map[string]any{
-		"robot_id": e.robotID, "chat_id": "contract-group", "chat_type": "group", "text": "Task complete", "reply_to_message_id": "source-message",
-		"attachments": []map[string]string{{"filename": "reply.txt", "mime_type": "text/plain", "download_path": "/api/popo/bridge/media/outbound/test"}},
-	})
-	req := popoBearer(testutil.JSONRequest(http.MethodGet, "/commands?wait_ms=0", nil), e.token)
-	var envelope map[string]any
-	testutil.Call(t, testHandler.ListPopoBridgeCommands, req).Want(http.StatusOK).JSON(&envelope)
+	return node, filepath.Join(root, "ts", "tests", "multica", "wire-probe.mjs")
+}
+
+func runPopoTSProbe(t *testing.T, envelope map[string]any, result any) {
+	t.Helper()
+	node, probe := requirePopoTSProbe(t)
+	envelope["temp_dir"] = t.TempDir()
 	wire, err := json.Marshal(envelope)
 	if err != nil {
 		t.Fatal(err)
 	}
-	process := exec.Command(python, filepath.Join(root, "tests", "multica_wire_probe.py"))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	process := exec.CommandContext(ctx, node, probe)
 	process.Stdin = bytes.NewReader(wire)
-	output, err := process.CombinedOutput()
+	var stderr bytes.Buffer
+	process.Stderr = &stderr
+	output, err := process.Output()
 	if err != nil {
-		t.Fatalf("Python wire probe: %v\n%s", err, output)
+		t.Fatalf("TypeScript wire probe: %v\n%s", err, stderr.String())
 	}
+	if err := json.Unmarshal(output, result); err != nil {
+		t.Fatalf("decode TypeScript probe: %v\n%s", err, output)
+	}
+}
+
+func TestPopoGoHandlerTypeScriptDeliveryContract(t *testing.T) {
+	requirePopoTSProbe(t)
+	e := popoP2Setup(t)
+	command := hardeningCommand(t, e, "send", map[string]any{
+		"robot_id": e.robotID, "chat_id": "contract-group", "chat_type": "group", "text": "Task complete", "reply_to_message_id": "source-message",
+		"attachments": []map[string]string{{"filename": "reply.txt", "mime_type": "text/plain", "download_path": "/api/popo/bridge/media/outbound/test"}},
+		"reply":       map[string]any{"schema": 1, "id": "task:contract:attempt:1", "sequence": 99, "status": "completed"},
+	})
+	req := popoBearer(testutil.JSONRequest(http.MethodGet, "/commands?wait_ms=0", nil), e.token)
+	var envelope map[string]any
+	testutil.Call(t, testHandler.ListPopoBridgeCommands, req).Want(http.StatusOK).JSON(&envelope)
+	router := chi.NewRouter()
+	router.Post("/api/popo/bridge/commands/{id}/authorize", testHandler.AuthorizePopoBridgeCommand)
+	router.Post("/api/popo/bridge/commands/{id}/receipt", testHandler.AckPopoBridgeCommand)
+	router.Get("/api/popo/bridge/media/outbound/test", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := testHandler.popoBridgeFromRequest(w, r); !ok {
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("contract attachment"))
+	})
+	server := httptest.NewServer(router)
+	defer server.Close()
+	envelope["server_url"], envelope["token"] = server.URL, e.token
 	var result struct {
 		Sent []struct {
-			ChatID      string   `json:"chat_id"`
-			Text        string   `json:"text"`
-			ReplyTo     string   `json:"reply_to"`
-			Attachments []string `json:"attachments"`
+			ChatID      string             `json:"chat_id"`
+			Text        string             `json:"text"`
+			ReplyTo     string             `json:"reply_to"`
+			Attachments []string           `json:"attachments"`
+			Reply       popo.ReplySnapshot `json:"reply"`
 		} `json:"sent"`
 		Receipts []struct {
 			ID       string `json:"id"`
@@ -195,18 +232,83 @@ func TestPopoGoHandlerPythonDeliveryContract(t *testing.T) {
 			RemoteID string `json:"remote_message_id"`
 		} `json:"receipts"`
 	}
-	if err := json.Unmarshal(output, &result); err != nil {
-		t.Fatalf("decode probe: %v\n%s", err, output)
-	}
+	runPopoTSProbe(t, envelope, &result)
 	if len(result.Sent) != 1 || result.Sent[0].ChatID != "contract-group" || result.Sent[0].ReplyTo != "source-message" || len(result.Sent[0].Attachments) != 1 {
 		t.Fatalf("wire lost delivery fields: %+v", result)
+	}
+	if result.Sent[0].Reply.ID != "task:contract:attempt:1" || result.Sent[0].Reply.Status != "completed" || result.Sent[0].Reply.Sequence != 99 {
+		t.Fatalf("wire lost reply snapshot: %+v", result.Sent[0].Reply)
 	}
 	if len(result.Receipts) != 1 || result.Receipts[0].Status != "delivered" {
 		t.Fatalf("receipt=%+v", result.Receipts)
 	}
-	row, err := testHandler.PopoBridge.RecordReceipt(context.Background(), command.ID, parseUUID(e.bridgeID), popo.CommandReceipt{Status: result.Receipts[0].Status, RemoteMessageID: result.Receipts[0].RemoteID})
-	if err != nil || row.Status != "delivered" {
-		t.Fatalf("Python receipt rejected by Go: %v %+v", err, row)
+	row, err := testHandler.Queries.GetPopoBridgeCommandForBridge(context.Background(), db.GetPopoBridgeCommandForBridgeParams{ID: command.ID, BridgeID: parseUUID(e.bridgeID)})
+	if err != nil || row.Status != "delivered" || row.RemoteMessageID.String != result.Receipts[0].RemoteID {
+		t.Fatalf("TypeScript receipt rejected by Go: %v %+v", err, row)
+	}
+}
+
+func TestPopoTypeScriptQuoteCreatesOnlyCurrentComment(t *testing.T) {
+	requirePopoTSProbe(t)
+	e := popoP2Setup(t)
+	e.inbound(t, "contract-issue", "/issue TS quote contract", nil)
+	var issueID, bindingID string
+	if err := testPool.QueryRow(context.Background(), `SELECT issue_id, binding_id FROM channel_issue_source WHERE installation_id=$1`, e.install).Scan(&issueID, &bindingID); err != nil {
+		t.Fatal(err)
+	}
+	dbfx.InsertNoID(t, "channel_outbound_message", testutil.Cols{
+		"installation_id": e.install, "channel_type": "popo", "channel_message_id": "contract-source",
+		"binding_id": bindingID, "route_revision": 1, "outbound_kind": "issue_created", "issue_id": issueID,
+	}, "installation_id=$1 AND channel_message_id=$2", e.install, "contract-source")
+	var result struct {
+		Inbound []map[string]any `json:"inbound"`
+	}
+	var inputs []map[string]any
+	for _, instruction := range []string{"Continue", "/clear", "/new"} {
+		inputs = append(inputs, map[string]any{"id": "contract-quote-" + instruction, "msg_type": 211, "data": map[string]any{
+			"notify": instruction, "quoteInfo": map[string]any{"uuid": "contract-source", "notify": "Original task result", "replyText": instruction, "from": "bot"},
+		}})
+	}
+	runPopoTSProbe(t, map[string]any{
+		"robot_id": e.robotID, "sender_id": e.sender,
+		"inbound_events": inputs,
+	}, &result)
+	if len(result.Inbound) != 3 {
+		t.Fatalf("inbound=%+v", result.Inbound)
+	}
+	for i := 0; i < 2; i++ {
+		req := popoBearer(testutil.JSONRequest(http.MethodPost, "/api/popo/bridge/inbound", result.Inbound[0]), e.token)
+		testutil.Call(t, testHandler.IngestPopoBridgeInbound, req).Want(http.StatusOK)
+	}
+	var content string
+	if err := testPool.QueryRow(context.Background(), `SELECT content FROM comment WHERE issue_id=$1`, issueID).Scan(&content); err != nil {
+		t.Fatal(err)
+	}
+	if content != "Continue" || dbfx.Count(t, "SELECT count(*) FROM comment WHERE issue_id=$1", issueID) != 1 {
+		t.Fatalf("quoted comment was duplicated or contaminated: %q", content)
+	}
+	for _, body := range result.Inbound[1:] {
+		req := popoBearer(testutil.JSONRequest(http.MethodPost, "/api/popo/bridge/inbound", body), e.token)
+		testutil.Call(t, testHandler.IngestPopoBridgeInbound, req).Want(http.StatusOK)
+		if count := dbfx.Count(t, "SELECT count(*) FROM comment WHERE issue_id=$1", issueID); count != 1 {
+			t.Fatalf("%s was treated as an issue comment: %d comments", body["command_text"], count)
+		}
+		var stored string
+		if err := testPool.QueryRow(context.Background(), `
+			SELECT message.content FROM chat_message message
+			JOIN channel_chat_session_binding binding ON binding.chat_session_id=message.chat_session_id
+			WHERE binding.installation_id=$1 AND binding.retired_at IS NULL AND message.role='user'
+			ORDER BY message.created_at DESC, message.id DESC LIMIT 1`, e.install).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(stored, "Original task result") != 1 || strings.Contains(stored, body["command_text"].(string)) {
+			t.Fatalf("control lost or duplicated selected context: %q", stored)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if !testHandler.ChannelRouter.Drain(ctx) {
+		t.Fatal("channel router did not finish its pending work")
 	}
 }
 

@@ -32,7 +32,9 @@ const (
 )
 
 func (r *Router) handleFollow(ctx context.Context, set ResolverSet, inst ResolvedInstallation, identity ResolvedIdentity, msg channel.InboundMessage) (Result, bool, error) {
-	if r.follow == nil {
+	// A fresh-session control keeps selected quote context without turning it
+	// into a comment on the quoted issue. The session pipeline owns the reset.
+	if r.follow == nil || msg.ForceFresh {
 		return Result{}, false, nil
 	}
 	if _, isIssue := ParseIssueCommand(msg.CommandText); isIssue {

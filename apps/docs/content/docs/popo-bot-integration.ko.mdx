@@ -5,12 +5,12 @@ description: Windows dj01bot 브리지로 Multica 에이전트를 POPO에 연결
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-POPO의 제품 면은 Feishu/Lark와 같습니다(IM 채널 + 공유 엔진). Windows 프로세스가 POPO 연결을 들고, 워크스페이스 한정 브리지 자격 증명으로 Multica에 붙습니다. API 서버는 POPO, popo-cli, dj01bot을 열지 않습니다.
+POPO는 Windows의 DJ01Bot TypeScript 브리지를 통해 Multica의 공유 대화 및 태스크 엔진에 연결합니다. Windows 프로세스가 POPO 연결을 유지하며 워크스페이스 범위의 자격 증명을 사용합니다.
 
 자세한 절차는 [영문](/popo-bot-integration)과 [중문](/zh/popo-bot-integration)을 보세요.
 
 1. Multica에서 일회용 페어링 코드를 만듭니다(owner/admin).
-2. Windows에서 `python -m nanobot.multica_bridge pair`와 `run`을 실행합니다.
+2. Node.js 22.5 이상을 설치하고 DJ01Bot 루트에서 `npm --prefix ts ci`와 `npm --prefix ts run build`를 실행합니다. 이후 `node ts/dist/multica-bridge.js pair`와 `run`을 실행합니다. 인자는 상세 절차를 참고하세요.
 3. 온라인 Windows 브리지와 유휴 로봇을 에이전트에 연결합니다.
 
 서버 스위치는 `MULTICA_POPO_ENABLED=true`입니다. `multica popo gateway`는 제거되었습니다.

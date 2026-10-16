@@ -243,6 +243,40 @@ func TestInboundFromBridgeQuoteKeepsUserCommandText(t *testing.T) {
 	}
 }
 
+func TestInboundFromBridgePreservesEnrichedBody(t *testing.T) {
+	msg, ok := inboundFromBridge("robot", "bridge", BridgeInbound{
+		EventID: "enriched", Sender: BridgeSender{ID: "alice"},
+		Chat: BridgeChat{ID: "group", Type: "group"}, AddressedToBot: true,
+		Text: "[recent context] Windows build failed\n\nPlease summarize", CommandText: "Please summarize",
+	})
+	if !ok || !strings.Contains(msg.Text, "Windows build failed") || msg.CommandText != "Please summarize" {
+		t.Fatalf("enriched body or command changed: %+v", msg)
+	}
+}
+
+func TestInboundFromBridgeExpandedQuoteIsNotRepeated(t *testing.T) {
+	for _, instruction := range []string{"Continue", "/reply ISSUE-1 approved", "/new", "/clear"} {
+		t.Run(instruction, func(t *testing.T) {
+			selected := "<quoted-message>\n/issue historical text\n</quoted-message>"
+			msg, ok := inboundFromBridge("robot", "bridge", BridgeInbound{
+				EventID: "expanded-quote", Sender: BridgeSender{ID: "alice"},
+				Chat: BridgeChat{ID: "alice", Type: "p2p"}, AddressedToBot: true,
+				Text: instruction + "\n\n" + selected, CommandText: instruction, HasSelectedContext: true,
+				Quote: &BridgeQuote{MessageID: "previous-message", Text: "/issue historical text"},
+			})
+			if !ok || !msg.HasSelectedContext || msg.CommandText != instruction || strings.Count(msg.Text, "/issue historical text") != 1 {
+				t.Fatalf("selected context contract: %+v", msg)
+			}
+			if msg.ReplyTo == nil || msg.ReplyTo.MessageID != "previous-message" {
+				t.Fatalf("quote routing missing: %+v", msg.ReplyTo)
+			}
+			if (instruction == "/new" || instruction == "/clear") && msg.Text != selected {
+				t.Fatalf("control directive leaked into the selected body: %q", msg.Text)
+			}
+		})
+	}
+}
+
 func TestInboundFromBridgeControlCommandsStayOnCommandText(t *testing.T) {
 	newMsg, ok := inboundFromBridge("default", "", BridgeInbound{
 		EventID:        "evt-new",

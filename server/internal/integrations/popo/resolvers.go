@@ -82,6 +82,9 @@ func (r *installationResolver) ResolveInstallation(ctx context.Context, msg chan
 		}
 		return engine.ResolvedInstallation{}, err
 	}
+	if raw.BridgeID != "" && DecodePublicConfig(inst.Config).BridgeID != raw.BridgeID {
+		return engine.ResolvedInstallation{}, engine.ErrInstallationNotFound
+	}
 	return engine.ResolvedInstallation{
 		ID:              inst.ID,
 		WorkspaceID:     inst.WorkspaceID,

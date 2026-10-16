@@ -18,8 +18,8 @@ holds the dj01bot connection. The Go CLI no longer bridges POPO itself.
 
 Run the Windows bridge:
 
-  python -m nanobot.multica_bridge pair --server https://... --pairing-code ...
-  python -m nanobot.multica_bridge run --server https://...
+  node ts/dist/multica-bridge.js pair --server https://... --pairing-code ...
+  node ts/dist/multica-bridge.js run --server https://...
 `,
 }
 
@@ -31,7 +31,7 @@ var popoStatusCmd = &cobra.Command{
 
 var popoGatewayCmd = &cobra.Command{
 	Use:   "gateway",
-	Short: "Removed; use python -m nanobot.multica_bridge",
+	Short: "Removed; use node ts/dist/multica-bridge.js",
 	RunE:  runPopoGateway,
 }
 
@@ -77,7 +77,7 @@ func runPopoStatus(cmd *cobra.Command, _ []string) error {
 }
 
 func runPopoGateway(_ *cobra.Command, _ []string) error {
-	return fmt.Errorf("multica popo gateway was removed; run: python -m nanobot.multica_bridge")
+	return fmt.Errorf("multica popo gateway was removed; run: node ts/dist/multica-bridge.js")
 }
 
 func loadPopoInstallations(ctx context.Context, client *cli.APIClient) (popoInstallationsEnvelopeJSON, error) {

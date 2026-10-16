@@ -13,9 +13,15 @@ import (
 
 type targetFollow struct {
 	IssueFollow
-	issue     FollowIssue
-	runs      []FollowRun
-	cancelled []pgtype.UUID
+	issue        FollowIssue
+	runs         []FollowRun
+	cancelled    []pgtype.UUID
+	quoteLookups int
+}
+
+func (f *targetFollow) LookupQuote(context.Context, QuoteLookupInput) (QuotedTarget, error) {
+	f.quoteLookups++
+	return QuotedTarget{}, ErrQuoteNotFound
 }
 
 func (f *targetFollow) ResolveIssue(context.Context, pgtype.UUID, string) (FollowIssue, error) {

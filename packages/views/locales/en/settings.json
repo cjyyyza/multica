@@ -1482,7 +1482,7 @@
     "pairing_creating": "Creating…",
     "pairing_dialog_title": "Windows pairing code",
     "pairing_expires": "Expires {{when}}",
-    "pairing_command_hint": "On the Windows host:",
+    "pairing_command_hint": "From the DJ01Bot directory, after building the TypeScript bridge:",
     "pairing_copy": "Copy command",
     "pairing_copied": "Copied",
     "pairing_create_failed": "Could not create a pairing code",

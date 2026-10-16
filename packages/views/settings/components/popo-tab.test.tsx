@@ -228,7 +228,7 @@ beforeEach(() => {
 describe("popoPairCommand", () => {
   it("emits the frozen Windows pair command", () => {
     expect(popoPairCommand("https://multica.example", "PAIRCODE123")).toBe(
-      "python -m nanobot.multica_bridge pair --server https://multica.example --pairing-code PAIRCODE123",
+      "node ts/dist/multica-bridge.js pair --server https://multica.example --pairing-code PAIRCODE123",
     );
   });
 });
@@ -275,7 +275,7 @@ describe("PopoTab", () => {
     expect(await screen.findByTestId("popo-pairing-dialog")).toBeTruthy();
     expect(screen.getByTestId("popo-pairing-code").textContent).toBe("PAIRCODE123");
     expect(screen.getByTestId("popo-pairing-command").textContent).toBe(
-      "python -m nanobot.multica_bridge pair --server https://multica.example --pairing-code PAIRCODE123",
+      "node ts/dist/multica-bridge.js pair --server https://multica.example --pairing-code PAIRCODE123",
     );
     await userEvent.click(screen.getByTestId("popo-pairing-close"));
     expect(screen.queryByTestId("popo-pairing-dialog")).toBeNull();

@@ -79,7 +79,7 @@ function popoServerOrigin(): string {
 }
 
 export function popoPairCommand(origin: string, pairingCode: string): string {
-  return `python -m nanobot.multica_bridge pair --server ${origin} --pairing-code ${pairingCode}`;
+  return `node ts/dist/multica-bridge.js pair --server ${origin} --pairing-code ${pairingCode}`;
 }
 
 function onlineActiveBridges(bridges: PopoBridge[]): PopoBridge[] {

@@ -71,7 +71,7 @@ func (s *BridgeService) CreateMediaSession(ctx context.Context, bridge db.PopoBr
 			}
 			return db.PopoMediaStaging{}, err
 		}
-		if inst.WorkspaceID != bridge.WorkspaceID || inst.Status != "active" {
+		if inst.WorkspaceID != bridge.WorkspaceID || inst.Status != "active" || DecodePublicConfig(inst.Config).BridgeID != uuidString(bridge.ID) {
 			return db.PopoMediaStaging{}, ErrInstallationWrong
 		}
 		installationID = inst.ID

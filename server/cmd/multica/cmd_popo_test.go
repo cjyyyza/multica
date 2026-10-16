@@ -10,7 +10,7 @@ import (
 
 func TestPopoGatewayRemoved(t *testing.T) {
 	err := runPopoGateway(nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "nanobot.multica_bridge") {
+	if err == nil || !strings.Contains(err.Error(), "ts/dist/multica-bridge.js") {
 		t.Fatalf("gateway error = %v", err)
 	}
 }

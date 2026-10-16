@@ -24,6 +24,19 @@ func popoMediaSetup(t *testing.T) (popoP2Env, *mockStorage) {
 	return popoP2Setup(t), store
 }
 
+func TestPopoRejectsMediaStagingForAnotherBridgesRobot(t *testing.T) {
+	e, _ := popoMediaSetup(t)
+	siblingID, siblingToken := popoRegisterBridge(t, "WIN-MEDIA-SIBLING")
+	req := popoBearer(testutil.JSONRequest(http.MethodPost, "/api/popo/bridge/media/sessions", map[string]any{
+		"event_id": "sibling-media", "index": 0, "filename": "result.txt",
+		"mime_type": "text/plain", "size_bytes": 4, "kind": "file", "robot_id": e.robotID,
+	}), siblingToken)
+	testutil.Call(t, testHandler.CreatePopoBridgeMediaSession, req).Want(http.StatusNotFound)
+	if count := dbfx.Count(t, "SELECT count(*) FROM popo_media_staging WHERE bridge_id=$1", siblingID); count != 0 {
+		t.Fatalf("foreign robot media staging was created: %d", count)
+	}
+}
+
 func popoStageFile(t *testing.T, e popoP2Env, eventID string, index int, kind, filename, mime string, body []byte) string {
 	t.Helper()
 	create := popoBearer(testutil.JSONRequest(http.MethodPost, "/api/popo/bridge/media/sessions", map[string]any{

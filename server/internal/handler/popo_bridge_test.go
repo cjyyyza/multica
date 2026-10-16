@@ -116,6 +116,25 @@ func popoIdleRobot(robotID string) []map[string]any {
 	}}
 }
 
+func TestPopoRejectsInboundFromAnotherRobotsBridge(t *testing.T) {
+	e := popoP2Setup(t)
+	siblingID, siblingToken := popoRegisterBridge(t, "WIN-SIBLING")
+	body := map[string]any{
+		"protocol_version": 1, "event_id": "sibling-inbound", "robot_id": e.robotID,
+		"sender":           map[string]string{"id": e.sender},
+		"chat":             map[string]string{"id": e.sender, "type": "p2p"},
+		"addressed_to_bot": true, "text": "/issue Must not be created",
+	}
+	req := popoBearer(testutil.JSONRequest(http.MethodPost, "/api/popo/bridge/inbound", body), siblingToken)
+	testutil.Call(t, testHandler.IngestPopoBridgeInbound, req).Want(http.StatusNotFound)
+	if count := dbfx.Count(t, "SELECT count(*) FROM popo_inbound_event WHERE bridge_id=$1", siblingID); count != 0 {
+		t.Fatalf("foreign robot inbound was persisted: %d", count)
+	}
+	if count := dbfx.Count(t, "SELECT count(*) FROM channel_inbound_message_dedup WHERE installation_id=$1", e.install); count != 0 {
+		t.Fatalf("foreign robot inbound reached the engine: %d", count)
+	}
+}
+
 func TestPopoPairingMintRedeemExpiryReuse(t *testing.T) {
 	bridgeID, _ := popoRegisterBridge(t, "WIN-PAIR")
 	if _, err := util.ParseUUID(bridgeID); err != nil {

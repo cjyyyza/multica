@@ -17,17 +17,19 @@ import (
 )
 
 type BridgeInbound struct {
-	ProtocolVersion int             `json:"protocol_version"`
-	EventID         string          `json:"event_id"`
-	RobotID         string          `json:"robot_id"`
-	Sender          BridgeSender    `json:"sender"`
-	Chat            BridgeChat      `json:"chat"`
-	AddressedToBot  bool            `json:"addressed_to_bot"`
-	Text            string          `json:"text"`
-	CommandText     string          `json:"command_text"`
-	Quote           *BridgeQuote    `json:"quote"`
-	Media           []BridgeMedia   `json:"media"`
-	Raw             json.RawMessage `json:"raw"`
+	ProtocolVersion int          `json:"protocol_version"`
+	EventID         string       `json:"event_id"`
+	RobotID         string       `json:"robot_id"`
+	Sender          BridgeSender `json:"sender"`
+	Chat            BridgeChat   `json:"chat"`
+	AddressedToBot  bool         `json:"addressed_to_bot"`
+	Text            string       `json:"text"`
+	CommandText     string       `json:"command_text"`
+	// Text already includes selected quotes/forwards; Quote only supplies routing.
+	HasSelectedContext bool            `json:"has_selected_context"`
+	Quote              *BridgeQuote    `json:"quote"`
+	Media              []BridgeMedia   `json:"media"`
+	Raw                json.RawMessage `json:"raw"`
 }
 
 // BridgeMedia is a descriptor only. Bytes arrive later via staging PUT.
@@ -141,7 +143,7 @@ func (s *BridgeService) AcceptInbound(ctx context.Context, bridge db.PopoBridge,
 		}
 		return InboundDecision{}, err
 	}
-	if inst.WorkspaceID != bridge.WorkspaceID || inst.Status != "active" {
+	if inst.WorkspaceID != bridge.WorkspaceID || inst.Status != "active" || DecodePublicConfig(inst.Config).BridgeID != uuidString(bridge.ID) {
 		return InboundDecision{}, ErrInstallationWrong
 	}
 
@@ -191,10 +193,17 @@ func inboundFromBridge(robotID, bridgeID string, req BridgeInbound) (channel.Inb
 	if commandText == "" && len(media) == 0 {
 		return channel.InboundMessage{}, false
 	}
-	cleaned := commandText
+	cleaned := text
+	if cleaned == "" {
+		cleaned = commandText
+	}
 	forceFresh := false
 	if control, ok := engine.ParseControlCommand(commandText); ok {
-		cleaned = control.Body
+		if !req.HasSelectedContext {
+			cleaned = control.Body
+		} else if bodyControl, bodyOK := engine.ParseControlCommand(cleaned); bodyOK && bodyControl.Kind == control.Kind {
+			cleaned = strings.TrimSpace(bodyControl.Body)
+		}
 		forceFresh = control.Kind == engine.ControlCommandFreshSession
 	}
 	eventID := strings.TrimSpace(req.EventID)
@@ -205,13 +214,14 @@ func inboundFromBridge(robotID, bridgeID string, req BridgeInbound) (channel.Inb
 		defaultEvent = eventGroupAt
 	}
 	msg := channel.InboundMessage{
-		EventID:        eventID,
-		MessageID:      chatID + ":" + eventID,
-		Type:           inboundMsgType(cleaned, media),
-		Text:           cleaned,
-		CommandText:    commandText,
-		AddressedToBot: true,
-		ForceFresh:     forceFresh,
+		EventID:            eventID,
+		MessageID:          chatID + ":" + eventID,
+		Type:               inboundMsgType(cleaned, media),
+		Text:               cleaned,
+		CommandText:        commandText,
+		HasSelectedContext: req.HasSelectedContext && text != "",
+		AddressedToBot:     true,
+		ForceFresh:         forceFresh,
 		Source: channel.Source{
 			ChannelType:    TypePopo,
 			ChatID:         chatID,
@@ -366,6 +376,9 @@ func applyBridgeQuote(msg *channel.InboundMessage, quote *BridgeQuote, instructi
 	}
 	if messageID != "" {
 		msg.ReplyTo = &channel.ReplyCtx{MessageID: messageID}
+	}
+	if msg.HasSelectedContext {
+		return
 	}
 	body := quoteText
 	if body == "" {

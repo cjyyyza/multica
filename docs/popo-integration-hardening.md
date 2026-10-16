@@ -1,5 +1,34 @@
 # POPO integration hardening
 
+## Current TypeScript bridge contract
+
+The supported bridge is DJ01Bot's `feat/ts-popo-engine` implementation, entered
+with `node ts/dist/multica-bridge.js` from its repository root. Build that checkout
+before running the cross-repository tests:
+
+```powershell
+npm --prefix <DJ01Bot-checkout>/ts run build
+$env:MULTICA_POPO_TEST_NODE = (Get-Command node).Source
+$env:MULTICA_POPO_TEST_DJ01BOT_ROOT = '<DJ01Bot-checkout>'
+# From the Multica root, with its managed DATABASE_URL and migrations loaded:
+./scripts/go-test-with-agent-cli-guard.ps1 -CommandArgs @('go', '-C', 'server', 'test', './internal/handler', '-run', 'TestPopoGoHandlerTypeScriptDeliveryContract|TestPopoTypeScriptQuoteCreatesOnlyCurrentComment', '-count=1', '-v')
+```
+
+These tests pass actual Go command envelopes through the built TypeScript bridge
+and return its receipts to Go. They also feed TypeScript-normalized POPO quotes
+into the real Go handler and verify the stored comment and replay deduplication.
+POPO delivery is faked; no agent or real POPO account is contacted. The tests skip
+unless both environment variables are explicitly configured.
+
+Inbound and media staging require the installation's `bridge_id` to match the
+authenticated bridge. `text` contains readable context; `command_text` contains
+the user's instruction. `has_selected_context` means the bridge already expanded
+the selected quote/forward in `text`, so Go preserves it and uses `quote` only
+for routing. Multica task cards own execution state; the dedicated TS channel
+does not attach an ING sticker at transport ingress.
+
+## Earlier Python bridge hardening
+
 This change addresses the eight findings from the cross-repository review of
 Multica `40ca8f609` and DJ01Bot `df34489`. It preserves Multica as the task owner
 and DJ01Bot as the Windows POPO transport.

@@ -5,31 +5,31 @@ description: Connect a Multica agent to POPO through a Windows dj01bot bridge.
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-POPO uses the same product surface as Feishu/Lark (IM channel + shared engine). A Windows process holds the POPO connection and talks to Multica over a workspace-scoped bridge token. The API server never opens POPO, popo-cli, or dj01bot.
+POPO uses the shared conversation and task engine through the DJ01Bot TypeScript bridge on Windows. That process holds the POPO connection and talks to Multica over a workspace-scoped bridge token.
 
 One dj01bot robot maps to one Multica agent. Use a stable `robot_id` from `~/.dj01bot/config.json` (`websocketRobots[].id`), or `default`.
 
 ## Before you start
 
 - A workspace owner or admin mints a pairing code in Multica.
-- This Windows machine already runs a working dj01bot (`start.bat` / `dj01bot gateway`).
+- Install the DJ01Bot TypeScript version and Node.js 22.5 or newer on Windows. From the DJ01Bot root, run `npm --prefix ts ci` and `npm --prefix ts run build`.
 - Self-hosted servers set `MULTICA_POPO_ENABLED=true`.
 
 <Callout type="info">
-The Go command `multica popo gateway` is gone. Use `python -m nanobot.multica_bridge`.
+The Go command `multica popo gateway` is gone. Use `node ts/dist/multica-bridge.js`.
 </Callout>
 
 ## 1. Pair the Windows bridge
 
 1. In Multica, create a one-time pairing code (workspace owner/admin).
-2. On Windows:
+2. From the DJ01Bot root on Windows:
 
 ```bash
-python -m nanobot.multica_bridge pair --server https://your-multica.example --pairing-code <code>
-python -m nanobot.multica_bridge run --server https://your-multica.example
+node ts/dist/multica-bridge.js pair --server https://your-multica.example --pairing-code <code>
+node ts/dist/multica-bridge.js run --server https://your-multica.example
 ```
 
-Pairing writes `{server, bridge_id, token, workspace_id}` under `%LOCALAPPDATA%/dj01bot/multica-bridge/`. Keep `run` going so heartbeats stay fresh (45s without a heartbeat is offline).
+Pairing writes `{server, bridge_id, token, workspace_id}` under `%USERPROFILE%/.dj01bot/multica-bridge/`. Keep `run` going so heartbeats stay fresh (45s without a heartbeat is offline).
 
 ## 2. Connect a robot to an agent
 
@@ -52,6 +52,8 @@ Send text directly. No @-mention is required.
 ### Groups
 
 Mention the robot in a group to send it a request. Quoting a known task reply can add a comment to that same task. Media attachments and Windows QR registration are supported by the corresponding bridge flows.
+
+Once a run starts, its Multica reply card shows progress and the final state. Receiving a message does not add an ING sticker: transport acceptance does not mean execution has started.
 
 ### Commands
 

@@ -1472,7 +1472,7 @@
     "pairing_creating": "正在创建…",
     "pairing_dialog_title": "Windows 配对码",
     "pairing_expires": "有效期至 {{when}}",
-    "pairing_command_hint": "在 Windows 主机上运行：",
+    "pairing_command_hint": "构建 TypeScript 桥接程序后，在 DJ01Bot 目录运行：",
     "pairing_copy": "复制命令",
     "pairing_copied": "已复制",
     "pairing_create_failed": "无法创建配对码",

@@ -1472,7 +1472,7 @@
     "pairing_creating": "作成中…",
     "pairing_dialog_title": "Windows ペアリングコード",
     "pairing_expires": "有効期限 {{when}}",
-    "pairing_command_hint": "Windows ホストで実行：",
+    "pairing_command_hint": "TypeScript ブリッジをビルド後、DJ01Bot ディレクトリで実行：",
     "pairing_copy": "コマンドをコピー",
     "pairing_copied": "コピーしました",
     "pairing_create_failed": "ペアリングコードを作成できませんでした",

@@ -24,6 +24,8 @@ func TestRouter_SelectedQuoteSurvivesControl(t *testing.T) {
 			media := input.media
 			t.Run(name, func(t *testing.T) {
 				h := newHarness(t)
+				follow := &targetFollow{}
+				h.router.follow = follow
 				defer h.router.Drain(context.Background())
 				h.media.noMedia = !media
 				msg := p2pMessage(t)
@@ -38,6 +40,9 @@ func TestRouter_SelectedQuoteSurvivesControl(t *testing.T) {
 				msg.ReplyTo = &channel.ReplyCtx{MessageID: "selected"}
 				if err := h.router.Handle(context.Background(), msg); err != nil {
 					t.Fatal(err)
+				}
+				if follow.quoteLookups != 0 {
+					t.Fatal("session control attempted to follow the quoted issue")
 				}
 				if command == "/new" {
 					if !h.binder.lastStart.PersistMessage {

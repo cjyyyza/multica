@@ -1482,7 +1482,7 @@
     "pairing_creating": "Création…",
     "pairing_dialog_title": "Code d'appariement Windows",
     "pairing_expires": "Expire {{when}}",
-    "pairing_command_hint": "Sur l'hôte Windows :",
+    "pairing_command_hint": "Depuis le dossier DJ01Bot, après compilation du pont TypeScript :",
     "pairing_copy": "Copier la commande",
     "pairing_copied": "Copié",
     "pairing_create_failed": "Impossible de créer un code d'appariement",

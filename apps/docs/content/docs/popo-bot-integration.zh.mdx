@@ -5,31 +5,31 @@ description: 通过 Windows 上的 dj01bot 通道，把 Multica 智能体接到 
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-POPO 的产品面和飞书一样（IM 通道 + 共享引擎）。Windows 进程持有 POPO 连接，用工作区限定的通道凭证连 Multica。服务端不会打开 POPO、popo-cli 或 dj01bot。
+POPO 通过 Windows 上的 DJ01Bot TypeScript 桥接程序接入 Multica，复用共享会话与任务引擎。Windows 进程持有 POPO 连接，用工作区限定的通道凭证连 Multica。
 
 一个 dj01bot 机器人对应一个 Multica 智能体。`robot_id` 取自本机 `~/.dj01bot/config.json` 的 `websocketRobots[].id`，默认是 `default`。
 
 ## 开始之前
 
 - 工作区 owner 或 admin 在 Multica 创建一次性配对码。
-- 这台 Windows 上已能独立跑通 dj01bot（`start.bat` / `dj01bot gateway`）。
+- Windows 上已安装 DJ01Bot TypeScript 版本和 Node.js 22.5 或更新版本。在 DJ01Bot 根目录执行 `npm --prefix ts ci` 和 `npm --prefix ts run build`。
 - 自托管需设置 `MULTICA_POPO_ENABLED=true`。
 
 <Callout type="info">
-`multica popo gateway` 已移除，改用 `python -m nanobot.multica_bridge`。
+`multica popo gateway` 已移除，改用 `node ts/dist/multica-bridge.js`。
 </Callout>
 
 ## 1. 配对 Windows 通道
 
 1. 在 Multica 创建一次性配对码（owner/admin）。
-2. 在 Windows 上：
+2. 在 Windows 的 DJ01Bot 根目录运行：
 
 ```bash
-python -m nanobot.multica_bridge pair --server https://your-multica.example --pairing-code <code>
-python -m nanobot.multica_bridge run --server https://your-multica.example
+node ts/dist/multica-bridge.js pair --server https://your-multica.example --pairing-code <code>
+node ts/dist/multica-bridge.js run --server https://your-multica.example
 ```
 
-配对成功后把 `{server, bridge_id, token, workspace_id}` 写到 `%LOCALAPPDATA%/dj01bot/multica-bridge/`。保持 `run` 运行，心跳超过 45 秒会显示离线。
+配对成功后把 `{server, bridge_id, token, workspace_id}` 写到 `%USERPROFILE%/.dj01bot/multica-bridge/`。保持 `run` 运行，心跳超过 45 秒会显示离线。
 
 ## 2. 把机器人连到智能体
 
@@ -52,6 +52,8 @@ python -m nanobot.multica_bridge run --server https://your-multica.example
 ### 群聊
 
 在群里 @ 机器人发起请求。引用已关联任务的回复可以继续评论同一条任务。媒体附件和 Windows 扫码开通也有对应的桥接流程。
+
+运行开始后，Multica 的任务卡片显示进度和最终状态。桥接程序收到消息时不会添加 "处理中" 贴纸；接收成功不代表任务已经开始。
 
 ### 命令
 

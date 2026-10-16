@@ -1472,7 +1472,7 @@
     "pairing_creating": "만드는 중…",
     "pairing_dialog_title": "Windows 페어링 코드",
     "pairing_expires": "만료 {{when}}",
-    "pairing_command_hint": "Windows 호스트에서 실행:",
+    "pairing_command_hint": "TypeScript 브리지를 빌드한 후 DJ01Bot 디렉터리에서 실행:",
     "pairing_copy": "명령 복사",
     "pairing_copied": "복사됨",
     "pairing_create_failed": "페어링 코드를 만들 수 없습니다",
