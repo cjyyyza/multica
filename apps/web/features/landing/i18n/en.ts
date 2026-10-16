@@ -523,6 +523,32 @@ export function createEnDict(
     },
     entries: [
       {
+        version: "0.6.3",
+        date: "2026-10-16",
+        title: "Project workflows, per-run cost bars, 易协作 PM sync, and Perforce depot permissions",
+        changes: [],
+        features: [
+          "Projects can run on their own workflow: issues move through its columns, and each step hands the issue off with its own instructions.",
+          "The run log shows each run's cost as a bar, with token counts in the details.",
+          "Onboarding opens your runtime guide issue directly, skipping the welcome modal.",
+          "易协作 PM items sync into Multica read-only on a cycle, and triage is notified when new items arrive.",
+          "Perforce depot permissions now gate submit, sync, and unshelve; file tasks bind to an existing Helix workspace.",
+        ],
+        improvements: [
+          "POPO talks to its Windows bridge over the TypeScript contract, with stricter validation of inbound messages.",
+          "Claude Sonnet 5.5 and Haiku 5.5 runs are priced in the cost totals.",
+        ],
+        fixes: [
+          "Batch task claims are redelivered after a timeout instead of going missing.",
+          "Artifact cleanup no longer removes Git content a run still needs.",
+          "Mixed right-to-left and left-to-right text renders with the correct direction per block.",
+          "Completed agent builder drafts recover after a restart, and the draft warning stays dismissed.",
+          "Workspace WebSocket access is revoked when a member leaves, and inbox notifications only reach members of the current workspace.",
+          "Resuming a local run no longer replays changes you already committed.",
+          "The web Docker build keeps the pnpm patches it needs, and desktop packaging no longer bundles build caches.",
+        ],
+      },
+      {
         version: "0.6.2",
         date: "2026-10-13",
         title: "Text and link list properties, workspace switching in Cmd+K, one-click starters, and steadier runs",
