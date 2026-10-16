@@ -35,10 +35,13 @@ coverage
 /docs/
 *.md
 
-# Only the web workspace is used by Dockerfile.web. Default-exclude future
-# app workspaces so they do not silently enter the build context.
+# Dockerfile.web needs the web workspace and patches declared in the root
+# package manifest. Exclude other app sources from the build context.
 /apps/*
 !/apps/web/
+!/apps/mobile/
+/apps/mobile/*
+!/apps/mobile/patches/
 
 # Repository-only tooling
 /.github/
