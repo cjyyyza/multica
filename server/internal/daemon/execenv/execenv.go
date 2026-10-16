@@ -278,6 +278,25 @@ type IssueStatusForEnv struct {
 	Description string
 }
 
+// ProjectWorkflowForEnv is the workflow of the issue's project (MUL-7420),
+// present only when that project's workflow hands off. It is rendered into
+// the per-turn prompt by BuildProjectWorkflowBlock and never into the brief:
+// it varies by project and the current step by run.
+type ProjectWorkflowForEnv struct {
+	Name             string
+	CurrentStatusKey string
+	Steps            []ProjectWorkflowStepForEnv
+}
+
+type ProjectWorkflowStepForEnv struct {
+	Key           string
+	Name          string
+	Handler       string
+	Instructions  string
+	NextStatusKey string
+	BackStatusKey string
+}
+
 type SkillContextForEnv struct {
 	Name        string
 	Description string

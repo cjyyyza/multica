@@ -176,6 +176,64 @@ describe("estimateCost", () => {
     expect(cost).toBeCloseTo(10 + 50 + 0.25 + 12.5, 5);
   });
 
+  it.each([
+    {
+      model: "claude-sonnet-5-5",
+      dotted: "claude-sonnet-5.5",
+      expected: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+    },
+    {
+      model: "claude-haiku-5-5",
+      dotted: "claude-haiku-5.5",
+      expected: { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
+    },
+  ])("prices $model across transport spellings", ({ model, dotted, expected }) => {
+    for (const alias of [
+      model,
+      dotted,
+      `anthropic/${model}`,
+      `anthropic:${dotted}`,
+      `${model}[1m]`,
+      `${model}-20261001`,
+      `${model}-2026-10-01[1m]`,
+      `${model}-latest`,
+    ]) {
+      // Aggregate totals do not identify a single request's context tier.
+      const usage = {
+        model: alias,
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cache_read_tokens: 1_000_000,
+        cache_write_tokens: 1_000_000,
+      };
+      expect(estimateCostBreakdown(usage)).toEqual(expected);
+      expect(estimateCost(usage)).toBeCloseTo(
+        expected.input + expected.output + expected.cacheRead + expected.cacheWrite,
+        5,
+      );
+      expect(collectUnmappedModels([usage])).toEqual([]);
+    }
+  });
+
+  it("keeps unknown Sonnet and Haiku variants unmapped", () => {
+    for (const model of [
+      "claude-sonnet-5-6",
+      "claude-sonnet-5.6",
+      "claude-sonnet-5-55",
+      "claude-haiku-5-6",
+      "claude-haiku-5.6",
+      "claude-haiku-5-55",
+      ...["claude-sonnet-5", "claude-sonnet-5-5", "claude-haiku-5-5"].flatMap(
+        (base) => ["x", "-preview", "-latest-preview", "-20261001x", "[1m]junk", "[1m][2m]", "[]"].map(
+          (suffix) => base + suffix,
+        ),
+      ),
+    ]) {
+      expect(isModelPriced(model)).toBe(false);
+      expect(estimateCost({ ...zeroUsage, model, input_tokens: 1_000_000 })).toBe(0);
+    }
+  });
+
   it("prices Claude Sonnet 5 at Anthropic's intro $2 / $10 tier", () => {
     const cost = estimateCost({
       ...zeroUsage,

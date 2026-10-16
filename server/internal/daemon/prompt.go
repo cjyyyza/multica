@@ -70,7 +70,19 @@ func perTurnContextBlocks(task Task, opts promptOpts) string {
 	b.WriteString(execenv.BuildOnBehalfOfBlock(task.InitiatorName, task.InitiatorEmail))
 	b.WriteString(execenv.BuildConnectedAppsBlock(task.ConnectedApps))
 	b.WriteString(buildJoinedWakeupsBlock(task.WakeupJoined))
+	b.WriteString(buildProjectWorkflowBlock(task))
 	return b.String()
+}
+
+// buildProjectWorkflowBlock carries the issue's project workflow and current
+// step (MUL-7420). It varies by project and by step, so it lives here and not
+// in the cached brief (MUL-5377). A handoff run already got the same workflow
+// and step brief as its handoff note, so it is not repeated.
+func buildProjectWorkflowBlock(task Task) string {
+	if task.ProjectWorkflow == nil || (task.HandoffNote != "" && task.WakeupID == "") {
+		return ""
+	}
+	return execenv.BuildProjectWorkflowBlock(convertProjectWorkflowForEnv(task.ProjectWorkflow), task.IssueID)
 }
 
 // buildJoinedWakeupsBlock carries wakeups that fired while this run was

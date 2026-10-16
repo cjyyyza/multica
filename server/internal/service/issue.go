@@ -21,6 +21,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/issueposition"
 	"github.com/multica-ai/multica/server/internal/issueproperty"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
+	"github.com/multica-ai/multica/server/internal/issueworkflow"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -28,12 +29,10 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// IssueService is the single service-layer entry point for creating issues.
-// Both the HTTP `POST /issues` handler and the future Lark `/issue` command
-// call into Create so that duplicate guard, issue numbering, attachment
-// linking, broadcast, analytics, and agent/squad enqueue stay aligned. The
-// service deliberately does NOT depend on http.Request — callers parse
-// their own transport and pass a fully-resolved IssueCreateParams.
+// IssueService is the shared issue-creation entry point for HTTP and channel
+// callers. It keeps numbering, duplicate guards, attachments, broadcasts,
+// analytics, and agent/squad enqueue aligned. Callers resolve transport inputs
+// into IssueCreateParams; the service does not depend on http.Request.
 type IssueService struct {
 	Queries   *db.Queries
 	TxStarter TxStarter
@@ -150,6 +149,13 @@ type IssueCreateOpts struct {
 	// ChannelSource freezes the originating chat for channel-created issues
 	// so later comments and run results return to that route.
 	ChannelSource *ChannelIssueSource
+
+	// HandoffNote, when set, renders the note that rides the run the create
+	// starts for its assignee. The HTTP handler sets it when a project
+	// workflow's starting step hands the new issue off, so the handler's run
+	// receives the step's instructions. It takes the created issue because the
+	// note names the issue's identifier. (MUL-7420)
+	HandoffNote func(issue db.Issue) string
 }
 
 // ChannelIdempotencyKey is the external event key for a channel issue write.
@@ -358,6 +364,18 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		if current.Digest != p.SourceContext.Digest {
 			return IssueCreateResult{}, ErrSourceContextChanged
 		}
+	}
+
+	// Project workflow (MUL-7420): an issue created in a project whose named
+	// workflow does not list the requested status starts on todo instead.
+	// The HTTP create path already rejects an explicit status outside the
+	// workflow; this keeps the other creators (channels, captured comments)
+	// inside it too. Resolved before the custom-status guard below so that
+	// guard checks the status actually written.
+	if def, err := s.createWorkflow(ctx, qtx, p); err != nil {
+		return IssueCreateResult{}, err
+	} else if def != nil && !def.IsDefault && !def.Has(p.Status) {
+		p.Status = issueworkflow.StartStatus
 	}
 
 	// A create landing on a CUSTOM status takes the shared catalog lock AND
@@ -654,7 +672,11 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	s.publishIssueCreated(issue, attachments, labels, p.CreatorType, actorID, opts)
 	s.captureCreatedAnalytics(issue, p.CreatorType, actorID, opts)
 	if opts.AssignedAgentRunFireAt.IsZero() {
-		assignedTaskID = s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID, opts.AssignedAgentRunFireAt)
+		handoffNote := ""
+		if opts.HandoffNote != nil {
+			handoffNote = opts.HandoffNote(issue)
+		}
+		assignedTaskID = s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID, opts.AssignedAgentRunFireAt, handoffNote)
 	}
 
 	return IssueCreateResult{Issue: issue, Attachments: attachments, Labels: labels, AssignedTaskID: assignedTaskID}, nil
@@ -1016,7 +1038,23 @@ func classifyOrigin(issue db.Issue, opts IssueCreateOpts) (source, taskID, autop
 	}
 }
 
-func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue, creatorType, actorID string, agentRunFireAt time.Time) pgtype.UUID {
+// createWorkflow resolves the workflow of the project a new issue lands in:
+// its own project, or its parent's when it names none.
+func (s *IssueService) createWorkflow(ctx context.Context, qtx *db.Queries, p IssueCreateParams) (*issueworkflow.Definition, error) {
+	projectID := p.ProjectID
+	if !projectID.Valid && p.ParentIssueID.Valid {
+		parent, err := qtx.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{ID: p.ParentIssueID, WorkspaceID: p.WorkspaceID})
+		if err != nil {
+			// The parent check below reports a missing parent.
+			return nil, nil
+		}
+		projectID = parent.ProjectID
+	}
+	def, _, err := issueworkflow.ForProject(ctx, qtx, p.WorkspaceID, projectID)
+	return def, err
+}
+
+func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue, creatorType, actorID string, agentRunFireAt time.Time, handoffNote string) pgtype.UUID {
 	if !issue.AssigneeType.Valid || !issue.AssigneeID.Valid {
 		return pgtype.UUID{}
 	}
@@ -1040,7 +1078,9 @@ func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue,
 	if admitted {
 		var task db.AgentTaskQueue
 		var err error
-		if agentRunFireAt.IsZero() {
+		if agentRunFireAt.IsZero() && handoffNote != "" {
+			task, err = s.TaskService.EnqueueTaskForIssueWithHandoff(ctx, issue, handoffNote, pgtype.UUID{})
+		} else if agentRunFireAt.IsZero() {
 			task, err = s.TaskService.EnqueueTaskForIssue(ctx, issue)
 		} else {
 			task, err = s.TaskService.EnqueueDeferredChannelIssueTask(ctx, issue, agentRunFireAt)
@@ -1054,9 +1094,40 @@ func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue,
 		}
 	}
 	if s.shouldEnqueueSquadLeaderOnAssign(ctx, issue) {
-		s.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, creatorType, actorID)
+		if handoffNote != "" {
+			s.enqueueSquadLeaderHandoffTask(ctx, issue, handoffNote)
+		} else {
+			s.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, creatorType, actorID)
+		}
 	}
 	return pgtype.UUID{}
+}
+
+// enqueueSquadLeaderHandoffTask starts a squad leader's run carrying a
+// workflow step's handoff note, with the same pending-task dedup as
+// enqueueSquadLeaderTask. (MUL-7420)
+func (s *IssueService) enqueueSquadLeaderHandoffTask(ctx context.Context, issue db.Issue, handoffNote string) {
+	squad, err := s.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
+		ID:          issue.AssigneeID,
+		WorkspaceID: issue.WorkspaceID,
+	})
+	if err != nil {
+		return
+	}
+	hasPending, err := s.Queries.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
+		IssueID: issue.ID,
+		AgentID: squad.LeaderID,
+		HeadSha: headShaText(s.TaskService.ResolveIssueReviewSHA(ctx, issue.ID)),
+	})
+	if err != nil || hasPending {
+		return
+	}
+	if _, err := s.TaskService.EnqueueTaskForSquadLeaderWithHandoff(ctx, issue, squad.LeaderID, squad.ID, handoffNote, pgtype.UUID{}); err != nil {
+		slog.Warn("enqueue squad leader handoff task on create failed",
+			"issue_id", util.UUIDToString(issue.ID),
+			"squad_id", util.UUIDToString(squad.ID),
+			"error", err)
+	}
 }
 
 // shouldEnqueueAgentTaskWithQueries returns true when an issue create should

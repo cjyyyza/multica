@@ -366,6 +366,29 @@ type TaskIssueStatusData struct {
 	Description string `json:"description,omitempty"`
 }
 
+// TaskProjectWorkflowData is the workflow of the project a task's issue
+// belongs to (MUL-7420), sent only when that project uses a workflow other
+// than the workspace Default. The daemon renders it into the brief so the
+// agent moves the issue along this project's statuses instead of the
+// built-in ones its generic status rules name.
+type TaskProjectWorkflowData struct {
+	Name             string                    `json:"name"`
+	CurrentStatusKey string                    `json:"current_status_key"`
+	Steps            []TaskProjectWorkflowStep `json:"steps"`
+}
+
+// TaskProjectWorkflowStep is one step of TaskProjectWorkflowData. Handler is a
+// display description ("Sentinel", "Lin (project lead)"), empty when the step
+// does not hand off. Instructions are sent for the current step only.
+type TaskProjectWorkflowStep struct {
+	Key           string `json:"key"`
+	Name          string `json:"name"`
+	Handler       string `json:"handler,omitempty"`
+	Instructions  string `json:"instructions,omitempty"`
+	NextStatusKey string `json:"next_status_key,omitempty"`
+	BackStatusKey string `json:"back_status_key,omitempty"`
+}
+
 // TaskCancellationActor is the point-in-time actor snapshot attached to a
 // cancelled run. Type stays open for forward compatibility; current producers
 // emit member, agent, or system.
@@ -415,24 +438,27 @@ type AgentTaskResponse struct {
 	// IssueStatusesOmitted is how many active custom statuses were dropped by
 	// the cap, so the brief can say the list is incomplete instead of
 	// presenting a truncated catalog as the whole one.
-	IssueStatusesOmitted int                `json:"issue_statuses_omitted,omitempty"`
-	ThreadName           string             `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
-	Status               string             `json:"status"`
-	Priority             int32              `json:"priority"`
-	DispatchedAt         *string            `json:"dispatched_at"`
-	StartedAt            *string            `json:"started_at"`
-	CompletedAt          *string            `json:"completed_at"`
-	Result               any                `json:"result"`
-	Error                *string            `json:"error"`
-	FailureReason        string             `json:"failure_reason,omitempty"` // see TaskService.MaybeRetryFailedTask
-	Attempt              int32              `json:"attempt"`
-	MaxAttempts          int32              `json:"max_attempts"`
-	ParentTaskID         *string            `json:"parent_task_id,omitempty"`
-	IsLeaderTask         bool               `json:"is_leader_task,omitempty"`
-	LeaderRoleResolved   bool               `json:"leader_role_resolved,omitempty"` // claim-only capability, always true here: IsLeaderTask/SquadID authoritatively answer "is this a leader run", so the daemon must not infer the role from briefing text. Servers predating it make no such promise — before #4951 they sent no is_leader_task at all, after it they sent the flag without guaranteeing a briefing — so a daemon seeing no capability keeps the legacy inference. Never rendered into a prompt; see daemon.taskIsSquadLeader (MUL-5811). Mirror field: internal/daemon/types.go, same JSON name
-	Agent                *TaskAgentData     `json:"agent,omitempty"`
-	ConnectedApps        []ConnectedAppData `json:"connected_apps,omitempty"` // daemon-claim only: per-run app capabilities mounted through runtime MCP overlays
-	Repos                []RepoData         `json:"repos,omitempty"`
+	IssueStatusesOmitted int `json:"issue_statuses_omitted,omitempty"`
+	// ProjectWorkflow is the issue's project workflow, when it has one other
+	// than the Default (MUL-7420). Absent keeps the brief unchanged.
+	ProjectWorkflow    *TaskProjectWorkflowData `json:"project_workflow,omitempty"`
+	ThreadName         string                   `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
+	Status             string                   `json:"status"`
+	Priority           int32                    `json:"priority"`
+	DispatchedAt       *string                  `json:"dispatched_at"`
+	StartedAt          *string                  `json:"started_at"`
+	CompletedAt        *string                  `json:"completed_at"`
+	Result             any                      `json:"result"`
+	Error              *string                  `json:"error"`
+	FailureReason      string                   `json:"failure_reason,omitempty"` // see TaskService.MaybeRetryFailedTask
+	Attempt            int32                    `json:"attempt"`
+	MaxAttempts        int32                    `json:"max_attempts"`
+	ParentTaskID       *string                  `json:"parent_task_id,omitempty"`
+	IsLeaderTask       bool                     `json:"is_leader_task,omitempty"`
+	LeaderRoleResolved bool                     `json:"leader_role_resolved,omitempty"` // claim-only capability, always true here: IsLeaderTask/SquadID authoritatively answer "is this a leader run", so the daemon must not infer the role from briefing text. Servers predating it make no such promise — before #4951 they sent no is_leader_task at all, after it they sent the flag without guaranteeing a briefing — so a daemon seeing no capability keeps the legacy inference. Never rendered into a prompt; see daemon.taskIsSquadLeader (MUL-5811). Mirror field: internal/daemon/types.go, same JSON name
+	Agent              *TaskAgentData           `json:"agent,omitempty"`
+	ConnectedApps      []ConnectedAppData       `json:"connected_apps,omitempty"` // daemon-claim only: per-run app capabilities mounted through runtime MCP overlays
+	Repos              []RepoData               `json:"repos,omitempty"`
 	// P4Depots are Perforce depots the agent may sync with `multica p4 sync`.
 	// Omitted when empty so older daemons keep a byte-identical claim payload.
 	P4Depots []P4DepotData `json:"p4_depots,omitempty"`

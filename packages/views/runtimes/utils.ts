@@ -13,9 +13,7 @@ export function isSelfHealingRuntime(runtime: AgentRuntime): boolean {
   return runtime.runtime_mode === "local" && runtime.status === "online";
 }
 
-// ---------------------------------------------------------------------------
 // Formatting helpers
-// ---------------------------------------------------------------------------
 
 // Compound-unit relative timestamp ("2m 14s ago", "1d 4h ago", "6d 19h ago")
 // — gives the user enough precision to tell "just lost" from "long lost"
@@ -168,9 +166,7 @@ export function formatUsd(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
-// ---------------------------------------------------------------------------
 // Cost estimation
-// ---------------------------------------------------------------------------
 
 // Pricing per million tokens (USD). Sources, each authoritative for the
 // rows tagged under it — keep in sync when providers release new models
@@ -222,6 +218,13 @@ const MODEL_PRICING: Record<
   //    usual 0.1x); Opus 4.5 through Opus 5 stay on the lower 5/25 Opus tier,
   //    and Opus 5.5 drops to 4/20 (cache reads at 0.05x input). --
   "claude-sonnet-5":     { input: 2,    output: 10,   cacheRead: 0.20, cacheWrite: 2.50 },
+  // Sonnet 5.5 keeps the 2/10 tier but halves the cache-read rate.
+  "claude-sonnet-5-5":   { input: 2,    output: 10,   cacheRead: 0.10, cacheWrite: 2.50 },
+  // Haiku 5.5 uses the <=100K prompt tier. Above 100K (including cache
+  // reads/writes), all four rates are 5x higher. Rollups lack per-request
+  // prompt sizes, so long requests are underestimated. Mirror the backend
+  // estimate in server/internal/metrics/pricing.go.
+  "claude-haiku-5-5":    { input: 0.10, output: 0.50, cacheRead: 0.01, cacheWrite: 0.125 },
   "claude-fable-5-1":   { input: 10,   output: 50,   cacheRead: 0.25, cacheWrite: 12.50 },
   "claude-fable-5":     { input: 10,   output: 50,   cacheRead: 1.00, cacheWrite: 12.50 },
   "claude-opus-5-5":    { input: 4,    output: 20,   cacheRead: 0.20, cacheWrite: 5.00 },
@@ -764,9 +767,7 @@ export function estimateCostBreakdown(usage: Priceable): CostBreakdown {
   };
 }
 
-// ---------------------------------------------------------------------------
 // Per-run usage
-// ---------------------------------------------------------------------------
 
 /** Collapsed usage for one agent run, or for a set of runs. */
 export interface TaskUsageSummary {
@@ -844,9 +845,7 @@ export function estimateCacheSavings(usage: Priceable): number {
   return wouldHaveCost - actualCost;
 }
 
-// ---------------------------------------------------------------------------
 // Data aggregation
-// ---------------------------------------------------------------------------
 
 export interface DailyTokenData {
   date: string;
@@ -1179,13 +1178,11 @@ function diffDaysIso(from: string, to: string): number {
   return Math.round((b - a) / 86_400_000);
 }
 
-// ---------------------------------------------------------------------------
 // Calendar helpers — all date math runs on YYYY-MM-DD strings in the
 // runtime's IANA timezone. The backend already groups daily usage by
 // `start-of-day in runtime tz`, so we keep the entire frontend aggregation
 // on the same axis (Daily / Weekly) to avoid one-day drift when the browser
 // and runtime sit in different time zones.
-// ---------------------------------------------------------------------------
 
 // Today's calendar date (YYYY-MM-DD) in the given IANA timezone. `en-CA`
 // gives ISO-shaped output without us having to assemble Intl parts by hand.
@@ -1232,14 +1229,12 @@ export function formatShortDate(iso: string): string {
   });
 }
 
-// ---------------------------------------------------------------------------
 // Cost-by-X aggregations
 //
 // All three "Cost by …" tabs share the same shape: a sorted list of rows
 // where each row carries a key (agent name, model name, or hour-of-day),
 // total tokens and total cost. The chart / list components are oblivious
 // to which axis they're rendering — they just see {key, tokens, cost}.
-// ---------------------------------------------------------------------------
 
 export interface CostByKey {
   key: string;
