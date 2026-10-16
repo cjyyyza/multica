@@ -4,6 +4,10 @@ directories:
   buildResources: build
 files:
   - "!**/.vscode/*"
+  # Workspace packages are included as dependencies; their build caches can
+  # change during packaging and invalidate ASAR file offsets.
+  - "!**/.turbo/**"
+  - "!**/*.tsbuildinfo"
   - "!src/*"
   - "!electron.vite.config.*"
   - "!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}"
