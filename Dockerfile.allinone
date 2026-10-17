@@ -1,0 +1,128 @@
+# All-in-one self-hosted image: API server + migrations + web frontend in a
+# single container. PostgreSQL stays external (compose or managed). The split
+# Dockerfile / Dockerfile.web images remain the CI-published artifacts; this
+# file is for single-container deployments.
+#
+#   docker build -f Dockerfile.allinone -t multica-allinone:dev .
+#   docker run -p 3000:3000 -p 8080:8080 --env-file .env multica-allinone:dev
+#
+# Internally the API listens on BACKEND_PORT (default 8080) and the web
+# frontend on FRONTEND_PORT (default 3000); the frontend proxies API calls to
+# REMOTE_API_URL (default http://127.0.0.1:8080, i.e. the sibling process).
+
+# --- Backend build ---
+FROM golang:1.26.9-alpine AS backend-builder
+
+RUN apk add --no-cache git
+
+WORKDIR /src
+
+# Cache dependencies
+COPY server/go.mod server/go.sum ./server/
+RUN cd server && go mod download
+
+# Copy server source
+COPY server/ ./server/
+
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG DATE=unknown
+RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" -o bin/server ./cmd/server
+RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" -o bin/multica ./cmd/multica
+RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/migrate ./cmd/migrate
+RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/maintenance ./cmd/maintenance
+
+# --- Web dependencies ---
+FROM node:22-alpine AS deps
+
+WORKDIR /app
+
+# Copy workspace config and all package.json files for dependency resolution
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json .npmrc ./
+COPY apps/web/package.json apps/web/
+# postinstall runs fumadocs-mdx which reads apps/web/source.config.ts
+COPY apps/web/source.config.ts apps/web/source.config.ts
+# Root pnpm patchedDependencies is read even without the mobile workspace.
+COPY apps/mobile/patches/ apps/mobile/patches/
+COPY packages/core/package.json packages/core/
+COPY packages/ui/package.json packages/ui/
+COPY packages/views/package.json packages/views/
+COPY packages/tsconfig/package.json packages/tsconfig/
+COPY packages/eslint-config/package.json packages/eslint-config/
+
+RUN corepack enable && \
+    PNPM_VERSION="$(node -p 'require("./package.json").packageManager')" && \
+    corepack prepare "$PNPM_VERSION" --activate
+RUN pnpm install --frozen-lockfile
+
+# --- Web build ---
+FROM node:22-alpine AS web-builder
+
+WORKDIR /app
+
+# Activate the same pnpm version declared by the repository before the
+# offline frozen install validates package-manager metadata in pnpm-lock.yaml.
+COPY package.json ./
+RUN corepack enable && \
+    PNPM_VERSION="$(node -p 'require("./package.json").packageManager')" && \
+    corepack prepare "$PNPM_VERSION" --activate
+
+# Copy installed dependencies (preserves pnpm symlink structure)
+COPY --from=deps /app ./
+
+# Copy source
+COPY package.json turbo.json pnpm-workspace.yaml ./
+COPY apps/web/ apps/web/
+COPY packages/ packages/
+# next build typechecks apps/web/vitest.config.ts, which imports this helper.
+COPY scripts/vitest-platform.mjs scripts/vitest-platform.d.mts ./scripts/
+
+# Re-link after source overlay (fixes any symlinks overwritten by COPY)
+RUN pnpm install --frozen-lockfile --offline
+
+ARG NEXT_PUBLIC_APP_VERSION=dev
+ENV NEXT_PUBLIC_APP_VERSION=$NEXT_PUBLIC_APP_VERSION
+ENV STANDALONE=true
+
+# Build the web app (standalone output for minimal runtime)
+RUN pnpm --filter @multica/web build
+
+# --- Runtime ---
+FROM node:22-alpine
+
+# ca-certificates + tzdata for the Go binaries; libssl floor pins the Alpine
+# openssl fixes (CVE-2026-63073, CVE-2026-75803) for the Node runtime.
+RUN apk add --no-cache ca-certificates tzdata "libcrypto3>=3.5.8-r0" "libssl3>=3.5.8-r0"
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV REMOTE_API_URL=http://127.0.0.1:8080
+
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+# Backend binaries and migrations
+COPY --from=backend-builder /src/server/bin/server ./
+COPY --from=backend-builder /src/server/bin/multica ./
+COPY --from=backend-builder /src/server/bin/migrate ./
+COPY --from=backend-builder /src/server/bin/maintenance ./
+COPY server/migrations/ ./migrations/
+
+# Web standalone output (includes traced node_modules), static files, and
+# public assets
+COPY --from=web-builder --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
+COPY --from=web-builder --chown=nextjs:nodejs /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=web-builder --chown=nextjs:nodejs /app/apps/web/public ./apps/web/public
+
+# Ship the license and attribution notices with the image (LICENSE condition 1b)
+COPY LICENSE NOTICE ./
+COPY docker/entrypoint-allinone.sh ./
+RUN sed -i 's/\r$//' entrypoint-allinone.sh && chmod +x entrypoint-allinone.sh && \
+    mkdir -p /app/data/uploads && chown -R nextjs:nodejs /app/data
+
+USER nextjs
+
+EXPOSE 8080 3000
+
+ENTRYPOINT ["./entrypoint-allinone.sh"]

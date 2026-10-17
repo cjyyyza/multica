@@ -1,0 +1,69 @@
+# Self-hosting Docker Compose — all-in-one variant: PostgreSQL plus a single
+# container running both the API server and the web frontend
+# (Dockerfile.allinone). The split backend/frontend deployment lives in
+# docker-compose.selfhost.yml; everything documented there (loopback-only
+# binding, reverse-proxy guidance, env vars) applies here unchanged.
+#
+# Usage:
+#   cp .env.example .env
+#   # Edit .env — generate JWT_SECRET with `openssl rand -hex 32` (required)
+#   docker compose -f docker-compose.selfhost.allinone.yml up -d
+#
+# Frontend: http://localhost:${FRONTEND_PORT:-3000}
+# Backend:  http://localhost:${BACKEND_PORT:-${API_PORT:-${SERVER_PORT:-${PORT:-8080}}}}
+#
+# The published values above are HOST ports; the container always listens on
+# 8080 / 3000 internally, so changing them never needs a rebuild. .env is
+# passed through with env_file; the explicit environment entries below pin the
+# container-side listen ports and service wiring so host-side port aliases in
+# .env cannot leak into the listeners.
+
+name: multica
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-multica}
+      POSTGRES_USER: ${POSTGRES_USER:-multica}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-multica}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-multica} -d ${POSTGRES_DB:-multica}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    image: ${MULTICA_ALLINONE_IMAGE:-ghcr.io/cjyyyza/multica-allinone}:${MULTICA_IMAGE_TAG:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
+      - "127.0.0.1:${BACKEND_PORT:-${API_PORT:-${SERVER_PORT:-${PORT:-8080}}}}:8080"
+    volumes:
+      - app_uploads:/app/data/uploads
+    env_file:
+      # Optional: compose already interpolates .env into the variables below;
+      # this only passes the remaining values through to the container.
+      - path: .env
+        required: false
+    environment:
+      # Container-side wiring; these win over env_file values.
+      DATABASE_URL: postgres://${POSTGRES_USER:-multica}:${POSTGRES_PASSWORD:-multica}@postgres:5432/${POSTGRES_DB:-multica}?sslmode=disable
+      REMOTE_API_URL: http://127.0.0.1:8080
+      BACKEND_PORT: "8080"
+      FRONTEND_PORT: "3000"
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set to a strong random value — generate one with 'openssl rand -hex 32'}
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  app_uploads:
