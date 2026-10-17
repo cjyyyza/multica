@@ -61,6 +61,10 @@ services:
       REMOTE_API_URL: http://127.0.0.1:8080
       BACKEND_PORT: "8080"
       FRONTEND_PORT: "3000"
+      # Production safety checks (the dev verification-code shortcut is ignored
+      # and an insecure JWT secret is refused). Matches docker-compose.selfhost.yml;
+      # set APP_ENV in .env only for a deliberate non-production deployment.
+      APP_ENV: ${APP_ENV:-production}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set to a strong random value — generate one with 'openssl rand -hex 32'}
     restart: unless-stopped
 
