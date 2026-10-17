@@ -149,13 +149,6 @@ type IssueCreateOpts struct {
 	// ChannelSource freezes the originating chat for channel-created issues
 	// so later comments and run results return to that route.
 	ChannelSource *ChannelIssueSource
-
-	// HandoffNote, when set, renders the note that rides the run the create
-	// starts for its assignee. The HTTP handler sets it when a project
-	// workflow's starting step hands the new issue off, so the handler's run
-	// receives the step's instructions. It takes the created issue because the
-	// note names the issue's identifier. (MUL-7420)
-	HandoffNote func(issue db.Issue) string
 }
 
 // ChannelIdempotencyKey is the external event key for a channel issue write.
@@ -672,11 +665,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	s.publishIssueCreated(issue, attachments, labels, p.CreatorType, actorID, opts)
 	s.captureCreatedAnalytics(issue, p.CreatorType, actorID, opts)
 	if opts.AssignedAgentRunFireAt.IsZero() {
-		handoffNote := ""
-		if opts.HandoffNote != nil {
-			handoffNote = opts.HandoffNote(issue)
-		}
-		assignedTaskID = s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID, opts.AssignedAgentRunFireAt, handoffNote)
+		assignedTaskID = s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID, opts.AssignedAgentRunFireAt)
 	}
 
 	return IssueCreateResult{Issue: issue, Attachments: attachments, Labels: labels, AssignedTaskID: assignedTaskID}, nil
@@ -1054,7 +1043,7 @@ func (s *IssueService) createWorkflow(ctx context.Context, qtx *db.Queries, p Is
 	return def, err
 }
 
-func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue, creatorType, actorID string, agentRunFireAt time.Time, handoffNote string) pgtype.UUID {
+func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue, creatorType, actorID string, agentRunFireAt time.Time) pgtype.UUID {
 	if !issue.AssigneeType.Valid || !issue.AssigneeID.Valid {
 		return pgtype.UUID{}
 	}
@@ -1078,9 +1067,7 @@ func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue,
 	if admitted {
 		var task db.AgentTaskQueue
 		var err error
-		if agentRunFireAt.IsZero() && handoffNote != "" {
-			task, err = s.TaskService.EnqueueTaskForIssueWithHandoff(ctx, issue, handoffNote, pgtype.UUID{})
-		} else if agentRunFireAt.IsZero() {
+		if agentRunFireAt.IsZero() {
 			task, err = s.TaskService.EnqueueTaskForIssue(ctx, issue)
 		} else {
 			task, err = s.TaskService.EnqueueDeferredChannelIssueTask(ctx, issue, agentRunFireAt)
@@ -1094,40 +1081,9 @@ func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue,
 		}
 	}
 	if s.shouldEnqueueSquadLeaderOnAssign(ctx, issue) {
-		if handoffNote != "" {
-			s.enqueueSquadLeaderHandoffTask(ctx, issue, handoffNote)
-		} else {
-			s.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, creatorType, actorID)
-		}
+		s.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, creatorType, actorID)
 	}
 	return pgtype.UUID{}
-}
-
-// enqueueSquadLeaderHandoffTask starts a squad leader's run carrying a
-// workflow step's handoff note, with the same pending-task dedup as
-// enqueueSquadLeaderTask. (MUL-7420)
-func (s *IssueService) enqueueSquadLeaderHandoffTask(ctx context.Context, issue db.Issue, handoffNote string) {
-	squad, err := s.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
-		ID:          issue.AssigneeID,
-		WorkspaceID: issue.WorkspaceID,
-	})
-	if err != nil {
-		return
-	}
-	hasPending, err := s.Queries.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
-		IssueID: issue.ID,
-		AgentID: squad.LeaderID,
-		HeadSha: headShaText(s.TaskService.ResolveIssueReviewSHA(ctx, issue.ID)),
-	})
-	if err != nil || hasPending {
-		return
-	}
-	if _, err := s.TaskService.EnqueueTaskForSquadLeaderWithHandoff(ctx, issue, squad.LeaderID, squad.ID, handoffNote, pgtype.UUID{}); err != nil {
-		slog.Warn("enqueue squad leader handoff task on create failed",
-			"issue_id", util.UUIDToString(issue.ID),
-			"squad_id", util.UUIDToString(squad.ID),
-			"error", err)
-	}
 }
 
 // shouldEnqueueAgentTaskWithQueries returns true when an issue create should

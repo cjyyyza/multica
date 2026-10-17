@@ -215,22 +215,30 @@ func (h *Handler) stepMovedError(ctx context.Context, issue db.Issue, step strin
 	return out
 }
 
-// workflowHandoffNote renders the brief the handler's run receives. Only an
-// agent or squad handler runs, so members never need one.
-func (h *Handler) workflowHandoffNote(ctx context.Context, issue db.Issue, hand *workflowHandoff) string {
+// workflowHandoffBrief renders the brief a handoff's agent or squad will
+// read, for the timeline and the handoff confirmation. Members run nothing,
+// so they get none. The run itself reads the brief its claim renders.
+func (h *Handler) workflowHandoffBrief(ctx context.Context, issue db.Issue, hand *workflowHandoff) string {
 	if hand == nil || !issue.AssigneeType.Valid {
 		return ""
 	}
 	if t := issue.AssigneeType.String; t != "agent" && t != "squad" {
 		return ""
 	}
+	in := h.workflowBriefInput(ctx, issue, hand.def, hand.project)
+	in.StatusKey = hand.step.StatusKey
+	return issueworkflow.Brief(in)
+}
+
+// workflowBriefInput describes an issue at its current status under its
+// project's workflow, for the assignee's brief.
+func (h *Handler) workflowBriefInput(ctx context.Context, issue db.Issue, def issueworkflow.Definition, project db.Project) issueworkflow.BriefInput {
 	resolver := issuestatus.NewResolver(issue.WorkspaceID)
-	identifier := h.getIssuePrefix(ctx, issue.WorkspaceID) + "-" + strconv.Itoa(int(issue.Number))
-	return issueworkflow.Brief(issueworkflow.BriefInput{
-		Workflow:        hand.def,
-		ProjectName:     hand.project.Title,
-		StatusKey:       hand.step.StatusKey,
-		IssueIdentifier: identifier,
+	return issueworkflow.BriefInput{
+		Workflow:        def,
+		ProjectName:     project.Title,
+		StatusKey:       issue.Status,
+		IssueIdentifier: h.getIssuePrefix(ctx, issue.WorkspaceID) + "-" + strconv.Itoa(int(issue.Number)),
 		StatusName: func(key string) string {
 			return resolver.Name(ctx, h.Queries, key)
 		},
@@ -238,9 +246,9 @@ func (h *Handler) workflowHandoffNote(ctx context.Context, issue db.Issue, hand 
 			if !step.HandsOff() {
 				return ""
 			}
-			return h.stepHandlerName(ctx, issue, hand.project, step)
+			return h.stepHandlerName(ctx, issue, project, step)
 		},
-	})
+	}
 }
 
 // actorDisplayName names an agent, squad or member for a brief. It falls back
@@ -318,10 +326,12 @@ func (h *Handler) assigneeActiveRuns(ctx context.Context, issue db.Issue) []db.A
 	return out
 }
 
-// claimProjectWorkflow describes the issue's project workflow for a task
-// claim, or nil when there is nothing to say beyond the runtime's own status
-// rules: no project, or Default with no handoffs.
-func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue) *TaskProjectWorkflowData {
+// claimProjectWorkflow renders the issue's project workflow for a task claim,
+// or nil when there is nothing to say beyond the runtime's own status rules:
+// no project, or Default with no handoffs. The issue's assignee gets the
+// step's instructions and commands; any other agent working on the issue
+// gets the observer brief, so it does not move a step it does not own.
+func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task *db.AgentTaskQueue) *TaskProjectWorkflowData {
 	def, project, err := issueworkflow.ForProject(ctx, h.Queries, issue.WorkspaceID, issue.ProjectID)
 	if err != nil {
 		slog.Warn("task claim: failed to load project workflow for brief injection",
@@ -331,28 +341,30 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue) *Tas
 	if def == nil || (def.IsDefault && !def.HandsOffAnywhere()) {
 		return nil
 	}
-	resolver := issuestatus.NewResolver(issue.WorkspaceID)
-	out := &TaskProjectWorkflowData{
-		Name:             def.Name,
-		CurrentStatusKey: issue.Status,
-		Steps:            make([]TaskProjectWorkflowStep, 0, len(def.Steps)),
+	in := h.workflowBriefInput(ctx, issue, *def, project)
+	if !taskRunsForAssignee(issue, task) {
+		in.Observer = true
+		if issue.AssigneeType.Valid && issue.AssigneeID.Valid {
+			in.AssigneeName = h.actorDisplayName(ctx, issue.WorkspaceID, issue.AssigneeType.String, issue.AssigneeID)
+		}
 	}
-	for _, step := range def.Steps {
-		entry := TaskProjectWorkflowStep{
-			Key:           step.StatusKey,
-			Name:          resolver.Name(ctx, h.Queries, step.StatusKey),
-			NextStatusKey: def.NextStatus(step.StatusKey),
-			BackStatusKey: step.BackStatusKey,
-		}
-		if step.HandsOff() {
-			entry.Handler = h.stepHandlerName(ctx, issue, project, step)
-		}
-		if step.StatusKey == issue.Status {
-			entry.Instructions = step.Instructions
-		}
-		out.Steps = append(out.Steps, entry)
+	return &TaskProjectWorkflowData{Brief: issueworkflow.Brief(in)}
+}
+
+// taskRunsForAssignee reports whether a run works on the issue as its
+// assignee: the assigned agent's own run, or a run made for the assigned
+// squad.
+func taskRunsForAssignee(issue db.Issue, task *db.AgentTaskQueue) bool {
+	if task == nil || !issue.AssigneeID.Valid {
+		return false
 	}
-	return out
+	switch issue.AssigneeType.String {
+	case "agent":
+		return task.AgentID == issue.AssigneeID
+	case "squad":
+		return task.SquadID == issue.AssigneeID
+	}
+	return false
 }
 
 // stepHandlerName describes who a step hands the issue to, for briefs.

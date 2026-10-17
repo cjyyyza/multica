@@ -1267,6 +1267,12 @@ func (h *Handler) PreviewIssueWorkflowBrief(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "status_key is not a column of this workflow")
 		return
 	}
+	// The brief names the draft's handler, so an unchecked id would let the
+	// caller read the name of a user outside this workspace.
+	if status, msg := h.validateHandoffHandlers(ctx, r, workspaceID, []issueworkflow.Step{step}, def.Steps); status != 0 {
+		writeError(w, status, msg)
+		return
+	}
 	for i, s := range def.Steps {
 		if s.StatusKey == step.StatusKey {
 			def.Steps[i] = step
@@ -1393,7 +1399,7 @@ func (h *Handler) PreviewWorkflowHandoff(w http.ResponseWriter, r *http.Request)
 	next.ProjectID = params.ProjectID
 	next.AssigneeType = params.AssigneeType
 	next.AssigneeID = params.AssigneeID
-	resp.Brief = h.workflowHandoffNote(r.Context(), next, hand)
+	resp.Brief = h.workflowHandoffBrief(r.Context(), next, hand)
 	if issue.AssigneeType != params.AssigneeType || issue.AssigneeID != params.AssigneeID {
 		for _, task := range h.assigneeActiveRuns(r.Context(), issue) {
 			started := task.StartedAt

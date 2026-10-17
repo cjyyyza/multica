@@ -24,7 +24,7 @@ Read the invariants below, then open the reference(s) your task actually needs
 | `references/agents.md` | Creating, copying or debugging an agent definition: fields, secrets, MCP config, skill binding |
 | `references/squads.md` | Squads: leader routing, roster, recording leader activity, why a squad did or did not run |
 | `references/autopilots.md` | Autopilots: schedule / webhook / manual triggers, `create_issue` vs `run_only`, why one did not fire |
-| `references/projects.md` | Projects and their durable resources (`github_repo`, `perforce_depot`, `local_directory`, worktree mode) |
+| `references/projects.md` | Projects and their durable resources (`github_repo`, `perforce_depot`, `local_directory`, worktree mode); project workflows — status columns, handoffs, a `[Project workflow]` block in your prompt |
 | `references/runtimes.md` | Runtimes, daemons, `repo checkout`, Perforce in the person's existing workspace, `p4 edit` / `status` / Swarm, and the task CLI boundary |
 | `references/skill-import.md` | Importing a skill into this workspace from a URL or a local archive |
 | `references/yixiezuo-pm.md` | A configured PM cycle: read-only 易协作 sync, closure reconciliation, and deduplicated triage notification |

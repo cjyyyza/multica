@@ -82,22 +82,11 @@ type IssueStatusData struct {
 	Description string `json:"description,omitempty"`
 }
 
-// ProjectWorkflowData mirrors the claim payload's project workflow (MUL-7420):
-// the statuses the issue's project uses, in board order, and who each step
-// hands the issue to.
+// ProjectWorkflowData mirrors the claim payload's project workflow (MUL-7420).
+// Brief is rendered by the server for this run — the assignee's or an
+// observer's — and goes into the per-turn prompt as is.
 type ProjectWorkflowData struct {
-	Name             string                    `json:"name"`
-	CurrentStatusKey string                    `json:"current_status_key"`
-	Steps            []ProjectWorkflowStepData `json:"steps"`
-}
-
-type ProjectWorkflowStepData struct {
-	Key           string `json:"key"`
-	Name          string `json:"name"`
-	Handler       string `json:"handler,omitempty"`
-	Instructions  string `json:"instructions,omitempty"`
-	NextStatusKey string `json:"next_status_key,omitempty"`
-	BackStatusKey string `json:"back_status_key,omitempty"`
+	Brief string `json:"brief"`
 }
 
 // Task represents a claimed task from the server.

@@ -367,26 +367,12 @@ type TaskIssueStatusData struct {
 }
 
 // TaskProjectWorkflowData is the workflow of the project a task's issue
-// belongs to (MUL-7420), sent only when that project uses a workflow other
-// than the workspace Default. The daemon renders it into the brief so the
-// agent moves the issue along this project's statuses instead of the
-// built-in ones its generic status rules name.
+// belongs to (MUL-7420), sent only when that workflow says more than the
+// runtime's status rules: a named workflow, or a Default that hands off.
+// Brief is the server-rendered text (issueworkflow.Brief); the daemon puts it
+// in the per-turn prompt, never in the cached runtime brief.
 type TaskProjectWorkflowData struct {
-	Name             string                    `json:"name"`
-	CurrentStatusKey string                    `json:"current_status_key"`
-	Steps            []TaskProjectWorkflowStep `json:"steps"`
-}
-
-// TaskProjectWorkflowStep is one step of TaskProjectWorkflowData. Handler is a
-// display description ("Sentinel", "Lin (project lead)"), empty when the step
-// does not hand off. Instructions are sent for the current step only.
-type TaskProjectWorkflowStep struct {
-	Key           string `json:"key"`
-	Name          string `json:"name"`
-	Handler       string `json:"handler,omitempty"`
-	Instructions  string `json:"instructions,omitempty"`
-	NextStatusKey string `json:"next_status_key,omitempty"`
-	BackStatusKey string `json:"back_status_key,omitempty"`
+	Brief string `json:"brief"`
 }
 
 // TaskCancellationActor is the point-in-time actor snapshot attached to a

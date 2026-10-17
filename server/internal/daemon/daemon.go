@@ -10203,20 +10203,6 @@ func convertIssueStatusesForEnv(statuses []IssueStatusData) []execenv.IssueStatu
 	return result
 }
 
-func convertProjectWorkflowForEnv(w *ProjectWorkflowData) *execenv.ProjectWorkflowForEnv {
-	if w == nil || len(w.Steps) == 0 {
-		return nil
-	}
-	steps := make([]execenv.ProjectWorkflowStepForEnv, len(w.Steps))
-	for i, s := range w.Steps {
-		steps[i] = execenv.ProjectWorkflowStepForEnv{
-			Key: s.Key, Name: s.Name, Handler: s.Handler, Instructions: s.Instructions,
-			NextStatusKey: s.NextStatusKey, BackStatusKey: s.BackStatusKey,
-		}
-	}
-	return &execenv.ProjectWorkflowForEnv{Name: w.Name, CurrentStatusKey: w.CurrentStatusKey, Steps: steps}
-}
-
 func convertReposForEnv(repos []RepoData) []execenv.RepoContextForEnv {
 	if len(repos) == 0 {
 		return nil

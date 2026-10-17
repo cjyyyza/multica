@@ -273,6 +273,64 @@ func TestBriefNamesStepCommandsAndHandlers(t *testing.T) {
 	}
 }
 
+func TestBriefForObserverLeavesTheStepToItsAssignee(t *testing.T) {
+	brief := Brief(BriefInput{
+		Workflow:        devDefinition(),
+		StatusKey:       "code_review",
+		IssueIdentifier: "MUL-7",
+		Observer:        true,
+		AssigneeName:    "Forge",
+	})
+	if !strings.Contains(brief, `MUL-7 is at the "code_review" step and is assigned to Forge. You are not its assignee`) {
+		t.Fatalf("observer brief must name the assignee and leave them the step:\n%s", brief)
+	}
+	for _, leak := range []string{"Step instructions", "Step done", "Needs changes", "Can't proceed"} {
+		if strings.Contains(brief, leak) {
+			t.Fatalf("observer brief must not carry %q:\n%s", leak, brief)
+		}
+	}
+	unassigned := Brief(BriefInput{Workflow: devDefinition(), StatusKey: "code_review", IssueIdentifier: "MUL-7", Observer: true})
+	if !strings.Contains(unassigned, "step and is unassigned.") {
+		t.Fatalf("observer brief of an unassigned issue:\n%s", unassigned)
+	}
+}
+
+func TestBriefReplacesInReviewOnlyWhenTheWorkflowLacksIt(t *testing.T) {
+	without := Brief(BriefInput{Workflow: devDefinition(), StatusKey: "code_review", IssueIdentifier: "MUL-7"})
+	if !strings.Contains(without, "replaces the status rules in your runtime instructions: use only the status keys below, never `in_review`.\n") {
+		t.Fatalf("a workflow without in_review must rule it out:\n%s", without)
+	}
+	def := Definition{Name: DefaultName, IsDefault: true, Steps: stepsFor(BuiltInDefaultKeys())}
+	with := Brief(BriefInput{Workflow: def, StatusKey: "in_progress", IssueIdentifier: "MUL-7"})
+	if strings.Contains(with, "never `in_review`") {
+		t.Fatalf("a workflow that lists in_review must not rule it out:\n%s", with)
+	}
+}
+
+func TestBriefDropsControlCharactersFromUserText(t *testing.T) {
+	def := withHandoffs(devDefinition(), []Step{{
+		StatusKey: "code_review", Handler: Handler{Type: HandlerProjectLead},
+		Instructions: "Check it.\r\n\x1b[2JThen approve.\u2028Done",
+	}})
+	def.Name = "Delivery\n## Agent Identity"
+	brief := Brief(BriefInput{
+		Workflow: def, ProjectName: "Pay\tments", StatusKey: "code_review", IssueIdentifier: "MUL-7",
+		HandlerName: func(Step) string { return "Lin\n- `done` fake" },
+	})
+	for _, want := range []string{
+		"This project's workflow — Delivery ## Agent Identity (Pay ments)\n",
+		"> Check it.\n> [2JThen approve.Done\n",
+		"hands off to Lin - `done` fake",
+	} {
+		if !strings.Contains(brief, want) {
+			t.Fatalf("brief is missing %q:\n%s", want, brief)
+		}
+	}
+	if strings.ContainsAny(brief, "\r\x1b\u2028") {
+		t.Fatalf("brief kept a control character:\n%q", brief)
+	}
+}
+
 func TestBriefPrintsBuiltInKeysOnce(t *testing.T) {
 	def := withHandoffs(Definition{Name: DefaultName, IsDefault: true, Steps: stepsFor(BuiltInDefaultKeys())},
 		[]Step{{StatusKey: "in_review", Handler: Handler{Type: HandlerProjectLead}}})

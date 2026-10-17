@@ -613,6 +613,68 @@ describe("estimateCost", () => {
     expect(costWithAllTokenTypes("cursor")).toBeCloseTo(3 + 15 + 0.5, 5);
   });
 
+  it("prices Cursor catalog variants at their base model's Cursor rate", () => {
+    // Cursor ids carry effort / thinking parts the rate doesn't depend on.
+    // 1M each of input, output, cache read, cache write.
+    const cost = (model: string) =>
+      estimateCost({
+        ...zeroUsage,
+        provider: "cursor",
+        model,
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cache_read_tokens: 1_000_000,
+        cache_write_tokens: 1_000_000,
+      });
+
+    const opus55 = 4 + 20 + 0.2 + 5;
+    expect(cost("claude-opus-5-5-high")).toBeCloseTo(opus55, 5);
+    expect(cost("claude-opus-5-5-max")).toBeCloseTo(opus55, 5);
+    expect(cost("claude-fable-5-1-thinking-high")).toBeCloseTo(10 + 50 + 0.25 + 12.5, 5);
+    // Thinking after the effort level, and the older `claude-4.6-sonnet` naming.
+    expect(cost("claude-4.6-sonnet-medium-thinking")).toBeCloseTo(3 + 15 + 0.3 + 3.75, 5);
+    expect(cost("gpt-5.5-extra-high")).toBeCloseTo(5 + 30 + 0.5, 5);
+    expect(cost("gpt-5.6-sol-none")).toBeCloseTo(4 + 20 + 0.4 + 5, 5);
+    expect(cost("cursor-grok-4.6-high")).toBeCloseTo(2 + 6 + 0.5, 5);
+    expect(cost("grok-4.7-medium")).toBeCloseTo(2 + 6 + 0.5, 5);
+    expect(cost("gemini-4-argon-medium")).toBeCloseTo(2 + 10 + 0.1, 5);
+    expect(cost("muse-wonder-1.0-minimal")).toBeCloseTo(4 + 20 + 0.2, 5);
+    expect(cost("kimi-k3-max")).toBeCloseTo(3 + 15 + 0.3, 5);
+    expect(cost("claude-opus-4-8[context=1m,effort=high,fast=false]")).toBeCloseTo(
+      5 + 25 + 0.5 + 6.25,
+      5,
+    );
+  });
+
+  it("prices Cursor Fast variants only where Cursor publishes a Fast rate", () => {
+    const cost = (model: string) =>
+      estimateCost({
+        ...zeroUsage,
+        provider: "cursor",
+        model,
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      });
+
+    expect(cost("gpt-5.6-sol-medium-fast")).toBeCloseTo(8 + 40, 5);
+    expect(cost("cursor-grok-4.5-high-fast")).toBeCloseTo(4 + 18, 5);
+    expect(cost("claude-opus-4-7-thinking-high-fast")).toBeCloseTo(30 + 150, 5);
+    expect(cost("claude-opus-4-8[effort=high,fast=true]")).toBeCloseTo(10 + 50, 5);
+    // No published Fast rate: unmapped, never the cheaper standard rate.
+    expect(isModelPriced("claude-opus-5-5-high-fast", "cursor")).toBe(false);
+    expect(isModelPriced("gpt-5.5-medium-fast", "cursor")).toBe(false);
+    expect(isModelPriced("claude-opus-5-5[fast=true]", "cursor")).toBe(false);
+    expect(collectUnmappedModels([
+      { ...zeroUsage, provider: "cursor", model: "claude-opus-5-5-high-fast", input_tokens: 1 },
+    ])).toEqual(["cursor/claude-opus-5-5-high-fast"]);
+  });
+
+  it("keeps Cursor variant stripping scoped to Cursor rows", () => {
+    expect(isModelPriced("claude-opus-5-5-high")).toBe(false);
+    expect(isModelPriced("claude-opus-5-5-high", "claude")).toBe(false);
+    expect(isModelPriced("claude-opus-5-5-high", "cursor")).toBe(true);
+  });
+
   it("scopes the generic `auto` id by provider so collisions don't borrow a price", () => {
     const auto = (provider?: string) =>
       estimateCost({ ...zeroUsage, provider, model: "auto", input_tokens: 1_000_000 });

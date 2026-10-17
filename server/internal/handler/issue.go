@@ -3297,7 +3297,6 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to resolve project workflow")
 		return
 	}
-	var createHandoff *workflowHandoff
 	if createWorkflow != nil {
 		if err := issueworkflow.CheckStatus(createWorkflow, status); err != nil {
 			writeIssueWorkflowError(w, err)
@@ -3313,7 +3312,6 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 						writeError(w, status, msg)
 						return
 					}
-					createHandoff = &workflowHandoff{def: *createWorkflow, step: step, project: createWorkflowProject}
 				}
 			}
 		}
@@ -3468,9 +3466,6 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		ActorID:          actualCreatorID,
 		AnalyticsAgentID: analyticsAgentID,
 		Platform:         func() string { p, _, _ := middleware.ClientMetadataFromContext(r.Context()); return p }(),
-		HandoffNote: func(issue db.Issue) string {
-			return h.workflowHandoffNote(r.Context(), issue, createHandoff)
-		},
 		BroadcastPayload: func(issue db.Issue, atts []db.Attachment, labels []db.IssueLabel) map[string]any {
 			payload := issueToResponse(issue, prefix)
 			// The event other tabs receive must carry the category too — filling
@@ -4108,11 +4103,10 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 
 	// A workflow handoff (MUL-7420) is decided before the event goes out so
 	// the timeline can record it as one entry: the status change, who the
-	// issue went to, whether their run started, and the brief it received.
+	// issue went to, whether their run started, and the brief it reads. The
+	// run gets that brief from its claim; its handoff note stays the
+	// caller's own.
 	handoffNote := req.HandoffNote
-	if handoff != nil && handoffNote == "" {
-		handoffNote = h.workflowHandoffNote(r.Context(), issue, handoff)
-	}
 	trigger, willRun := h.IssueService.WillEnqueueRun(r.Context(),
 		service.IssueTriggerInput{
 			Issue:              issue,
@@ -4151,7 +4145,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		"prev_duplicate_of_issue_id": liveDuplicateMark(prevIssue.Status, prevIssue.DuplicateOfIssueID),
 	}
 	if handoff != nil {
-		updatedPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, handoffNote, willRun)
+		updatedPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), willRun)
 	}
 	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, updatedPayload)
 	if attachmentsChanged {
@@ -4908,9 +4902,6 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		projectChanged := req.Updates.ProjectID != nil && uuidToString(prevIssue.ProjectID) != uuidToString(issue.ProjectID)
 
 		batchHandoffNote := req.Updates.HandoffNote
-		if handoff != nil && batchHandoffNote == "" {
-			batchHandoffNote = h.workflowHandoffNote(r.Context(), issue, handoff)
-		}
 		trigger, willRun := h.IssueService.WillEnqueueRun(r.Context(),
 			service.IssueTriggerInput{
 				Issue:              issue,
@@ -4933,7 +4924,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			"prev_duplicate_of_issue_id": liveDuplicateMark(prevIssue.Status, prevIssue.DuplicateOfIssueID),
 		}
 		if handoff != nil {
-			batchPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, batchHandoffNote, willRun)
+			batchPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), willRun)
 		}
 		h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, batchPayload)
 

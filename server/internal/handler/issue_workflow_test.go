@@ -15,6 +15,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // Project workflow tests (MUL-7420).
@@ -352,19 +353,27 @@ func TestStatusChangeHandsOffOnDefaultProject(t *testing.T) {
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks = %d (%v), want one handoff run", len(tasks), err)
 	}
-	note := tasks[0].HandoffNote.String
+	// The run reads the step's brief from its claim; the handoff note is
+	// left for a caller's own instruction.
+	if tasks[0].HandoffNote.String != "" {
+		t.Fatalf("handoff note = %q, want none: the brief rides the claim", tasks[0].HandoffNote.String)
+	}
+	brief := claimBriefForTest(t, issueID, tasks[0])
 	for _, want := range []string{"Implement it and open a PR.", "This project's workflow — Default (Workflow handoff project)", "Step done      → multica issue status"} {
-		if !strings.Contains(note, want) {
-			t.Fatalf("handoff note is missing %q:\n%s", want, note)
+		if !strings.Contains(brief, want) {
+			t.Fatalf("claim brief is missing %q:\n%s", want, brief)
 		}
 	}
 
-	// A caller-written note replaces the step's brief.
+	// A caller-written note rides beside the step's brief.
 	back := dbfx.Issue(t, "explicit note", testutil.Cols{"project_id": projectID, "status": "todo"})
 	updateIssueForTest(t, back, map[string]any{"status": "in_progress", "handoff_note": "Only the login flow."}).Want(http.StatusOK)
 	backTasks, _ := testHandler.Queries.ListTasksByIssue(context.Background(), util.MustParseUUID(back))
 	if len(backTasks) != 1 || backTasks[0].HandoffNote.String != "Only the login flow." {
 		t.Fatalf("explicit handoff note was not kept: %+v", backTasks)
+	}
+	if !strings.Contains(claimBriefForTest(t, back, backTasks[0]), "Implement it and open a PR.") {
+		t.Fatal("a caller-written note must not cost the run its step brief")
 	}
 
 	// A project on a workflow without handoffs hands nothing off.
@@ -599,7 +608,7 @@ func TestCreateIssueHandsOffItsStartingColumn(t *testing.T) {
 		t.Fatalf("assignee = %v, want the todo column's agent", created.AssigneeID)
 	}
 	tasks, _ := testHandler.Queries.ListTasksByIssue(context.Background(), util.MustParseUUID(created.ID))
-	if len(tasks) != 1 || !strings.Contains(tasks[0].HandoffNote.String, "Triage it.") {
+	if len(tasks) != 1 || !strings.Contains(claimBriefForTest(t, created.ID, tasks[0]), "Triage it.") {
 		t.Fatalf("create did not start the column's run with its brief: %+v", tasks)
 	}
 
@@ -650,34 +659,55 @@ func TestClaimCarriesProjectWorkflow(t *testing.T) {
 	quietProject := createWorkflowTestProject(t, "Workflow quiet project")
 	quiet := dbfx.Issue(t, "no handoffs", testutil.Cols{"project_id": quietProject, "status": "todo"})
 	quietIssue, _ := testHandler.Queries.GetIssue(context.Background(), util.MustParseUUID(quiet))
-	if testHandler.claimProjectWorkflow(context.Background(), quietIssue) != nil {
+	if testHandler.claimProjectWorkflow(context.Background(), quietIssue, nil) != nil {
 		t.Fatal("a Default project without handoffs must not carry a workflow")
 	}
 
 	projectID := deliveryProject(t, "Workflow claim project", agentID)
-	issueID := dbfx.Issue(t, "claim context", testutil.Cols{"project_id": projectID, "status": "in_progress"})
+	issueID := dbfx.Issue(t, "claim context", testutil.Cols{
+		"project_id": projectID, "status": "in_progress", "assignee_type": "agent", "assignee_id": agentID,
+	})
 
-	issue, err := testHandler.Queries.GetIssue(context.Background(), util.MustParseUUID(issueID))
-	if err != nil {
-		t.Fatalf("load issue: %v", err)
+	// The assignee's run gets the step's instructions and its commands.
+	brief := claimBriefForTest(t, issueID, db.AgentTaskQueue{AgentID: util.MustParseUUID(agentID)})
+	for _, want := range []string{
+		"This project's workflow — Default (Workflow claim project)",
+		"Implement it and open a PR.",
+		"   ← current",
+		"Step done      → multica issue status",
+	} {
+		if !strings.Contains(brief, want) {
+			t.Fatalf("assignee brief is missing %q:\n%s", want, brief)
+		}
 	}
-	got := testHandler.claimProjectWorkflow(context.Background(), issue)
-	if got == nil || got.CurrentStatusKey != "in_progress" || len(got.Steps) != 7 {
-		t.Fatalf("claim workflow = %+v", got)
-	}
-	current := got.Steps[2]
-	if current.Handler == "" || current.Handler == "agent" || current.Instructions == "" || current.NextStatusKey != "in_review" {
-		t.Fatalf("current step = %+v, want a named handler, its instructions and the next column", current)
-	}
-	if got.Steps[3].Instructions != "" {
-		t.Fatal("only the current step's instructions ride the claim")
+
+	// Any other agent on the issue — mentioned in a comment, say — gets the
+	// statuses and is told to leave them to the assignee.
+	other := claimBriefForTest(t, issueID, db.AgentTaskQueue{AgentID: util.MustParseUUID(dbfx.Agent(t, "Workflow observer", handlerTestRuntimeID(t)))})
+	if !strings.Contains(other, "You are not its assignee") || strings.Contains(other, "Step done") || strings.Contains(other, "Implement it and open a PR.") {
+		t.Fatalf("observer brief must leave the step to its assignee:\n%s", other)
 	}
 
 	plain := dbfx.Issue(t, "no workflow", testutil.Cols{"status": "todo"})
 	plainIssue, _ := testHandler.Queries.GetIssue(context.Background(), util.MustParseUUID(plain))
-	if testHandler.claimProjectWorkflow(context.Background(), plainIssue) != nil {
+	if testHandler.claimProjectWorkflow(context.Background(), plainIssue, nil) != nil {
 		t.Fatal("an issue outside a project must not carry a workflow")
 	}
+}
+
+// claimBriefForTest renders the workflow brief a claim of task would carry
+// for the issue as it is now.
+func claimBriefForTest(t *testing.T, issueID string, task db.AgentTaskQueue) string {
+	t.Helper()
+	issue, err := testHandler.Queries.GetIssue(context.Background(), util.MustParseUUID(issueID))
+	if err != nil {
+		t.Fatalf("load issue: %v", err)
+	}
+	got := testHandler.claimProjectWorkflow(context.Background(), issue, &task)
+	if got == nil {
+		t.Fatalf("claim of %s carries no workflow", issueID)
+	}
+	return got.Brief
 }
 
 func TestPreviewWorkflowHandoffNamesHandlerRunsAndBrief(t *testing.T) {
@@ -733,6 +763,35 @@ func TestPreviewIssueWorkflowBriefUsesTheDraft(t *testing.T) {
 	preview(map[string]any{"status_key": "no_such_column"}).Want(http.StatusBadRequest)
 }
 
+func TestPreviewIssueWorkflowBriefRejectsMemberOutsideWorkspace(t *testing.T) {
+	seedTestCatalog(t)
+	projectID := createWorkflowTestProject(t, "Workflow brief member project")
+	workflowID := projectWorkflowID(t, projectID)
+	preview := func(userID string) *testutil.Response {
+		body := map[string]any{"status_key": "in_review", "handler": map[string]any{"type": "member", "id": userID}}
+		req := withURLParam(workflowRequest("POST", "/api/issue-workflows/"+workflowID+"/brief", body), "id", workflowID)
+		return testutil.Call(t, testHandler.PreviewIssueWorkflowBrief, req)
+	}
+
+	const outsiderName = "Workflow Brief Outsider"
+	outsiderID := dbfx.User(t, outsiderName, fmt.Sprintf("brief-outsider-%d@example.com", time.Now().UnixNano()))
+	resp := preview(outsiderID).Want(http.StatusBadRequest)
+	if strings.Contains(resp.Body.String(), outsiderName) {
+		t.Fatalf("preview leaked the name of a user outside the workspace: %s", resp.Body.String())
+	}
+
+	const memberName = "Workflow Brief Member"
+	memberID := dbfx.User(t, memberName, fmt.Sprintf("brief-member-%d@example.com", time.Now().UnixNano()))
+	dbfx.Member(t, testWorkspaceID, memberID, "member")
+	var got struct {
+		Brief string `json:"brief"`
+	}
+	preview(memberID).Want(http.StatusOK).JSON(&got)
+	if !strings.Contains(got.Brief, memberName) {
+		t.Fatalf("brief does not name the workspace member:\n%s", got.Brief)
+	}
+}
+
 // agentUpdateIssue changes an issue as the agent running taskID, the way a
 // task token reaches the handler.
 func agentUpdateIssue(t *testing.T, issueID, agentID, taskID string, body map[string]any) *testutil.Response {
@@ -771,11 +830,13 @@ func TestSameAgentNextStepQueuesARun(t *testing.T) {
 
 	agentUpdateIssue(t, issueID, agentID, taskID, map[string]any{"status": "in_review"}).Want(http.StatusOK)
 	var queued int
-	var note string
-	dbfx.QueryRow(t, `SELECT count(*), COALESCE(max(handoff_note), '') FROM agent_task_queue
-		WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'`, issueID, agentID).Scan(&queued, &note)
-	if queued != 1 || !strings.Contains(note, "Review your own PR.") {
-		t.Fatalf("queued runs for the next step = %d (note %q), want one with the step's brief", queued, note)
+	dbfx.QueryRow(t, `SELECT count(*) FROM agent_task_queue
+		WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'`, issueID, agentID).Scan(&queued)
+	if queued != 1 {
+		t.Fatalf("queued runs for the next step = %d, want one", queued)
+	}
+	if brief := claimBriefForTest(t, issueID, db.AgentTaskQueue{AgentID: util.MustParseUUID(agentID)}); !strings.Contains(brief, "Review your own PR.") {
+		t.Fatalf("the next step's run would not read its instructions:\n%s", brief)
 	}
 }
 

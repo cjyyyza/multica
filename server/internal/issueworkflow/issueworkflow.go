@@ -614,41 +614,67 @@ type BriefInput struct {
 	// HandlerName describes who a step hands off to, e.g. "Sentinel" or
 	// "Lin (project lead)". Empty means the step does not hand off.
 	HandlerName func(step Step) string
+	// Observer renders the brief for an agent working on the issue without
+	// being its assignee — mentioned in a comment, say: the statuses, and to
+	// leave the status to AssigneeName. The zero value is the assignee's
+	// brief, with the step's instructions and the commands that finish it.
+	Observer bool
+	// AssigneeName names the issue's assignee in an observer's brief; empty
+	// means unassigned.
+	AssigneeName string
 }
 
-// Brief renders the handoff note an agent receives when an
-// issue enters a step that hands off to it. The runtime brief's built-in
-// status rules (for example in_review on delivery) name statuses this project
-// may not use, so the note spells out the workflow's own statuses and the
-// exact commands for the next move.
+// Brief renders what an agent reads about the issue's project workflow: the
+// workflow's statuses, who each step hands off to, and — for the assignee —
+// the current step's instructions and the commands for the next move. The
+// runtime brief's built-in status rules (for example in_review on delivery)
+// name statuses this project may not use, so this text replaces them.
+//
+// It is the one rendering of a workflow for agents: the claim carries it into
+// every run's prompt, and the editor and timeline show the same text. Names
+// and instructions are user-authored, so control characters are dropped and
+// names are kept to one line.
 func Brief(in BriefInput) string {
 	step, _ := in.Workflow.Step(in.StatusKey)
 	name := func(key string) string {
 		if in.StatusName == nil {
 			return key
 		}
-		if n := in.StatusName(key); n != "" {
+		if n := briefLine(in.StatusName(key)); n != "" {
 			return n
 		}
 		return key
 	}
 	var b strings.Builder
-	title := in.Workflow.Name
-	if in.ProjectName != "" {
-		title = fmt.Sprintf("%s (%s)", title, in.ProjectName)
+	title := briefLine(in.Workflow.Name)
+	if project := briefLine(in.ProjectName); project != "" {
+		title = fmt.Sprintf("%s (%s)", title, project)
 	}
 	fmt.Fprintf(&b, "This project's workflow — %s\n", title)
-	fmt.Fprintf(&b, "You are handling the %q step of %s. You were assigned because the issue entered this status.\n",
-		name(in.StatusKey), in.IssueIdentifier)
-	if step.Instructions != "" {
-		b.WriteString("\nStep instructions:\n")
-		for _, line := range strings.Split(step.Instructions, "\n") {
-			b.WriteString("> ")
-			b.WriteString(line)
-			b.WriteString("\n")
+	b.WriteString("This workflow replaces the status rules in your runtime instructions: use only the status keys below")
+	if !in.Workflow.Has(issuestatus.InReview) {
+		fmt.Fprintf(&b, ", never `%s`", issuestatus.InReview)
+	}
+	b.WriteString(".\n")
+	if in.Observer {
+		assignee := "is unassigned"
+		if who := briefLine(in.AssigneeName); who != "" {
+			assignee = "is assigned to " + who
+		}
+		fmt.Fprintf(&b, "%s is at the %q step and %s. You are not its assignee: leave the status to them unless you are explicitly asked to change it.\n",
+			in.IssueIdentifier, name(in.StatusKey), assignee)
+	} else {
+		fmt.Fprintf(&b, "You are handling the %q step of %s.\n", name(in.StatusKey), in.IssueIdentifier)
+		if instructions := briefText(step.Instructions); instructions != "" {
+			b.WriteString("\nStep instructions:\n")
+			for _, line := range strings.Split(instructions, "\n") {
+				b.WriteString("> ")
+				b.WriteString(line)
+				b.WriteString("\n")
+			}
 		}
 	}
-	b.WriteString("\nStatuses in this workflow (use only these keys):\n")
+	b.WriteString("\nStatuses in this workflow:\n")
 	for _, s := range in.Workflow.Steps {
 		// Built-in statuses have no stored name; their key reads on its own.
 		fmt.Fprintf(&b, "- `%s`", s.StatusKey)
@@ -656,7 +682,7 @@ func Brief(in BriefInput) string {
 			fmt.Fprintf(&b, " %s", n)
 		}
 		if in.HandlerName != nil {
-			if who := in.HandlerName(s); who != "" {
+			if who := briefLine(in.HandlerName(s)); who != "" {
 				fmt.Fprintf(&b, " — hands off to %s", who)
 			}
 		}
@@ -665,7 +691,11 @@ func Brief(in BriefInput) string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("\nHand off by changing the status:\n")
+	if in.Observer {
+		b.WriteString("\nMoving the issue into a step that hands off reassigns it to that step's handler and starts their run.\n")
+		return b.String()
+	}
+	b.WriteString("\nHand off by changing the status — moving the issue into a step that hands off reassigns it to that step's handler and starts their run:\n")
 	if next := in.Workflow.NextStatus(in.StatusKey); next != "" {
 		fmt.Fprintf(&b, "Step done      → multica issue status %s %s\n", in.IssueIdentifier, next)
 	}
@@ -680,7 +710,29 @@ func Brief(in BriefInput) string {
 	default:
 		b.WriteString("Can't proceed  → this workflow has no blocked status: comment why and leave the status as it is\n")
 	}
-	b.WriteString("The system does not advance the status when your run ends. Where your runtime instructions name a status this list does not include, use the commands above instead.\n")
-	b.WriteString("Each step's handler gets a run when the issue enters that step, so do not use `multica issue wakeup` to watch this issue's status, assignee or runs; use wakeups only to wait for a time or for something outside this issue.\n")
+	b.WriteString("The system does not advance the status when your run ends.\n")
+	b.WriteString("When the issue enters a step you handle, you get a run automatically — do not add a wakeup for that. Wakeups for anything else (a time, a PR, another issue, a step someone else handles) are fine.\n")
 	return b.String()
+}
+
+// briefLine keeps a user-authored name on one line of a brief: line breaks
+// and tabs become single spaces and other control characters are dropped.
+func briefLine(s string) string {
+	return strings.Join(strings.Fields(briefText(s)), " ")
+}
+
+// briefText drops the control characters of user-authored text, keeping its
+// line breaks, so it cannot reshape the brief around it.
+func briefText(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == '\u2028' || r == '\u2029' {
+			return -1
+		}
+		return r
+	}, s)
+	return strings.TrimSpace(s)
 }
