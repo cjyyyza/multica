@@ -48,9 +48,15 @@ dist/build-<stamp>/
 3. **Server image**: build the all-in-one image (`Dockerfile.allinone` — API
    server, migrations, and web frontend in one container) in WSL:
    `docker build -f Dockerfile.allinone -t ghcr.io/cjyyyza/multica-allinone:<tag>
-   --build-arg VERSION=<v> --build-arg COMMIT=<short> .`
-4. **docker-server package**: `docker save` the all-in-one image and
-   `pgvector/pgvector:pg17` into `multica-images-linux-amd64.tar.gz`. The
+   --build-arg VERSION=<v> --build-arg COMMIT=<short>
+   --build-arg NEXT_PUBLIC_APP_VERSION=<v> .`
+   `NEXT_PUBLIC_APP_VERSION` is baked into the web bundle at build time; without
+   it the UI reports `dev` instead of the release version.
+4. **docker-server package**: copy `docker/init-env.sh` into `docker-server/`.
+   The script generates `JWT_SECRET`, `POSTGRES_PASSWORD`, and
+   `MULTICA_LARK_SECRET_KEY` (32 random bytes, base64) so a fresh deployment
+   has the Lark/Feishu channel enabled. Then `docker save` the all-in-one image
+   and `pgvector/pgvector:pg17` into `multica-images-linux-amd64.tar.gz`. The
    packaged `docker-compose.yml` is `docker-compose.selfhost.allinone.yml` with
    the image reference pinned to the built tag; the packaged `.env.example`
    sets `MULTICA_IMAGE_TAG` to that tag and adds `MULTICA_ALLINONE_IMAGE`.
