@@ -75,14 +75,24 @@ Run each and record `passed` / `not run` honestly in `BUILD-RECEIPT.json`:
   scratch project with host ports moved (e.g. 18080/13000) and PostgreSQL
   published via an override for test access; count applied migrations from the
   container log and record as `recordedMigrations`. Tear down with `down -v`.
-- `webLoginAndIssueWriteSmoke` — Playwright spec (see
-  `dist/build-20261017-090904/artifact-smoke.spec.ts`): `/health` must report
-  the built short commit, the login page must render without page errors, and
-  `TestApiClient` must log in and create an issue through the built images.
-  Copy the spec into `e2e/` (rewriting the fixtures import to `./fixtures`) to
-  run it, and export `MULTICA_DEV_VERIFICATION_CODE=` empty so the DB code is
-  used rather than any dev-environment override. Screenshot the login page as
-  `web-login.png`.
+- `webLoginAndIssueWriteSmoke` — `e2e/build-artifact-smoke.spec.ts`: `/health`
+  must report the built short commit, the login page must render without page
+  errors, and `TestApiClient` must log in and create an issue through the built
+  images. Run it against the scratch deployment:
+
+  ```sh
+  PLAYWRIGHT_BASE_URL=http://localhost:13000 \
+  NEXT_PUBLIC_API_URL=http://localhost:18080 \
+  DATABASE_URL=postgres://multica:<generated POSTGRES_PASSWORD>@localhost:15432/multica?sslmode=disable \
+  MULTICA_DEV_VERIFICATION_CODE= \
+  ARTIFACT_SMOKE_COMMIT=<short commit> \
+  ARTIFACT_SMOKE_SCREENSHOT="$PWD/dist/build-<stamp>/web-login.png" \
+  pnpm exec playwright test e2e/build-artifact-smoke.spec.ts
+  ```
+
+  `MULTICA_DEV_VERIFICATION_CODE=` empty so the DB code is used rather than any
+  dev-environment override. The spec's defaults match the current build; override
+  the commit and screenshot path for a different one.
 - `dockerOfflineLoad` — untag the local images, `docker load -i` the packaged
   tar, confirm the restored IDs (`docker-load.log`, `docker-images-inspect.json`).
   Never untag `pgvector/pgvector` while the dev environment's postgres
