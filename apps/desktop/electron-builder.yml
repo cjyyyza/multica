@@ -26,6 +26,10 @@ files:
   # because the first arch writes into dist/ mid-run before the second is
   # packaged.
   - "!dist/**"
+  # Alternate output dirs (for example a rebuild that cannot clean dist/ while
+  # another process holds it open) must never be repacked either; a sibling
+  # dist-* directory doubled app.asar in the v0.6.5 build.
+  - "!dist-*/**"
 # Ship the license and attribution notices inside the packaged app, so the
 # NOTICE obligations travel with the installer rather than only the git repo.
 extraResources:
