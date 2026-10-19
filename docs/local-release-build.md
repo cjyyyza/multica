@@ -44,7 +44,9 @@ dist/build-<stamp>/
    and bundles its own copy (`server/bin/windows-amd64/`).
 2. **Desktop client**: `cd apps/desktop && CSC_IDENTITY_AUTO_DISCOVERY=false
    node scripts/package.mjs --win --x64 --publish never`. Version derives from
-   `git describe`; output in `apps/desktop/dist/`.
+   `git describe`; output in `apps/desktop/dist/`. Copy the installer, its
+   `.blockmap`, and the tracked `apps/desktop/desktop.json.example` into
+   `windows-client/`; the app's compiled default matches that example.
 3. **Server image**: build the all-in-one image (`Dockerfile.allinone` — API
    server, migrations, and web frontend in one container) in WSL:
    `docker build -f Dockerfile.allinone -t ghcr.io/cjyyyza/multica-allinone:<tag>
