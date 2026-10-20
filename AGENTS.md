@@ -8,6 +8,12 @@ Multica is a task management platform where people and agents collaborate on iss
 - For naming, translations, or Chinese UI/docs copy, read [conventions.mdx](apps/docs/content/docs/developers/conventions.mdx) and [conventions.zh.mdx](apps/docs/content/docs/developers/conventions.zh.mdx).
 - Maintain shared rules here and mobile-specific rules in the mobile file. `CLAUDE.md` files only import them. Update instructions in the same change that alters the referenced workflow or boundary; do not add incident timelines, dependency version lists, or duplicate rules.
 
+## Design Decision Records
+
+Before changing architecture, shared contracts, persistence or protocols, search the relevant decisions under `.agents/notes/` and verify them against current code. Follow the portable [Agent Notes protocol](.agents/agent-notes.md); use the shared `agent-notes` skill when available.
+
+Keep read-only reviews read-only. Update an existing decision when only its implementation facts change; create notes only for lasting rationale that code, tests and existing docs do not explain. Routine local edits need no note. Check note changes with `python3 .agents/check_agent_notes.py` (`py -3` on Windows).
+
 ## Sharing Rules and Package Boundaries
 
 | Location | Responsibility and constraints |

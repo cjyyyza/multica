@@ -1,0 +1,12 @@
+{
+  "protocol": "agent-notes/v1",
+  "notes_root": ".agents/notes",
+  "layout": "lifecycle",
+  "legacy_files": [],
+  "current_sources": ["AGENTS.md", "CONTRIBUTING.md"],
+  "project_rules": [
+    "Use current code and the existing developer documentation to verify implementation facts.",
+    "CLAUDE.md continues to forward to AGENTS.md; do not duplicate the policy.",
+    "A note or local check does not establish Docker deployment or real POPO/P4/client acceptance."
+  ]
+}
