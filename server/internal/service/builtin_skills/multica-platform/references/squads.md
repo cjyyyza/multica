@@ -47,10 +47,18 @@ Squad commands:
 ```bash
 multica squad list --output json
 multica squad get <squad-id> --output json
-multica squad create --name <name> --leader <agent-name-or-id> --output json
+multica squad create --name <name> --leader <agent-name-or-id> --max-concurrent-tasks 4 --output json
 multica squad update <squad-id> --instructions "<leader coordination policy>" --output json
+multica squad update <squad-id> --max-concurrent-tasks 6 --output json
+multica squad update <squad-id> --max-concurrent-tasks 0 --output json   # clear to unlimited
 multica squad delete <squad-id>
 ```
+
+`--max-concurrent-tasks` is validated as 1–50 before the request is sent. On
+create, omit the flag (or pass 0) to leave the squad unlimited: the CLI omits
+the field rather than sending 0, which the API rejects. On update, the flag is
+Changed-gated: omit it to keep the stored value, pass 1–50 to set a cap, and
+pass 0 to clear it back to unlimited.
 
 Member commands:
 
@@ -109,8 +117,19 @@ unbounded pull.
 - `leader_id` — agent ID of the squad leader; the runtime target for
   squad-routed work.
 - `creator_id` — creator of the squad.
+- `max_concurrent_tasks` — optional 1–50 cap on the squad's concurrency; `null`
+  means unlimited. The cap bounds BOTH dimensions at once: at most that many
+  tasks running across all squad agents, and at most that many distinct issues
+  holding an in-flight chain slot. A queued delegation handoff
+  (leader → worker gap) keeps its issue's slot, so a second issue cannot start
+  while the first is between turns. Scheduling ownership comes from the task's
+  stamped `squad_id`, its autopilot run, or its quick-create context. Delegated
+  work inherits that ownership through the delegation chain before falling back
+  to issue assignment, so a guest squad keeps its own cap even on another
+  squad's issue and across repeated worker → worker mentions. Claim checks,
+  capacity counts, and peer wakeups use the same resolution rule.
 - `archived_at` / `archived_by` — archive metadata. Archived squads are rejected
-  by assignment/autopilot routing paths.
+  by assignment/autopilot routing paths and no longer impose a concurrency cap.
 - `member_count` — list response count of squad members.
 - `member_preview` — list response preview of squad members.
 
@@ -250,6 +269,11 @@ These actions can trigger agent work or mutate durable state:
 - `instructions` are leader briefing content, not automatic member prompts.
 - `description` has no proven runtime prompt effect.
 - `role` is roster context, not automatic scheduling.
+- `max_concurrent_tasks` is not a per-agent limit and not a simple task count:
+  it caps the squad as a whole, on concurrent running tasks AND on distinct
+  issues holding an in-flight chain slot.
+- Archiving a squad does not leave its cap in force; tasks that were parked
+  behind it become claimable immediately.
 - Backlog assignment does not immediately start work.
 - First leader dispatch is not parent completion — parent stays `in_progress`
   until the leader later confirms the overall goal and moves it to `in_review`.

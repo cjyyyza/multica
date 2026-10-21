@@ -74,6 +74,7 @@ export function CreateSquadModal({ onClose }: { onClose: () => void }) {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [leaderId, setLeaderId] = useState("");
   const [selectedMembers, setSelectedMembers] = useState<SelectedMember[]>([]);
+  const [maxConcurrentTasks, setMaxConcurrentTasks] = useState("");
   const [creating, setCreating] = useState(false);
 
   // Promoting an agent to leader must actually drop it from selectedMembers,
@@ -90,8 +91,17 @@ export function CreateSquadModal({ onClose }: { onClose: () => void }) {
 
   const canSubmit = !!name.trim() && !!leaderId && !creating;
 
+  const parsedMaxConcurrentTasks = maxConcurrentTasks.trim()
+    ? Number(maxConcurrentTasks.trim())
+    : null;
+  const maxConcurrentTasksInvalid =
+    parsedMaxConcurrentTasks !== null &&
+    (!Number.isInteger(parsedMaxConcurrentTasks) ||
+      parsedMaxConcurrentTasks < 1 ||
+      parsedMaxConcurrentTasks > 50);
+
   const handleSubmit = async () => {
-    if (!canSubmit) return;
+    if (!canSubmit || maxConcurrentTasksInvalid) return;
     setCreating(true);
     try {
       const squad = await api.createSquad({
@@ -99,6 +109,7 @@ export function CreateSquadModal({ onClose }: { onClose: () => void }) {
         description: description.trim() || undefined,
         leader_id: leaderId,
         avatar_url: avatarUrl ?? undefined,
+        max_concurrent_tasks: parsedMaxConcurrentTasks,
       });
       queryClient.invalidateQueries({ queryKey: workspaceKeys.squads(wsId) });
 
@@ -209,6 +220,33 @@ export function CreateSquadModal({ onClose }: { onClose: () => void }) {
               onChange={handleLeaderChange}
             />
 
+            <div>
+              <Label className="text-caption text-muted-foreground">
+                {t(($) => $.create_squad.max_concurrent_tasks_label)}{" "}
+                <span className="text-muted-foreground">
+                  {t(($) => $.create_squad.members_optional)}
+                </span>
+              </Label>
+              <p className="mt-0.5 mb-1.5 text-caption text-muted-foreground">
+                {t(($) => $.create_squad.max_concurrent_tasks_hint)}
+              </p>
+              <Input
+                type="number"
+                min={1}
+                max={50}
+                inputMode="numeric"
+                value={maxConcurrentTasks}
+                onChange={(e) => setMaxConcurrentTasks(e.target.value)}
+                placeholder={t(($) => $.create_squad.max_concurrent_tasks_placeholder)}
+                aria-invalid={maxConcurrentTasksInvalid}
+              />
+              {maxConcurrentTasksInvalid && (
+                <p className="mt-1 text-caption text-destructive">
+                  {t(($) => $.create_squad.max_concurrent_tasks_invalid)}
+                </p>
+              )}
+            </div>
+
             <AdditionalMembersPicker
               agents={activeAgents}
               members={wsMembers}
@@ -227,7 +265,7 @@ export function CreateSquadModal({ onClose }: { onClose: () => void }) {
           <Button variant="ghost" onClick={onClose}>
             {t(($) => $.create_squad.cancel)}
           </Button>
-          <Button onClick={() => void handleSubmit()} disabled={!canSubmit}>
+          <Button onClick={() => void handleSubmit()} disabled={!canSubmit || maxConcurrentTasksInvalid}>
             {creating
               ? t(($) => $.create_squad.submitting)
               : t(($) => $.create_squad.submit)}

@@ -308,6 +308,30 @@ describe("CreateSquadModal", () => {
     expect(screen.getByTestId("char-counter").textContent).toMatch(/^12\//);
   });
 
+  it("sends an optional max_concurrent_tasks when one is entered", async () => {
+    renderModal();
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. Frontend Team/i), {
+      target: { value: "Capped Squad" },
+    });
+    fireEvent.click(firstMatch("MineAgentOne"));
+    fireEvent.change(screen.getByPlaceholderText("Unlimited"), {
+      target: { value: "4" },
+    });
+
+    mocks.createSquad.mockResolvedValue(makeSquad({ id: "sq-4", leader_id: "agent-mine-1" }));
+    fireEvent.click(getSubmitButton());
+
+    await waitFor(() => {
+      expect(mocks.createSquad).toHaveBeenCalledWith({
+        name: "Capped Squad",
+        description: undefined,
+        leader_id: "agent-mine-1",
+        avatar_url: undefined,
+        max_concurrent_tasks: 4,
+      });
+    });
+  });
+
   it("renders the leader picker with 'My Agents' before 'Workspace Agents'", () => {
     renderModal();
     // The leader group headers come from the LeaderPicker — agent name "MineAgentOne"
@@ -391,6 +415,7 @@ describe("CreateSquadModal", () => {
         description: undefined,
         leader_id: "agent-mine-1",
         avatar_url: undefined,
+        max_concurrent_tasks: null,
       });
     });
     expect(mocks.addSquadMember).not.toHaveBeenCalled();
@@ -414,6 +439,7 @@ describe("CreateSquadModal", () => {
         description: undefined,
         leader_id: "agent-mine-1",
         avatar_url: undefined,
+        max_concurrent_tasks: null,
       });
     });
     await waitFor(() => {

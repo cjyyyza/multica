@@ -4185,6 +4185,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if willRun {
 		h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, handoffNote)
 	}
+	if assigneeChanged {
+		h.notifySquadAssigneeFreed(prevIssue)
+	}
 
 	// Sub-issue rules on the parent (the child_done system rule and sub-issue
 	// conditions): the write recorded the change; process it now. A failure
@@ -4194,6 +4197,45 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// notifySquadAssigneeFreed wakes runtimes parked behind the concurrency cap of
+// the squads these issues just left. The cap also counts distinct in-flight
+// issues, so moving an issue to another assignee frees a slot for a peer runtime
+// whose empty-claim cache would otherwise keep it idle until the TTL expires.
+// It also wakes the moved issues' own queued tasks: a task can resolve its old
+// squad solely through issue.assignee_id, which the write already replaced, so
+// the issue-targeted lookup is the only way to still find it. Batch callers pass
+// every changed issue at once; each squad and runtime is notified once.
+func (h *Handler) notifySquadAssigneeFreed(prevIssues ...db.Issue) {
+	if h.TaskService == nil {
+		return
+	}
+	notifiedSquads := make(map[[16]byte]struct{}, len(prevIssues))
+	notifiedIssues := make(map[[16]byte]struct{}, len(prevIssues))
+	squadIDs := make([]pgtype.UUID, 0, len(prevIssues))
+	issueIDs := make([]pgtype.UUID, 0, len(prevIssues))
+	for _, prevIssue := range prevIssues {
+		if !prevIssue.AssigneeType.Valid || prevIssue.AssigneeType.String != "squad" {
+			continue
+		}
+		if !prevIssue.AssigneeID.Valid {
+			continue
+		}
+		if _, ok := notifiedSquads[prevIssue.AssigneeID.Bytes]; !ok {
+			notifiedSquads[prevIssue.AssigneeID.Bytes] = struct{}{}
+			squadIDs = append(squadIDs, prevIssue.AssigneeID)
+		}
+		if !prevIssue.ID.Valid {
+			continue
+		}
+		if _, ok := notifiedIssues[prevIssue.ID.Bytes]; ok {
+			continue
+		}
+		notifiedIssues[prevIssue.ID.Bytes] = struct{}{}
+		issueIDs = append(issueIDs, prevIssue.ID)
+	}
+	h.TaskService.NotifySquadIssuesMoved(squadIDs, issueIDs)
 }
 
 // validateAssigneePair verifies the (assignee_type, assignee_id) pair refers
@@ -4697,6 +4739,9 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 	// once after the loop against the final state (MUL-4155), not per child
 	// against a mid-batch snapshot.
 	var changedParents []pgtype.UUID
+	// Issues reassigned away from a squad this batch. Notified once per squad
+	// after the loop so a large batch does not repeat the same capacity lookup.
+	var freedSquadIssues []db.Issue
 	for _, issueID := range req.IssueIDs {
 		issueUUID, err := util.ParseUUID(issueID)
 		if err != nil {
@@ -4940,6 +4985,9 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		if willRun {
 			h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, batchHandoffNote)
 		}
+		if assigneeChanged {
+			freedSquadIssues = append(freedSquadIssues, prevIssue)
+		}
 
 		// No status change — not even → cancelled — cancels active tasks here,
 		// mirroring UpdateIssue (MUL-4465). See that handler for the rationale.
@@ -4955,6 +5003,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 	// parent, so each parent is evaluated once against the batch's final
 	// state, independent of issue_ids order (MUL-4155). A failure is retried
 	// by the sweep.
+	h.notifySquadAssigneeFreed(freedSquadIssues...)
 	h.processChildEvents(r.Context(), changedParents...)
 
 	slog.Info("batch update issues", append(logger.RequestAttrs(r), "count", updated)...)

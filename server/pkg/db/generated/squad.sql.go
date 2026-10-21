@@ -46,7 +46,7 @@ func (q *Queries) AddSquadMember(ctx context.Context, arg AddSquadMemberParams) 
 const archiveSquad = `-- name: ArchiveSquad :one
 UPDATE squad SET archived_at = now(), archived_by = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions
+RETURNING id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions, max_concurrent_tasks
 `
 
 type ArchiveSquadParams struct {
@@ -70,8 +70,70 @@ func (q *Queries) ArchiveSquad(ctx context.Context, arg ArchiveSquadParams) (Squ
 		&i.ArchivedBy,
 		&i.AvatarUrl,
 		&i.Instructions,
+		&i.MaxConcurrentTasks,
 	)
 	return i, err
+}
+
+const countActiveTasksForEffectiveSquad = `-- name: CountActiveTasksForEffectiveSquad :one
+SELECT count(*)
+FROM agent_task_queue t
+WHERE t.status IN ('dispatched', 'running', 'waiting_local_directory')
+  AND task_effective_squad_id(t.id) = $1::uuid
+`
+
+// Active execution capacity for one squad, using the same effective-squad
+// resolution as ClaimAgentTask. The caller holds the squad claim advisory lock
+// and compares this count with the squad's max_concurrent_tasks.
+func (q *Queries) CountActiveTasksForEffectiveSquad(ctx context.Context, squadID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveTasksForEffectiveSquad, squadID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countOtherInFlightIssuesForEffectiveSquad = `-- name: CountOtherInFlightIssuesForEffectiveSquad :one
+SELECT count(DISTINCT in_flight.issue_id)
+FROM agent_task_queue in_flight
+WHERE in_flight.issue_id IS NOT NULL
+  AND in_flight.issue_id <> $1::uuid
+  AND task_effective_squad_id(in_flight.id) = $2::uuid
+  AND (
+    in_flight.status IN ('dispatched', 'running', 'waiting_local_directory')
+    OR (
+      in_flight.status = 'queued'
+      AND in_flight.delegated_from_task_id IS NOT NULL
+      AND (
+        $3::uuid IS NULL
+        OR (in_flight.created_at, in_flight.id) < ($4::timestamptz, $5::uuid)
+      )
+    )
+  )
+`
+
+type CountOtherInFlightIssuesForEffectiveSquadParams struct {
+	IssueID             pgtype.UUID        `json:"issue_id"`
+	SquadID             pgtype.UUID        `json:"squad_id"`
+	DelegatedFromTaskID pgtype.UUID        `json:"delegated_from_task_id"`
+	TaskCreatedAt       pgtype.Timestamptz `json:"task_created_at"`
+	TaskID              pgtype.UUID        `json:"task_id"`
+}
+
+// Counts distinct other issues holding an in-flight chain slot for the squad
+// ahead of the claimed task. Evaluated under LockSquadClaimAdvisory so two
+// concurrent claims across different issues cannot both slip past Gate 2 when
+// an earlier issue is in its queued handoff gap.
+func (q *Queries) CountOtherInFlightIssuesForEffectiveSquad(ctx context.Context, arg CountOtherInFlightIssuesForEffectiveSquadParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countOtherInFlightIssuesForEffectiveSquad,
+		arg.IssueID,
+		arg.SquadID,
+		arg.DelegatedFromTaskID,
+		arg.TaskCreatedAt,
+		arg.TaskID,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const countSquadMembers = `-- name: CountSquadMembers :one
@@ -86,18 +148,19 @@ func (q *Queries) CountSquadMembers(ctx context.Context, squadID pgtype.UUID) (i
 }
 
 const createSquad = `-- name: CreateSquad :one
-INSERT INTO squad (workspace_id, name, description, leader_id, creator_id, avatar_url)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions
+INSERT INTO squad (workspace_id, name, description, leader_id, creator_id, avatar_url, max_concurrent_tasks)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions, max_concurrent_tasks
 `
 
 type CreateSquadParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	LeaderID    pgtype.UUID `json:"leader_id"`
-	CreatorID   pgtype.UUID `json:"creator_id"`
-	AvatarUrl   pgtype.Text `json:"avatar_url"`
+	WorkspaceID        pgtype.UUID `json:"workspace_id"`
+	Name               string      `json:"name"`
+	Description        string      `json:"description"`
+	LeaderID           pgtype.UUID `json:"leader_id"`
+	CreatorID          pgtype.UUID `json:"creator_id"`
+	AvatarUrl          pgtype.Text `json:"avatar_url"`
+	MaxConcurrentTasks pgtype.Int4 `json:"max_concurrent_tasks"`
 }
 
 func (q *Queries) CreateSquad(ctx context.Context, arg CreateSquadParams) (Squad, error) {
@@ -108,6 +171,7 @@ func (q *Queries) CreateSquad(ctx context.Context, arg CreateSquadParams) (Squad
 		arg.LeaderID,
 		arg.CreatorID,
 		arg.AvatarUrl,
+		arg.MaxConcurrentTasks,
 	)
 	var i Squad
 	err := row.Scan(
@@ -123,12 +187,39 @@ func (q *Queries) CreateSquad(ctx context.Context, arg CreateSquadParams) (Squad
 		&i.ArchivedBy,
 		&i.AvatarUrl,
 		&i.Instructions,
+		&i.MaxConcurrentTasks,
 	)
 	return i, err
 }
 
+const getEffectiveSquadConcurrencyForTask = `-- name: GetEffectiveSquadConcurrencyForTask :one
+SELECT
+    s.id AS squad_id,
+    s.max_concurrent_tasks
+FROM agent_task_queue t
+JOIN squad s ON s.id = task_effective_squad_id(t.id)
+WHERE t.id = $1
+  AND s.archived_at IS NULL
+`
+
+type GetEffectiveSquadConcurrencyForTaskRow struct {
+	SquadID            pgtype.UUID `json:"squad_id"`
+	MaxConcurrentTasks pgtype.Int4 `json:"max_concurrent_tasks"`
+}
+
+// Resolve scheduling ownership without changing squad_id's leader-role meaning.
+// Explicit task, autopilot and quick-create ownership follows delegation before
+// falling back to issue assignment. All gates and wakeups share this resolver.
+// Unlimited squads still return an ID so claims serialize with cap changes.
+func (q *Queries) GetEffectiveSquadConcurrencyForTask(ctx context.Context, taskID pgtype.UUID) (GetEffectiveSquadConcurrencyForTaskRow, error) {
+	row := q.db.QueryRow(ctx, getEffectiveSquadConcurrencyForTask, taskID)
+	var i GetEffectiveSquadConcurrencyForTaskRow
+	err := row.Scan(&i.SquadID, &i.MaxConcurrentTasks)
+	return i, err
+}
+
 const getSquad = `-- name: GetSquad :one
-SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad WHERE id = $1
+SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions, max_concurrent_tasks FROM squad WHERE id = $1
 `
 
 func (q *Queries) GetSquad(ctx context.Context, id pgtype.UUID) (Squad, error) {
@@ -147,12 +238,13 @@ func (q *Queries) GetSquad(ctx context.Context, id pgtype.UUID) (Squad, error) {
 		&i.ArchivedBy,
 		&i.AvatarUrl,
 		&i.Instructions,
+		&i.MaxConcurrentTasks,
 	)
 	return i, err
 }
 
 const getSquadByAssignee = `-- name: GetSquadByAssignee :one
-SELECT s.id, s.workspace_id, s.name, s.description, s.leader_id, s.creator_id, s.created_at, s.updated_at, s.archived_at, s.archived_by, s.avatar_url, s.instructions FROM squad s WHERE s.id = $1 AND s.workspace_id = $2
+SELECT s.id, s.workspace_id, s.name, s.description, s.leader_id, s.creator_id, s.created_at, s.updated_at, s.archived_at, s.archived_by, s.avatar_url, s.instructions, s.max_concurrent_tasks FROM squad s WHERE s.id = $1 AND s.workspace_id = $2
 `
 
 type GetSquadByAssigneeParams struct {
@@ -177,12 +269,13 @@ func (q *Queries) GetSquadByAssignee(ctx context.Context, arg GetSquadByAssignee
 		&i.ArchivedBy,
 		&i.AvatarUrl,
 		&i.Instructions,
+		&i.MaxConcurrentTasks,
 	)
 	return i, err
 }
 
 const getSquadInWorkspace = `-- name: GetSquadInWorkspace :one
-SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad WHERE id = $1 AND workspace_id = $2
+SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions, max_concurrent_tasks FROM squad WHERE id = $1 AND workspace_id = $2
 `
 
 type GetSquadInWorkspaceParams struct {
@@ -206,6 +299,7 @@ func (q *Queries) GetSquadInWorkspace(ctx context.Context, arg GetSquadInWorkspa
 		&i.ArchivedBy,
 		&i.AvatarUrl,
 		&i.Instructions,
+		&i.MaxConcurrentTasks,
 	)
 	return i, err
 }
@@ -231,7 +325,7 @@ func (q *Queries) IsSquadMember(ctx context.Context, arg IsSquadMemberParams) (b
 }
 
 const listAllSquads = `-- name: ListAllSquads :many
-SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad WHERE workspace_id = $1 ORDER BY created_at ASC
+SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions, max_concurrent_tasks FROM squad WHERE workspace_id = $1 ORDER BY created_at ASC
 `
 
 func (q *Queries) ListAllSquads(ctx context.Context, workspaceID pgtype.UUID) ([]Squad, error) {
@@ -256,10 +350,116 @@ func (q *Queries) ListAllSquads(ctx context.Context, workspaceID pgtype.UUID) ([
 			&i.ArchivedBy,
 			&i.AvatarUrl,
 			&i.Instructions,
+			&i.MaxConcurrentTasks,
 		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listQueuedSquadTaskRuntimes = `-- name: ListQueuedSquadTaskRuntimes :many
+WITH finished AS (
+    SELECT task_effective_squad_id(t.id) AS squad_id
+    FROM agent_task_queue t
+    WHERE t.id = $2
+)
+SELECT DISTINCT queued.runtime_id
+FROM agent_task_queue queued
+CROSS JOIN finished
+WHERE finished.squad_id IS NOT NULL
+  AND queued.status = 'queued'
+  AND queued.runtime_id IS NOT NULL
+  AND queued.runtime_id IS DISTINCT FROM $1::uuid
+  AND task_effective_squad_id(queued.id) = finished.squad_id
+`
+
+type ListQueuedSquadTaskRuntimesParams struct {
+	FinishedRuntimeID pgtype.UUID `json:"finished_runtime_id"`
+	TaskID            pgtype.UUID `json:"task_id"`
+}
+
+// Runtimes holding queued work for the finished task's squad. A squad limit
+// couples agents across machines, so finishing one task must wake peers on
+// other runtimes instead of leaving them parked behind their empty-claim cache.
+func (q *Queries) ListQueuedSquadTaskRuntimes(ctx context.Context, arg ListQueuedSquadTaskRuntimesParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listQueuedSquadTaskRuntimes, arg.FinishedRuntimeID, arg.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var runtime_id pgtype.UUID
+		if err := rows.Scan(&runtime_id); err != nil {
+			return nil, err
+		}
+		items = append(items, runtime_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listQueuedTaskRuntimesByIssues = `-- name: ListQueuedTaskRuntimesByIssues :many
+SELECT DISTINCT queued.runtime_id
+FROM agent_task_queue queued
+WHERE queued.status = 'queued'
+  AND queued.runtime_id IS NOT NULL
+  AND queued.issue_id = ANY($1::uuid[])
+`
+
+// Runtimes holding queued work on specific issues. Used when issues move off
+// a squad so tasks that only resolved their squad via issue.assignee_id are
+// woken even after the issue row has been updated.
+func (q *Queries) ListQueuedTaskRuntimesByIssues(ctx context.Context, issueIds []pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listQueuedTaskRuntimesByIssues, issueIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var runtime_id pgtype.UUID
+		if err := rows.Scan(&runtime_id); err != nil {
+			return nil, err
+		}
+		items = append(items, runtime_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listQueuedTaskRuntimesBySquad = `-- name: ListQueuedTaskRuntimesBySquad :many
+SELECT DISTINCT queued.runtime_id
+FROM agent_task_queue queued
+WHERE queued.status = 'queued'
+  AND queued.runtime_id IS NOT NULL
+  AND task_effective_squad_id(queued.id) = $1::uuid
+`
+
+// Runtimes holding queued work for a specific squad. Used when a squad's
+// concurrency cap is raised or cleared so blocked runtimes wake immediately.
+func (q *Queries) ListQueuedTaskRuntimesBySquad(ctx context.Context, squadID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listQueuedTaskRuntimesBySquad, squadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var runtime_id pgtype.UUID
+		if err := rows.Scan(&runtime_id); err != nil {
+			return nil, err
+		}
+		items = append(items, runtime_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -482,7 +682,7 @@ func (q *Queries) ListSquadMembers(ctx context.Context, squadID pgtype.UUID) ([]
 }
 
 const listSquads = `-- name: ListSquads :many
-SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad WHERE workspace_id = $1 AND archived_at IS NULL ORDER BY created_at ASC
+SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions, max_concurrent_tasks FROM squad WHERE workspace_id = $1 AND archived_at IS NULL ORDER BY created_at ASC
 `
 
 func (q *Queries) ListSquads(ctx context.Context, workspaceID pgtype.UUID) ([]Squad, error) {
@@ -507,6 +707,7 @@ func (q *Queries) ListSquads(ctx context.Context, workspaceID pgtype.UUID) ([]Sq
 			&i.ArchivedBy,
 			&i.AvatarUrl,
 			&i.Instructions,
+			&i.MaxConcurrentTasks,
 		); err != nil {
 			return nil, err
 		}
@@ -519,7 +720,7 @@ func (q *Queries) ListSquads(ctx context.Context, workspaceID pgtype.UUID) ([]Sq
 }
 
 const listSquadsByMember = `-- name: ListSquadsByMember :many
-SELECT s.id, s.workspace_id, s.name, s.description, s.leader_id, s.creator_id, s.created_at, s.updated_at, s.archived_at, s.archived_by, s.avatar_url, s.instructions FROM squad s
+SELECT s.id, s.workspace_id, s.name, s.description, s.leader_id, s.creator_id, s.created_at, s.updated_at, s.archived_at, s.archived_by, s.avatar_url, s.instructions, s.max_concurrent_tasks FROM squad s
 JOIN squad_member sm ON sm.squad_id = s.id
 WHERE s.workspace_id = $1 AND sm.member_type = $2 AND sm.member_id = $3
 ORDER BY s.created_at ASC
@@ -554,6 +755,7 @@ func (q *Queries) ListSquadsByMember(ctx context.Context, arg ListSquadsByMember
 			&i.ArchivedBy,
 			&i.AvatarUrl,
 			&i.Instructions,
+			&i.MaxConcurrentTasks,
 		); err != nil {
 			return nil, err
 		}
@@ -565,8 +767,21 @@ func (q *Queries) ListSquadsByMember(ctx context.Context, arg ListSquadsByMember
 	return items, nil
 }
 
+const lockSquadClaimAdvisory = `-- name: LockSquadClaimAdvisory :exec
+SELECT pg_advisory_xact_lock(hashtext('squad_claim:' || ($1::uuid)::text))
+`
+
+// Serializes squad capacity checks for claims. An advisory lock is used
+// instead of locking the squad row so claimTask's agent -> squad access order
+// can never invert LockSquadForUpdate's squad -> agent order.
+// Cap writers acquire any needed agent rows before taking this lock too.
+func (q *Queries) LockSquadClaimAdvisory(ctx context.Context, squadID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, lockSquadClaimAdvisory, squadID)
+	return err
+}
+
 const lockSquadForAutopilotAssignment = `-- name: LockSquadForAutopilotAssignment :one
-SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad
+SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions, max_concurrent_tasks FROM squad
 WHERE id = $1 AND workspace_id = $2
 FOR SHARE
 `
@@ -596,12 +811,13 @@ func (q *Queries) LockSquadForAutopilotAssignment(ctx context.Context, arg LockS
 		&i.ArchivedBy,
 		&i.AvatarUrl,
 		&i.Instructions,
+		&i.MaxConcurrentTasks,
 	)
 	return i, err
 }
 
 const lockSquadForUpdate = `-- name: LockSquadForUpdate :one
-SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad
+SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions, max_concurrent_tasks FROM squad
 WHERE id = $1 AND workspace_id = $2
 FOR UPDATE
 `
@@ -630,6 +846,7 @@ func (q *Queries) LockSquadForUpdate(ctx context.Context, arg LockSquadForUpdate
 		&i.ArchivedBy,
 		&i.AvatarUrl,
 		&i.Instructions,
+		&i.MaxConcurrentTasks,
 	)
 	return i, err
 }
@@ -700,20 +917,29 @@ UPDATE squad SET
     leader_id = COALESCE($4, leader_id),
     avatar_url = COALESCE($5, avatar_url),
     instructions = COALESCE($6, instructions),
+    max_concurrent_tasks = CASE
+        WHEN $7::boolean THEN NULL
+        ELSE COALESCE($8, max_concurrent_tasks)
+    END,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions
+RETURNING id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions, max_concurrent_tasks
 `
 
 type UpdateSquadParams struct {
-	ID           pgtype.UUID `json:"id"`
-	Name         pgtype.Text `json:"name"`
-	Description  pgtype.Text `json:"description"`
-	LeaderID     pgtype.UUID `json:"leader_id"`
-	AvatarUrl    pgtype.Text `json:"avatar_url"`
-	Instructions pgtype.Text `json:"instructions"`
+	ID                      pgtype.UUID `json:"id"`
+	Name                    pgtype.Text `json:"name"`
+	Description             pgtype.Text `json:"description"`
+	LeaderID                pgtype.UUID `json:"leader_id"`
+	AvatarUrl               pgtype.Text `json:"avatar_url"`
+	Instructions            pgtype.Text `json:"instructions"`
+	ClearMaxConcurrentTasks bool        `json:"clear_max_concurrent_tasks"`
+	MaxConcurrentTasks      pgtype.Int4 `json:"max_concurrent_tasks"`
 }
 
+// max_concurrent_tasks is tri-state: clear_max_concurrent_tasks wins and resets
+// the limit to NULL (unlimited); otherwise a provided value sets it and an
+// omitted value leaves the current limit untouched.
 func (q *Queries) UpdateSquad(ctx context.Context, arg UpdateSquadParams) (Squad, error) {
 	row := q.db.QueryRow(ctx, updateSquad,
 		arg.ID,
@@ -722,6 +948,8 @@ func (q *Queries) UpdateSquad(ctx context.Context, arg UpdateSquadParams) (Squad
 		arg.LeaderID,
 		arg.AvatarUrl,
 		arg.Instructions,
+		arg.ClearMaxConcurrentTasks,
+		arg.MaxConcurrentTasks,
 	)
 	var i Squad
 	err := row.Scan(
@@ -737,6 +965,7 @@ func (q *Queries) UpdateSquad(ctx context.Context, arg UpdateSquadParams) (Squad
 		&i.ArchivedBy,
 		&i.AvatarUrl,
 		&i.Instructions,
+		&i.MaxConcurrentTasks,
 	)
 	return i, err
 }

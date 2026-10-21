@@ -99,7 +99,15 @@
     "members": "Members",
     "created_by": "Created by",
     "created": "Created",
-    "updated": "Updated"
+    "updated": "Updated",
+    "max_concurrent_tasks": "Max concurrent tasks"
+  },
+  "max_concurrent_tasks_dialog": {
+    "title": "Set max concurrent tasks",
+    "placeholder": "Unlimited",
+    "hint": "Limits how many issues the squad works in flight and how many tasks run at once across its agents (1-50). Leave empty for no limit.",
+    "invalid": "Enter a whole number between 1 and 50.",
+    "unlimited": "Unlimited"
   },
   "toasts": {
     "member_added": "Member added",
@@ -111,7 +119,8 @@
     "leader_updated": "Leader updated",
     "leader_update_failed": "Failed to update leader",
     "archive_failed": "Failed to archive squad",
-    "instructions_saved": "Instructions saved"
+    "instructions_saved": "Instructions saved",
+    "max_concurrent_tasks_saved": "Concurrency limit saved"
   },
   "profile_card": {
     "unavailable": "Squad unavailable",

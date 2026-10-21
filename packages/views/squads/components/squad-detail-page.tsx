@@ -62,6 +62,7 @@ import { toast } from "sonner";
 import type { Squad, SquadMember, SquadMemberStatus, SquadMemberStatusValue, Agent, MemberWithUser } from "@multica/core/types";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
+import { MaxConcurrentTasksEditor } from "./max-concurrent-tasks-editor";
 
 export function SquadDetailPage() {
   const { t } = useT("squads");
@@ -119,7 +120,7 @@ export function SquadDetailPage() {
   const [confirmArchive, setConfirmArchive] = useState(false);
 
   const updateSquadMut = useMutation({
-    mutationFn: (data: { name?: string; description?: string; instructions?: string; avatar_url?: string; leader_id?: string }) => api.updateSquad(squadId, data),
+    mutationFn: (data: { name?: string; description?: string; instructions?: string; avatar_url?: string; leader_id?: string; max_concurrent_tasks?: number | null }) => api.updateSquad(squadId, data),
     onSuccess: () => {
       refetchSquad();
       refetchMembers();
@@ -232,6 +233,10 @@ export function SquadDetailPage() {
           onUploadAvatar={(url) => updateSquadMut.mutateAsync({ avatar_url: url })}
           onRename={async (next) => { await updateSquadMut.mutateAsync({ name: next.trim() }); }}
           onUpdateDescription={async (next) => { await updateSquadMut.mutateAsync({ description: next }); }}
+          onUpdateMaxConcurrentTasks={async (next) => {
+            await updateSquadMut.mutateAsync({ max_concurrent_tasks: next });
+            toast.success(t(($) => $.toasts.max_concurrent_tasks_saved));
+          }}
         />
 
         <SquadOverviewPane
@@ -720,6 +725,7 @@ function SquadDetailInspector({
   onUploadAvatar,
   onRename,
   onUpdateDescription,
+  onUpdateMaxConcurrentTasks,
 }: {
   squad: Squad;
   memberCount: number;
@@ -732,6 +738,7 @@ function SquadDetailInspector({
   onUploadAvatar: (url: string) => Promise<unknown>;
   onRename: (next: string) => Promise<void>;
   onUpdateDescription: (next: string) => Promise<void>;
+  onUpdateMaxConcurrentTasks: (next: number | null) => Promise<void>;
 }) {
   const { t } = useT("squads");
   const timeAgo = useTimeAgo();
@@ -808,6 +815,20 @@ function SquadDetailInspector({
           </InspectorRow>
           <InspectorRow label={t(($) => $.details.updated)}>
             <span className="text-muted-foreground">{timeAgo(squad.updated_at)}</span>
+          </InspectorRow>
+          <InspectorRow label={t(($) => $.details.max_concurrent_tasks)}>
+            {canManage ? (
+              <MaxConcurrentTasksEditor
+                value={squad.max_concurrent_tasks ?? null}
+                onSave={onUpdateMaxConcurrentTasks}
+              />
+            ) : (
+              <span className="text-muted-foreground tabular-nums">
+                {squad.max_concurrent_tasks != null
+                  ? squad.max_concurrent_tasks
+                  : t(($) => $.max_concurrent_tasks_dialog.unlimited)}
+              </span>
+            )}
           </InspectorRow>
         </div>
       </div>
