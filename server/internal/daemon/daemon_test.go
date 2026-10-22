@@ -32,7 +32,7 @@ import (
 
 func createDaemonTestRepo(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testenv.ShortTempDir(t)
 	for _, args := range [][]string{
 		{"init", dir},
 		{"-C", dir, "commit", "--allow-empty", "-m", "initial"},
@@ -2209,6 +2209,11 @@ func TestHermesPreparedSessionReachability(t *testing.T) {
 	testenv.SetHome(t, home)
 	t.Setenv("USERPROFILE", home)
 	sourceHome, root := t.TempDir(), t.TempDir()
+	probe := filepath.Join(sourceHome, "symlink-target")
+	if err := os.WriteFile(probe, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	createTestSymlink(t, probe, filepath.Join(sourceHome, "symlink-probe"))
 	taskNumber := 0
 	prepare := func(t *testing.T, agentID, issueID string) *execenv.Environment {
 		t.Helper()

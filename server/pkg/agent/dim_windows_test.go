@@ -34,6 +34,7 @@ func TestDimBackendUsesOwnedProcessTree(t *testing.T) {
 	b, err := New("dim", Config{
 		ExecutablePath: fakeDim,
 		Logger:         logger,
+		Env:            map[string]string{"DESCENDANT_PID_FILE": pidPath},
 	})
 	if err != nil {
 		t.Fatalf("New(dim): %v", err)

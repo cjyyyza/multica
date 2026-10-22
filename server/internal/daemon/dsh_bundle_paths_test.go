@@ -238,13 +238,12 @@ func TestDshPluginPathDirs_FindsBothLayouts(t *testing.T) {
 
 	t.Run("generational", func(t *testing.T) {
 		home := t.TempDir()
+		testenv.SetHome(t, home)
 		appData := dshDesktopAppDataDir(runtime.GOOS, os.Getenv, home)
 		if appData == "" {
 			t.Skip("no app-data location on this platform")
 		}
 		want := mkShim(t, filepath.Join(appData, "runtime-commands", "generations", "gen-1"), time.Now())
-		testenv.SetHome(t, home)
-		t.Setenv("USERPROFILE", home)
 
 		got := dshPluginPathDirs()
 		if len(got) == 0 || got[0] != filepath.Join(want, "bin") {
@@ -254,6 +253,7 @@ func TestDshPluginPathDirs_FindsBothLayouts(t *testing.T) {
 
 	t.Run("flat", func(t *testing.T) {
 		home := t.TempDir()
+		testenv.SetHome(t, home)
 		appData := dshDesktopAppDataDir(runtime.GOOS, os.Getenv, home)
 		if appData == "" {
 			t.Skip("no app-data location on this platform")
@@ -262,8 +262,6 @@ func TestDshPluginPathDirs_FindsBothLayouts(t *testing.T) {
 		if err := os.MkdirAll(flat, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		testenv.SetHome(t, home)
-		t.Setenv("USERPROFILE", home)
 
 		got := dshPluginPathDirs()
 		if len(got) != 1 || got[0] != flat {

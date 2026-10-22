@@ -225,6 +225,7 @@ func TestCursorResultWithoutMessageConsumer(t *testing.T) {
 }
 
 func TestCursorBackgroundLifecycle(t *testing.T) {
+	requireCursorBackgroundGroupSignals(t)
 	if runtime.GOOS != "windows" && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("background process ownership is unavailable on this platform")
 	}

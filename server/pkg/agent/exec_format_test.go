@@ -57,7 +57,7 @@ func TestExplainExecErrorNamesPackageAndRepairCommand(t *testing.T) {
 		execPath,
 		"@anthropic-ai/claude-code",
 		"postinstall",
-		"cd '" + root + "' && node install.cjs",
+		expectedRepairCommand(root, "node install.cjs"),
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("diagnosis is missing %q:\n%s", want, msg)
@@ -75,7 +75,7 @@ func TestExplainExecErrorReadsRepairCommandFromManifest(t *testing.T) {
 	if !strings.Contains(msg, "opencode-ai") {
 		t.Errorf("diagnosis should name the owning package:\n%s", msg)
 	}
-	if want := "cd '" + root + "' && node ./postinstall.mjs"; !strings.Contains(msg, want) {
+	if want := expectedRepairCommand(root, "node ./postinstall.mjs"); !strings.Contains(msg, want) {
 		t.Errorf("diagnosis is missing %q:\n%s", want, msg)
 	}
 }
@@ -134,12 +134,17 @@ func TestExplainExecErrorQuotesPathsForTheShell(t *testing.T) {
 
 	msg := ExplainExecError(enoexecError(filepath.Join(binDir, "cli"))).Error()
 
-	// A single quote inside the path has to be closed, escaped, and reopened,
-	// or the command the user pastes runs against a different directory.
-	want := `cd '` + strings.ReplaceAll(root, "'", `'\''`) + `' && node install.cjs`
+	want := expectedRepairCommand(root, "node install.cjs")
 	if !strings.Contains(msg, want) {
 		t.Errorf("repair command is not shell-safe, want %q in:\n%s", want, msg)
 	}
+}
+
+func expectedRepairCommand(root, script string) string {
+	if runtime.GOOS == "windows" {
+		return "Set-Location '" + strings.ReplaceAll(root, "'", "''") + "'; " + script
+	}
+	return "cd '" + strings.ReplaceAll(root, "'", `'\''`) + "' && " + script
 }
 
 func TestExplainExecErrorPassesThroughOtherErrors(t *testing.T) {
