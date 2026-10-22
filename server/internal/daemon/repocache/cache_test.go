@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 func testLogger() *slog.Logger {
@@ -394,6 +396,13 @@ func TestBareDirName(t *testing.T) {
 		{"ssh://git@gitlab.example.com:22/relisty/app.git", "gitlab.example.com%3A22+relisty+app.git"},
 		{"ssh://git@gitlab.example.com:22/listbridge/app.git", "gitlab.example.com%3A22+listbridge+app.git"},
 		{"my-repo", "my-repo.git"},
+		{`C:\repos\example.git`, "c+repos+example.git"},
+		{"file:///C:/repos/example.git", "file%3A+C%3A+repos+example.git"},
+		{"file:///C:/repos/a%2Bb.git", "file%3A+C%3A+repos+a%2Bb.git"},
+		{"file:///C:/repos/a/b.git", "file%3A+C%3A+repos+a+b.git"},
+		{"file:///C:/repos/C%253A.git", "file%3A+C%3A+repos+C%253A.git"},
+		{"file:///server/share/repo.git", "file%3A+server+share+repo.git"},
+		{"file://server/share/repo.git", "file%3Aserver+share+repo.git"},
 		{"", "repo.git"},
 	}
 	for _, tt := range tests {
@@ -484,7 +493,7 @@ func TestIsBareRepo(t *testing.T) {
 // createTestRepo creates a local git repo with an initial commit and returns its path.
 func createTestRepo(t *testing.T) string {
 	t.Helper()
-	return createTestRepoAt(t, t.TempDir())
+	return createTestRepoAt(t, testenv.ShortTempDir(t))
 }
 
 // createTestRepoAt initializes a git repo at the given directory (which
@@ -557,7 +566,7 @@ func TestSyncKeepsDistinctCachesForSegmentBoundaryColliders(t *testing.T) {
 	// URLs). The path pair ".../foo/bar-baz" and ".../foo-bar/baz" would
 	// flatten to the same string under slashes-to-dashes — that's the
 	// class of collision we want to rule out.
-	parent := t.TempDir()
+	parent := testenv.ShortTempDir(t)
 	srcA := filepath.Join(parent, "foo", "bar-baz")
 	srcB := filepath.Join(parent, "foo-bar", "baz")
 	if err := os.MkdirAll(srcA, 0o755); err != nil {
@@ -862,7 +871,7 @@ func TestCreateIsolatedCheckoutImportsFetchedTipFromShallowCache(t *testing.T) {
 		t.Fatalf("set origin HEAD: %v", err)
 	}
 
-	originURL := "file://" + originPath
+	originURL := testRepositoryFileURL(originPath)
 	if out, err := runGitCombinedOutput("clone", "--bare", "--depth=1", originURL, cachePath); err != nil {
 		t.Fatalf("create shallow cache: %s: %v", strings.TrimSpace(string(out)), err)
 	}
@@ -1638,7 +1647,7 @@ func TestEnsureRemoteTrackingLayoutMigratesLegacyCache(t *testing.T) {
 	}
 	// Wipe any refs/remotes/origin/* that may have been populated by the initial clone.
 	_ = exec.Command("git", "-C", barePath, "update-ref", "-d", "refs/remotes/origin/HEAD").Run()
-	if err := exec.Command("sh", "-c", "rm -rf '"+filepath.Join(barePath, "refs", "remotes")+"'").Run(); err != nil {
+	if err := os.RemoveAll(filepath.Join(barePath, "refs", "remotes")); err != nil {
 		t.Fatalf("wipe refs/remotes: %v", err)
 	}
 
@@ -1777,7 +1786,7 @@ func TestGetRemoteDefaultBranchFallsBackToBareHead(t *testing.T) {
 	// post-migration backfill fetch failed":
 	//   - bare HEAD still points at refs/heads/<default>
 	//   - refs/remotes/origin/* is empty
-	if err := exec.Command("sh", "-c", "rm -rf '"+filepath.Join(barePath, "refs", "remotes")+"'").Run(); err != nil {
+	if err := os.RemoveAll(filepath.Join(barePath, "refs", "remotes")); err != nil {
 		t.Fatalf("wipe refs/remotes: %v", err)
 	}
 

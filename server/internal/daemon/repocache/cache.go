@@ -532,9 +532,18 @@ func (c *Cache) Fetch(barePath string) error {
 //	git@gitlab.example.com-22:org/repo.git       -> gitlab.example.com-22+org+repo.git
 //	my-repo                                      -> my-repo.git (bare name fallback)
 func bareDirName(rawURL string) string {
+	rawURL = strings.ReplaceAll(rawURL, "\\", "/")
 	rawURL = strings.TrimRight(rawURL, "/")
 
 	host, path := splitHostAndPath(rawURL)
+	if u, err := url.Parse(rawURL); err == nil && u.Scheme == "file" {
+		// File URLs may contain a Windows drive or literal '+' and '%' in a
+		// local directory name. Preserve segment boundaries and escape these
+		// characters before using them as a cache directory name.
+		host, path = "file:"+u.Host, strings.TrimPrefix(u.Path, "/")
+		escape := strings.NewReplacer("%", "%25", "+", "%2B", ":", "%3A", "\\", "%5C")
+		path = escape.Replace(path)
+	}
 	host = strings.ToLower(strings.TrimSpace(host))
 	// Encode ':' as '%3A' so host:port is lossless. A naive ':'->'-' rewrite
 	// would collapse `gitlab.example.com:22` onto a literal hostname
@@ -2249,6 +2258,7 @@ func excludeFromGitContext(ctx context.Context, worktreePath, pattern string) er
 // repoNameFromURL extracts a short directory name from a git remote URL.
 // e.g. "https://github.com/org/my-repo.git" → "my-repo"
 func repoNameFromURL(url string) string {
+	url = strings.ReplaceAll(url, "\\", "/")
 	url = strings.TrimRight(url, "/")
 	url = strings.TrimSuffix(url, ".git")
 
