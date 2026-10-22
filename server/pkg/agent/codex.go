@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/redact"
 )
 
@@ -666,19 +667,13 @@ func ensureCodexMcpConfig(configPath string, mcpConfig json.RawMessage, logger *
 	}
 
 	if updated == existing {
+		if managed {
+			return util.RestrictPrivateFile(configPath)
+		}
 		return nil
 	}
-	if err := os.WriteFile(configPath, []byte(updated), 0o600); err != nil {
+	if err := util.WritePrivateFile(configPath, []byte(updated)); err != nil {
 		return fmt.Errorf("write config.toml: %w", err)
-	}
-	// os.WriteFile applies the mode only when creating a new file; if the
-	// per-task config.toml was already on disk at 0o644 (the default mode
-	// used by execenv.copyFile when seeding from ~/.codex/config.toml),
-	// the secret-bearing values we just wrote would inherit that wider
-	// mode. Chmod unconditionally to keep the secret in the daemon
-	// owner's lane regardless of the prior mode.
-	if err := os.Chmod(configPath, 0o600); err != nil {
-		return fmt.Errorf("chmod config.toml to 0600: %w", err)
 	}
 	if logger != nil {
 		logger.Debug("codex: wrote managed mcp_servers block to config.toml",

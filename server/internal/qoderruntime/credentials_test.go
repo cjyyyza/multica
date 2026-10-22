@@ -13,6 +13,7 @@ func TestRepositoryCredentialRequestOnly(t *testing.T) {
 	if err := os.WriteFile(file, []byte("test-secret\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	makeRepositoryTokenPrivate(t, file)
 	b := &Bridge{cfg: Config{GitHubTokenFiles: map[string]string{"https://github.com/Owner/Repo.git": file}}}
 	r := &run{Resources: []map[string]any{{"type": "github_repository", "url": "https://github.com/owner/repo", "checkout": map[string]string{"type": "branch", "name": "main"}}}}
 	request, err := b.sessionResources(r.Resources)
@@ -57,14 +58,10 @@ func TestRepositoryCredentialValidation(t *testing.T) {
 		if err := os.WriteFile(file, []byte(secret), 0600); err != nil {
 			t.Fatal(err)
 		}
+		makeRepositoryTokenPrivate(t, file)
 		if _, err := readRepositoryToken(file); err == nil {
 			t.Fatal("accepted invalid credential")
 		}
 	}
-	if err := os.Chmod(file, 0644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readRepositoryToken(file); err == nil {
-		t.Fatal("accepted public file")
-	}
+	assertPublicRepositoryTokenRejected(t, file)
 }

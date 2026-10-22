@@ -71,8 +71,8 @@ func readRepositoryToken(path string) (string, error) {
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
-		return "", fmt.Errorf("GitHub credential file must be a private regular file (0600)")
+	if err != nil || !info.Mode().IsRegular() || !privateCredentialPermissions(f, info) {
+		return "", fmt.Errorf("GitHub credential file must be a private regular file")
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, 16385))
 	if err != nil || len(raw) > 16384 {

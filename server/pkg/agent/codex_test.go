@@ -5186,7 +5186,7 @@ func TestEnsureCodexMcpConfigWritesManagedBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if mode := fi.Mode().Perm(); mode != 0o600 {
+	if mode := fi.Mode().Perm(); runtime.GOOS != "windows" && mode != 0o600 {
 		t.Fatalf("expected mode 0o600 for secret-bearing config, got %o", mode)
 	}
 }
