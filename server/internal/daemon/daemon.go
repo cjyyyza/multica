@@ -7402,7 +7402,7 @@ func (d *Daemon) lockReusablePriorEnvRoot(ctx context.Context, task Task, localA
 	// later step is checked against THIS, not against whatever the name
 	// resolves to next: a path string cannot tell "the directory I validated"
 	// apart from "a different directory now answering to that name".
-	validatedInfo, err := os.Stat(priorRoot)
+	validatedInfo, err := util.StatFileIdentity(priorRoot)
 	if err != nil {
 		return nil, "", nil, false, nil
 	}
@@ -7453,7 +7453,7 @@ func (d *Daemon) lockReusablePriorEnvRoot(ctx context.Context, task Task, localA
 	}
 	// ...and the directory we are about to hand to Reuse has to be that same
 	// one, so the object locked and the object used cannot diverge.
-	currentInfo, err := os.Stat(filepath.Dir(recheckedWorkDir))
+	currentInfo, err := util.StatFileIdentity(filepath.Dir(recheckedWorkDir))
 	if err != nil || !os.SameFile(lockedInfo, currentInfo) {
 		d.logger.Info("prior workdir changed identity while being claimed; starting a fresh environment",
 			"task", task.ID)
@@ -8290,7 +8290,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// into "declined and started clean". See lockReusablePriorEnvRoot for
 		// what remains uncovered.
 		if env != nil && lockedPriorInfo != nil {
-			usedInfo, statErr := os.Stat(filepath.Dir(env.WorkDir))
+			usedInfo, statErr := util.StatFileIdentity(filepath.Dir(env.WorkDir))
 			if statErr != nil || !os.SameFile(lockedPriorInfo, usedInfo) {
 				// No "task" field here: taskLog already carries the full id.
 				taskLog.Info("reused workdir is not the directory that was claimed; starting a fresh environment")
