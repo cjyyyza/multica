@@ -37,13 +37,24 @@ func stubDetectVersionFromPath(t *testing.T) {
 	t.Cleanup(func() { detectAgentVersion = orig })
 }
 
-// writeExecStub writes a runnable no-op executable at path, creating parents.
+// writeExecStub writes an executable fixture for path validation, without launching it.
 func writeExecStub(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir for stub %s: %v", path, err)
 	}
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	content := []byte("#!/bin/sh\nexit 0\n")
+	if runtime.GOOS == "windows" {
+		binary, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err = os.ReadFile(binary)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(path, content, 0o755); err != nil {
 		t.Fatalf("write stub %s: %v", path, err)
 	}
 }
@@ -336,6 +347,9 @@ func TestResolveAgentEntry_NoCommandNoHeal(t *testing.T) {
 func TestRefreshHealedVersion_KeepsHealedPairCurrentAfterInPlaceUpgrade(t *testing.T) {
 	d := newSelfHealTestDaemon()
 	healed := filepath.Join(t.TempDir(), "codex")
+	if runtime.GOOS == "windows" {
+		healed += ".exe"
+	}
 	writeExecStub(t, healed)
 
 	// State after a self-heal: path + the version detected for it at that time.

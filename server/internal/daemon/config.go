@@ -979,6 +979,10 @@ func isExecutableFile(path string) bool {
 	if err != nil || info.IsDir() {
 		return false
 	}
+	if runtime.GOOS == "windows" {
+		_, err := exec.LookPath(path)
+		return err == nil
+	}
 	return info.Mode()&0o111 != 0
 }
 
