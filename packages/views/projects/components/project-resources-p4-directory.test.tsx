@@ -216,7 +216,7 @@ describe("ProjectResourcesSection — Perforce asks for a local directory first"
       { id: "p4-1", resource_type: "perforce_depot", resource_ref: { port: "p4:1666", depot: "//depot/game" } },
     ];
     renderWithI18n(<ProjectResourcesSection projectId="p1" />);
-    fireEvent.click(screen.getByTitle("Change how runs use this folder"));
+    fireEvent.click(screen.getByRole("button", { name: "Change how runs use this folder" }));
 
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).queryByText("Run in parallel, isolated")).toBeNull();
