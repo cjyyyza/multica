@@ -47,7 +47,9 @@ func (h *Handler) ChannelChatTitleInitialized(workspaceID, creatorID, sessionID 
 // GenerateChannelChatTitle reuses the existing LLM + CAS title path after the
 // shared engine has persisted its deterministic first-message fallback.
 func (h *Handler) GenerateChannelChatTitle(workspaceID, creatorID, sessionID pgtype.UUID, currentTitle, sourceText string) {
-	h.maybeGenerateChatTitleAsync(uuidToString(workspaceID), uuidToString(creatorID), sessionID, currentTitle, sourceText)
+	// Channel initialization does not stamp title_edited_at. A later manual
+	// rename does, and the CAS then misses.
+	h.maybeGenerateChatTitleAsync(uuidToString(workspaceID), uuidToString(creatorID), sessionID, currentTitle, pgtype.Timestamptz{}, sourceText)
 }
 
 // chatTitleSystemPrompt instructs the model to condense the opening of a
@@ -83,13 +85,13 @@ Rules:
 //   - Silent fallback: when the LLM layer is not configured (self-hosted with
 //     no key) or the call fails, we do nothing and leave the original
 //     first-message-derived title untouched — no error surfaces to the user.
-//   - No clobber: the update is a compare-and-swap against currentTitle, so a
-//     manual rename that lands during generation is never overwritten.
+//   - No clobber: the update compare-and-swaps the observed title and
+//     title_edited_at, so a manual rename that lands during generation is
+//     never overwritten, including one that keeps the same text.
 //
-// currentTitle is the session's title as observed at trigger time (the
-// default/original title). sourceText is the user's first message, which the
-// model condenses into a title.
-func (h *Handler) maybeGenerateChatTitleAsync(workspaceID, userID string, sessionID pgtype.UUID, currentTitle, sourceText string) {
+// currentTitle and titleEditedAt are the session values observed at trigger
+// time. sourceText is the user's first message, which the model condenses.
+func (h *Handler) maybeGenerateChatTitleAsync(workspaceID, userID string, sessionID pgtype.UUID, currentTitle string, titleEditedAt pgtype.Timestamptz, sourceText string) {
 	// Short-circuit before spawning a goroutine when the LLM layer is disabled
 	// (self-hosted without MULTICA_LLM_API_KEY / MULTICA_LLM_BASE_URL): the
 	// original title is kept as-is, exactly matching pre-feature behavior.
@@ -119,7 +121,7 @@ func (h *Handler) maybeGenerateChatTitleAsync(workspaceID, userID string, sessio
 		ctx, cancel := context.WithTimeout(context.Background(), chatTitleGenTimeout)
 		defer cancel()
 
-		updated, applied, err := h.generateChatSessionTitle(ctx, sessionID, currentTitle, sourceText)
+		updated, applied, err := h.generateChatSessionTitle(ctx, sessionID, currentTitle, titleEditedAt, sourceText)
 		if err != nil {
 			// Timeout, upstream 4xx/5xx, empty choices, etc. Log-and-forget:
 			// the send already succeeded and the original title stands.
@@ -158,7 +160,7 @@ func (h *Handler) maybeGenerateChatTitleAsync(workspaceID, userID string, sessio
 //   - (zero, false, err):    the LLM layer is disabled or the call failed, OR
 //     the CAS write hit a real DB error. Callers treat this as best-effort and
 //     keep the original title.
-func (h *Handler) generateChatSessionTitle(ctx context.Context, sessionID pgtype.UUID, currentTitle, sourceText string) (db.ChatSession, bool, error) {
+func (h *Handler) generateChatSessionTitle(ctx context.Context, sessionID pgtype.UUID, currentTitle string, titleEditedAt pgtype.Timestamptz, sourceText string) (db.ChatSession, bool, error) {
 	// DefaultModel() is used implicitly by GenerateText when model == "": a
 	// deployment configures MULTICA_LLM_DEFAULT_MODEL (or the built-in
 	// gpt-5.6-luna fallback) — no model is threaded through from the frontend.
@@ -175,14 +177,15 @@ func (h *Handler) generateChatSessionTitle(ctx context.Context, sessionID pgtype
 	}
 
 	updated, err := h.Queries.UpdateChatSessionTitleIfCurrent(ctx, db.UpdateChatSessionTitleIfCurrentParams{
-		ID:            sessionID,
-		ExpectedTitle: currentTitle,
-		NewTitle:      title,
+		ID:                    sessionID,
+		ExpectedTitle:         currentTitle,
+		ExpectedTitleEditedAt: titleEditedAt,
+		NewTitle:              title,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// Title changed since we observed currentTitle — a manual rename or
-			// a competing writer won. Do not clobber it.
+			// Title or title_edited_at changed since we observed them. A manual
+			// rename wins even when it keeps the same text.
 			return db.ChatSession{}, false, nil
 		}
 		return db.ChatSession{}, false, err

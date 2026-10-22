@@ -135,7 +135,7 @@ func TestChatTitle_GeneratesSemanticTitleWhenConfigured(t *testing.T) {
 	original := "帮我看下为什么登录之后一直在几个页面之间来回跳转根本进不去首页"
 	session := newChatTitleTestSession(t, original)
 
-	updated, applied, err := testHandler.generateChatSessionTitle(context.Background(), session.ID, session.Title, original)
+	updated, applied, err := testHandler.generateChatSessionTitle(context.Background(), session.ID, session.Title, session.TitleEditedAt, original)
 	if err != nil {
 		t.Fatalf("generateChatSessionTitle: unexpected error: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestChatTitle_FallsBackWhenLLMDisabled(t *testing.T) {
 	original := "please help debug my flaky test"
 	session := newChatTitleTestSession(t, original)
 
-	_, applied, err := testHandler.generateChatSessionTitle(context.Background(), session.ID, session.Title, original)
+	_, applied, err := testHandler.generateChatSessionTitle(context.Background(), session.ID, session.Title, session.TitleEditedAt, original)
 	if err != llm.ErrNotConfigured {
 		t.Fatalf("expected ErrNotConfigured, got %v", err)
 	}
@@ -176,7 +176,7 @@ func TestChatTitle_FallsBackWhenLLMDisabled(t *testing.T) {
 	}
 
 	// The async entry point must be a no-op (no panic, no change) when disabled.
-	testHandler.maybeGenerateChatTitleAsync(testWorkspaceID, testUserID, session.ID, session.Title, original)
+	testHandler.maybeGenerateChatTitleAsync(testWorkspaceID, testUserID, session.ID, session.Title, session.TitleEditedAt, original)
 	time.Sleep(50 * time.Millisecond)
 	if got := chatSessionTitleFromDB(t, session.ID); got != original {
 		t.Fatalf("DB title changed after disabled async call: %q", got)
@@ -194,7 +194,7 @@ func TestChatTitle_SilentFallbackOnUpstreamError(t *testing.T) {
 	original := "why does my query return duplicate rows"
 	session := newChatTitleTestSession(t, original)
 
-	_, applied, err := testHandler.generateChatSessionTitle(context.Background(), session.ID, session.Title, original)
+	_, applied, err := testHandler.generateChatSessionTitle(context.Background(), session.ID, session.Title, session.TitleEditedAt, original)
 	if err == nil {
 		t.Fatal("expected an error from the failing upstream")
 	}
@@ -228,7 +228,7 @@ func TestChatTitle_DoesNotClobberManualRename(t *testing.T) {
 		t.Fatalf("simulate manual rename: %v", err)
 	}
 
-	_, applied, err := testHandler.generateChatSessionTitle(context.Background(), session.ID, original, original)
+	_, applied, err := testHandler.generateChatSessionTitle(context.Background(), session.ID, original, session.TitleEditedAt, original)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -237,6 +237,32 @@ func TestChatTitle_DoesNotClobberManualRename(t *testing.T) {
 	}
 	if got := chatSessionTitleFromDB(t, session.ID); got != manual {
 		t.Fatalf("DB title = %q, want manual rename %q preserved", got, manual)
+	}
+}
+
+func TestChatTitle_DoesNotClobberSameTextManualRename(t *testing.T) {
+	requireDB(t)
+	withStubLLM(t, stubLLMCompletion(t, http.StatusOK, "Generated Title"))
+
+	original := "修复登录"
+	session := newChatTitleTestSession(t, original)
+	if _, err := testHandler.Queries.UpdateChatSessionTitle(context.Background(), db.UpdateChatSessionTitleParams{
+		ID:    session.ID,
+		Title: original,
+	}); err != nil {
+		t.Fatalf("stamp manual rename: %v", err)
+	}
+
+	// Observation from before the rename: the text matches, the edit mark does not.
+	_, applied, err := testHandler.generateChatSessionTitle(context.Background(), session.ID, original, pgtype.Timestamptz{}, original)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if applied {
+		t.Fatal("expected CAS miss when a same-text rename stamped title_edited_at")
+	}
+	if got := chatSessionTitleFromDB(t, session.ID); got != original {
+		t.Fatalf("DB title = %q, want same-text rename preserved", got)
 	}
 }
 
@@ -252,7 +278,7 @@ func TestChatTitle_FallsBackOnEmptyModelOutput(t *testing.T) {
 	original := "some opening message"
 	session := newChatTitleTestSession(t, original)
 
-	_, applied, err := testHandler.generateChatSessionTitle(context.Background(), session.ID, session.Title, original)
+	_, applied, err := testHandler.generateChatSessionTitle(context.Background(), session.ID, session.Title, session.TitleEditedAt, original)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -276,7 +302,7 @@ func TestChatTitle_AutoTitlesOnlyOnce(t *testing.T) {
 	session := newChatTitleTestSession(t, original)
 
 	// First generation applies against the observed original title.
-	_, applied, err := testHandler.generateChatSessionTitle(context.Background(), session.ID, original, original)
+	_, applied, err := testHandler.generateChatSessionTitle(context.Background(), session.ID, original, session.TitleEditedAt, original)
 	if err != nil || !applied {
 		t.Fatalf("first generation: applied=%v err=%v", applied, err)
 	}
@@ -287,7 +313,7 @@ func TestChatTitle_AutoTitlesOnlyOnce(t *testing.T) {
 	// A second run still observing the ORIGINAL title (as the first-message
 	// trigger would) must be a no-op: the CAS no longer matches, so the
 	// already-generated title is left intact.
-	_, applied2, err2 := testHandler.generateChatSessionTitle(context.Background(), session.ID, original, original)
+	_, applied2, err2 := testHandler.generateChatSessionTitle(context.Background(), session.ID, original, session.TitleEditedAt, original)
 	if err2 != nil {
 		t.Fatalf("second generation: unexpected error: %v", err2)
 	}
@@ -321,7 +347,7 @@ func TestChatTitle_AsyncPublishesSessionUpdated(t *testing.T) {
 		}
 	})
 
-	testHandler.maybeGenerateChatTitleAsync(testWorkspaceID, testUserID, session.ID, session.Title, original)
+	testHandler.maybeGenerateChatTitleAsync(testWorkspaceID, testUserID, session.ID, session.Title, session.TitleEditedAt, original)
 
 	select {
 	case p := <-got:
@@ -333,6 +359,108 @@ func TestChatTitle_AsyncPublishesSessionUpdated(t *testing.T) {
 	}
 	if dbTitle := chatSessionTitleFromDB(t, session.ID); dbTitle != "Async Semantic Title" {
 		t.Fatalf("DB title = %q, want %q", dbTitle, "Async Semantic Title")
+	}
+}
+
+func TestSendChatMessage_KeepsTitleEditedBeforeFirstMessage(t *testing.T) {
+	requireDB(t)
+	withStubLLM(t, stubLLMCompletion(t, http.StatusOK, "登录故障"))
+
+	agentID := createHandlerTestAgent(t, "ChatTitleManualRenameAgent", []byte("[]"))
+	session := newExplicitChatSession(t, agentID, "")
+	manual := "修复登录"
+	if _, err := testHandler.Queries.UpdateChatSessionTitle(context.Background(), db.UpdateChatSessionTitleParams{
+		ID:    session.ID,
+		Title: manual,
+	}); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	replaced := make(chan string, 1)
+	testHandler.Bus.Subscribe(protocol.EventChatSessionUpdated, func(e events.Event) {
+		if p, ok := e.Payload.(protocol.ChatSessionUpdatedPayload); ok && p.ChatSessionID == uuidToString(session.ID) && p.Title != manual {
+			select {
+			case replaced <- p.Title:
+			default:
+			}
+		}
+	})
+
+	sendChatTitleTestMessage(t, uuidToString(session.ID), manual)
+	// The local LLM stub answers immediately when generation is wrongly
+	// triggered. Match the positive path's window so a slow goroutine cannot
+	// make this negative assertion pass before the replacement lands.
+	select {
+	case title := <-replaced:
+		t.Fatalf("manual title replaced with %q", title)
+	case <-time.After(5 * time.Second):
+	}
+	if got := chatSessionTitleFromDB(t, session.ID); got != manual {
+		t.Fatalf("DB title = %q, want manual rename %q", got, manual)
+	}
+}
+
+func TestSendChatMessage_ReplacesInsertTimeTitleSeed(t *testing.T) {
+	requireDB(t)
+	withStubLLM(t, stubLLMCompletion(t, http.StatusOK, "登录故障"))
+
+	agentID := createHandlerTestAgent(t, "ChatTitleSeedAgent", []byte("[]"))
+	session := newExplicitChatSession(t, agentID, "修复登录")
+
+	got := make(chan string, 1)
+	testHandler.Bus.Subscribe(protocol.EventChatSessionUpdated, func(e events.Event) {
+		if p, ok := e.Payload.(protocol.ChatSessionUpdatedPayload); ok && p.ChatSessionID == uuidToString(session.ID) {
+			select {
+			case got <- p.Title:
+			default:
+			}
+		}
+	})
+
+	sendChatTitleTestMessage(t, uuidToString(session.ID), "修复登录")
+	select {
+	case title := <-got:
+		if title != "登录故障" {
+			t.Fatalf("event title = %q, want generated title", title)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("insert-time seed was not replaced")
+	}
+	if dbTitle := chatSessionTitleFromDB(t, session.ID); dbTitle != "登录故障" {
+		t.Fatalf("DB title = %q, want generated title", dbTitle)
+	}
+}
+
+func newExplicitChatSession(t *testing.T, agentID, title string) db.ChatSession {
+	t.Helper()
+	session, err := testHandler.Queries.CreateChatSession(context.Background(), db.CreateChatSessionParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		AgentID:     parseUUID(agentID),
+		CreatorID:   parseUUID(testUserID),
+		Title:       title,
+	})
+	if err != nil {
+		t.Fatalf("create chat session: %v", err)
+	}
+	session, err = testHandler.Queries.MarkChatSessionExplicitlyCreated(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("mark chat session explicit: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, uuidToString(session.ID))
+	})
+	return session
+}
+
+func sendChatTitleTestMessage(t *testing.T, sessionID, content string) {
+	t.Helper()
+	req := newRequest("POST", "/api/chat/sessions/"+sessionID+"/messages", map[string]any{"content": content})
+	req = withURLParam(req, "sessionId", sessionID)
+	req = withChatTestWorkspaceCtx(t, req)
+	w := httptest.NewRecorder()
+	testHandler.SendChatMessage(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("SendChatMessage: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -383,16 +511,22 @@ func TestSanitizeChatTitle(t *testing.T) {
 }
 
 func TestShouldGenerateFirstMessageTitlePreservesChannelManualRename(t *testing.T) {
-	if shouldGenerateFirstMessageTitle(false, "manual name", "", true, true) {
+	if shouldGenerateFirstMessageTitle(false, "manual name", "", true, true, false) {
 		t.Fatal("channel manual rename was treated as an auto-generated title")
 	}
-	if !shouldGenerateFirstMessageTitle(false, "derived title", "derived title", true, true) {
+	if !shouldGenerateFirstMessageTitle(false, "derived title", "derived title", true, true, false) {
 		t.Fatal("title initialized by the channel send should be eligible for refinement")
 	}
-	if shouldGenerateFirstMessageTitle(false, "unknown source", "", false, false) {
+	if shouldGenerateFirstMessageTitle(false, "unknown source", "", false, false, false) {
 		t.Fatal("source lookup failure must skip optional title generation")
 	}
-	if !shouldGenerateFirstMessageTitle(false, "first-party seed", "", false, true) {
+	if !shouldGenerateFirstMessageTitle(false, "first-party seed", "", false, true, false) {
 		t.Fatal("first-party Chat should retain the existing title refinement flow")
+	}
+	if shouldGenerateFirstMessageTitle(false, "renamed", "", false, true, true) {
+		t.Fatal("a first-party title written after create was treated as a seed")
+	}
+	if !shouldGenerateFirstMessageTitle(false, "server derived", "server derived", false, true, true) {
+		t.Fatal("a title initialized by this send stays eligible after an earlier edit")
 	}
 }
