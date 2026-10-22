@@ -3564,17 +3564,20 @@ func TestCodexExecuteCleansUpWhenScannerOverflowsOnResume(t *testing.T) {
 	codexGracefulShutdownTimeoutNanos.Store(int64(100 * time.Millisecond))
 	t.Cleanup(func() { codexGracefulShutdownTimeoutNanos.Store(0) })
 
+	oversized := filepath.Join(t.TempDir(), "oversized-response")
+	if err := os.WriteFile(oversized, []byte(strings.Repeat("x", agentStreamMaxLineBytes+1024*1024)), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	fakePath := writeFakeCodexAppServer(t, ""+
 		`read line`+"\n"+
 		`echo '{"jsonrpc":"2.0","id":1,"result":{}}'`+"\n"+
 		`read line`+"\n"+
 		// Emit a single line past the cap with no embedded newline. printf
-		// avoids the trailing newline echo would add; head + tr generates
-		// the bulk payload in pure POSIX shell. The size is derived from
-		// the production constant so raising the cap cannot silently turn
-		// this regression test into a no-op.
+		// avoids the trailing newline echo would add. Precompute the payload
+		// so its generation is outside the cleanup deadline; its size follows
+		// the production cap so overflow remains part of the regression.
 		`printf '{"jsonrpc":"2.0","id":2,"result":{"big":"'`+"\n"+
-		fmt.Sprintf(`head -c %d /dev/zero | tr '\0' 'x'`, agentStreamMaxLineBytes+1024*1024)+"\n"+
+		"cat "+shellQuote(oversized)+"\n"+
 		`printf '"}}\n'`+"\n"+
 		// Hold the process open without reading more stdin. Pre-fix this
 		// hangs cmd.Wait() because codex never sees stdin EOF (it isn't
