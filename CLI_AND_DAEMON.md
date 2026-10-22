@@ -558,6 +558,52 @@ Passing no `<workspace-id>` resolves to the current default workspace, so `multi
 multica workspace member list <workspace-id>
 ```
 
+## Chat
+
+### Start a Chat
+
+`chat create` opens a chat session with one agent and, when given a prompt,
+sends it as the first turn:
+
+```bash
+# Create the chat and queue the opening agent run
+multica chat create --agent "Backend Bot" --prompt "Investigate the failing deploy"
+
+# Create an empty chat to open later
+multica chat create --agent 7b37ce6a-b06b-43ed-b4ae-6bb7eacc67a4
+
+# Long or multi-line prompts (use the file form on Windows)
+multica chat create --agent "Backend Bot" --prompt-file ./prompt.md
+```
+
+`--agent` accepts a name (case-insensitive substring) or a full UUID.
+`--prompt` is sent as the session's first user message and queues an agent run
+immediately; the command returns when the run is queued, not when the agent
+replies. The agent must have a runtime and you must be allowed to invoke it; a
+message for an offline runtime waits in the queue. Without `--prompt`, only the
+session is created. `--title` names the chat and is kept. With a prompt, that
+name is written after the opening message is accepted, so automatic titling
+does not replace it. On an empty session the name is written after the session
+is created, and a later first message keeps it. Omit `--title` and the server
+titles the chat from the first message. The command prints the title at that
+moment: the derived title, unless automatic titling has already finished. Prompt
+input follows the same inline / `--prompt-stdin` / `--prompt-file` rules as
+issue descriptions and comments.
+
+The JSON output (the default) contains `session_id`, `agent_id`, and `title`
+when one is set, plus `message_id`, `task_id`, and `queued` when a prompt was
+sent. `queued` is true only when this turn is waiting behind another turn in
+the same session, and false when it is not; either value means the prompt was
+accepted. The run stays queued until a runtime claims it. If the session is
+created but the prompt fails to send, or the prompt is sent but the title
+update fails, the error names the session id so it can be opened instead of
+retried blindly.
+
+### Reading a Conversation
+
+Agents running inside a chat conversation read their own messages with
+`multica chat history` and `multica chat thread`.
+
 ## Issues
 
 ### List Issues

@@ -155,6 +155,13 @@ Cursors preserve `(created_at, id)` order, including timestamp precision.
 Invalid limits or cursors return HTTP 400; limits above 200 are capped.
 Clients that do not follow the cursor receive only the newest 200 runs.
 
+## Chat
+
+```bash
+multica chat create --agent "Backend Agent" --prompt "Investigate the failing deploy"
+```
+
+`--agent` takes an agent name or ID. With `--prompt`, the message is queued immediately; omit it to create an empty chat. `--prompt-stdin` and `--prompt-file` accept long or multi-line prompts. `multica chat history` and `multica chat thread` do not read the chat this command creates. An agent uses them inside a chat task to read the conversation that task is handling.
 
 ## Daemon and runtimes
 
@@ -186,6 +193,7 @@ See [Daemon and runtimes](/daemon-runtimes) for how it works and for custom prof
 | `autopilot` | Manage automations, triggers, and run history |
 | `workspace` | Create, view, and switch workspaces, and invite members |
 | `repo` | Manage workspace repositories and check them out locally |
+| `chat` | Start a chat with an agent, or read the chat an agent is handling |
 | `daemon`, `runtime` | Start and stop the local daemon; view and manage runtimes |
 | `attachment` | Upload or download attachments |
 | `user profile` | View or update the current user's profile |
@@ -193,7 +201,7 @@ See [Daemon and runtimes](/daemon-runtimes) for how it works and for custom prof
 | `config` | View or edit the current CLI profile's local configuration |
 | `update`, `version` | Update the CLI or print the version |
 
-`multica chat` reads **the external chat session an agent is currently handling**; it is mainly for agents in chat integrations, not a general command for browsing arbitrary workspace conversations.
+`multica chat create` starts a new chat with an agent. `multica chat history` and `multica chat thread` read **the external chat session an agent is currently handling**; those two are mainly for agents in chat integrations, not a general way to browse arbitrary workspace conversations.
 
 ## IDs and output formats
 
@@ -297,7 +305,8 @@ The tables below cover every current top-level command, grouped the way the CLI 
 | `squad` | `list/get/create/update/delete` | Manage squads (`delete` archives) | |
 | | `member list/add/set-role/remove` | Manage squad members | |
 | | `activity <issue-id> <outcome>` | Record a leader evaluation | |
-| `chat` | `history`, `thread [id]` | Read the external chat session an agent is currently handling | `--limit`, `--before` |
+| `chat` | `create` | Start a chat with an agent and optionally send the opening prompt | `--agent` (required), `--prompt` / `--prompt-stdin` / `--prompt-file`, `--title` |
+| | `history`, `thread [id]` | Read the external chat session an agent is currently handling | `--limit`, `--before` |
 
 ### Runtime
 

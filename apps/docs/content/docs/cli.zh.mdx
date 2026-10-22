@@ -141,6 +141,14 @@ multica skill import --url <skill-url> --on-conflict skip
 
 `overwrite` 只允许 skill 的创建者使用，并保留原来的 ID 与智能体绑定关系。
 
+## 对话
+
+```bash
+multica chat create --agent "后端智能体" --prompt "排查部署失败的原因"
+```
+
+`--agent` 接受智能体名称或 ID。带 `--prompt` 时消息会立即进入运行队列；省略它则只创建空会话。`--prompt-stdin` 和 `--prompt-file` 用于较长或多行提示词。`multica chat history` 和 `multica chat thread` 不能读取这条命令刚创建的会话；它们供正在执行对话任务的智能体读取该任务自己的会话。
+
 ## 守护进程和运行时
 
 ```bash
@@ -171,6 +179,7 @@ multica runtime activity <runtime-id>
 | `autopilot` | 管理自动化、触发器和运行历史 |
 | `workspace` | 创建、查看、切换工作区和邀请成员 |
 | `repo` | 管理工作区仓库，并把仓库检出到本机 |
+| `chat` | 创建与智能体的对话，或读取智能体正在处理的聊天 |
 | `daemon`、`runtime` | 启停本机守护进程，查看和管理运行时 |
 | `attachment` | 上传或下载附件 |
 | `user profile` | 查看或更新当前用户资料 |
@@ -178,7 +187,7 @@ multica runtime activity <runtime-id>
 | `config` | 查看或修改当前 CLI profile 的本地配置 |
 | `update`、`version` | 更新 CLI 或查看版本 |
 
-`multica chat` 读取的是**智能体当前正在处理的外部聊天会话**，主要供聊天集成中的智能体使用；它不是用于浏览任意工作区对话的通用命令。
+`multica chat create` 创建与智能体的新对话。`multica chat history` 和 `multica chat thread` 读取的是**智能体当前正在处理的外部聊天会话**，主要供聊天集成中的智能体使用，并不用于浏览任意工作区对话。
 
 ## ID 和输出格式
 
@@ -274,7 +283,8 @@ CLI 配置文件包含可代表你访问 Multica 的令牌。不要提交到仓�
 | `squad` | `list/get/create/update/delete` | 管理小队（`delete` 为归档） | |
 | | `member list/add/set-role/remove` | 管理小队成员 | |
 | | `activity <issue-id> <outcome>` | 记录队长评价 | |
-| `chat` | `history`、`thread [id]` | 读取智能体当前正在处理的外部聊天会话 | `--limit`、`--before` |
+| `chat` | `create` | 创建与智能体的对话，并可选发送首条提示词 | `--agent`（必填）、`--prompt` / `--prompt-stdin` / `--prompt-file`、`--title` |
+| | `history`、`thread [id]` | 读取智能体当前正在处理的外部聊天会话 | `--limit`、`--before` |
 
 ### Runtime
 
