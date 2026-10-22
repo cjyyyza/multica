@@ -99,7 +99,15 @@
     "members": "Membres",
     "created_by": "Créé par",
     "created": "Créé",
-    "updated": "Mis à jour"
+    "updated": "Mis à jour",
+    "max_concurrent_tasks": "Tâches simultanées max."
+  },
+  "max_concurrent_tasks_dialog": {
+    "title": "Définir les tâches simultanées max.",
+    "placeholder": "Illimité",
+    "hint": "Limite le nombre de tâches menées en parallèle et le nombre d'exécutions simultanées dans le squad (1-50). Laissez vide pour illimité.",
+    "invalid": "Saisissez un nombre entier entre 1 et 50.",
+    "unlimited": "Illimité"
   },
   "toasts": {
     "member_added": "Membre ajouté",
@@ -111,7 +119,8 @@
     "leader_updated": "Responsable mis à jour",
     "leader_update_failed": "Échec de la mise à jour du responsable",
     "archive_failed": "Échec de l'archivage du squad",
-    "instructions_saved": "Instructions enregistrées"
+    "instructions_saved": "Instructions enregistrées",
+    "max_concurrent_tasks_saved": "Limite de concurrence enregistrée"
   },
   "profile_card": {
     "unavailable": "Squad indisponible",

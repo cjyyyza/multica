@@ -507,6 +507,16 @@ func FormatError(err error, debug bool) string {
 	return base
 }
 
+// UserMessage is the friendly message FormatError would show for err, without
+// the --debug detail block. A command that wraps a failure in WithUserMessage
+// uses it so the sentence people see still carries the underlying reason.
+func UserMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	return userMessage(err, DetectLanguage())
+}
+
 // userMessage produces the friendly message for the root cause of err.
 func userMessage(err error, lang Language) string {
 	// A command-supplied user-facing message takes precedence over the generic

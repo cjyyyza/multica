@@ -1,11 +1,14 @@
 package repocache
 
 import (
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 // createFilterableTestRepo builds a source repository that can actually serve
@@ -21,7 +24,7 @@ import (
 // from a full one in whether those blobs were transferred.
 func createFilterableTestRepo(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testenv.ShortTempDir(t)
 	run := func(args ...string) {
 		t.Helper()
 		cmd := exec.Command("git", args...)
@@ -42,7 +45,15 @@ func createFilterableTestRepo(t *testing.T) string {
 		run("-C", dir, "add", name)
 		run("-C", dir, "commit", "-m", "add "+name)
 	}
-	return "file://" + dir
+	return testRepositoryFileURL(dir)
+}
+
+func testRepositoryFileURL(dir string) string {
+	path := filepath.ToSlash(dir)
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return (&url.URL{Scheme: "file", Path: path}).String()
 }
 
 var partialCloneTestFiles = []string{"a.txt", "b.txt"}
@@ -85,7 +96,7 @@ func assertCheckoutIsComplete(t *testing.T, checkoutPath string) {
 		if err != nil {
 			t.Fatalf("read %s from checkout: %v", name, err)
 		}
-		if got, want := string(data), "contents of "+name+"\n"; got != want {
+		if got, want := strings.ReplaceAll(string(data), "\r\n", "\n"), "contents of "+name+"\n"; got != want {
 			t.Fatalf("%s = %q, want %q", name, got, want)
 		}
 	}

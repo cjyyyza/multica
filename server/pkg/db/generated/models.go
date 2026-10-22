@@ -591,6 +591,7 @@ type ChatSession struct {
 	PinnedAt            pgtype.Timestamptz `json:"pinned_at"`
 	ProjectID           pgtype.UUID        `json:"project_id"`
 	ExplicitlyCreatedAt pgtype.Timestamptz `json:"explicitly_created_at"`
+	TitleEditedAt       pgtype.Timestamptz `json:"title_edited_at"`
 }
 
 type ClientUsageDaily struct {
@@ -611,6 +612,21 @@ type ClientUsageDaily struct {
 	OfflineCount    pgtype.Int4        `json:"offline_count"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type CloudAgentConnection struct {
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	Provider         string             `json:"provider"`
+	OwnerID          pgtype.UUID        `json:"owner_id"`
+	TokenID          pgtype.UUID        `json:"token_id"`
+	ConfigEncrypted  string             `json:"config_encrypted"`
+	JournalEncrypted string             `json:"journal_encrypted"`
+	Enabled          bool               `json:"enabled"`
+	Revision         int64              `json:"revision"`
+	Status           string             `json:"status"`
+	LastError        string             `json:"last_error"`
+	BusyUntil        pgtype.Timestamptz `json:"busy_until"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Comment struct {
@@ -1133,6 +1149,7 @@ type IssueWorkflow struct {
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 	IsDefault        bool               `json:"is_default"`
+	OwnerID          pgtype.UUID        `json:"owner_id"`
 }
 
 type LarkBindingToken struct {
@@ -1639,18 +1656,19 @@ type SkillToLabel struct {
 }
 
 type Squad struct {
-	ID           pgtype.UUID        `json:"id"`
-	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
-	Name         string             `json:"name"`
-	Description  string             `json:"description"`
-	LeaderID     pgtype.UUID        `json:"leader_id"`
-	CreatorID    pgtype.UUID        `json:"creator_id"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
-	ArchivedAt   pgtype.Timestamptz `json:"archived_at"`
-	ArchivedBy   pgtype.UUID        `json:"archived_by"`
-	AvatarUrl    pgtype.Text        `json:"avatar_url"`
-	Instructions string             `json:"instructions"`
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	Name               string             `json:"name"`
+	Description        string             `json:"description"`
+	LeaderID           pgtype.UUID        `json:"leader_id"`
+	CreatorID          pgtype.UUID        `json:"creator_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	ArchivedAt         pgtype.Timestamptz `json:"archived_at"`
+	ArchivedBy         pgtype.UUID        `json:"archived_by"`
+	AvatarUrl          pgtype.Text        `json:"avatar_url"`
+	Instructions       string             `json:"instructions"`
+	MaxConcurrentTasks pgtype.Int4        `json:"max_concurrent_tasks"`
 }
 
 type SquadMember struct {

@@ -65,6 +65,17 @@ func (h *Handler) requireDaemonWorkspaceAccess(w http.ResponseWriter, r *http.Re
 			writeError(w, http.StatusNotFound, "not found")
 			return false
 		}
+		if strings.HasPrefix(middleware.DaemonIDFromContext(r.Context()), "qoder-managed-") {
+			allowed, err := h.qoderCredentialAllowed(r, workspaceID, middleware.DaemonIDFromContext(r.Context()))
+			if err != nil {
+				writeError(w, http.StatusServiceUnavailable, "runtime authorization unavailable")
+				return false
+			}
+			if !allowed {
+				writeError(w, http.StatusForbidden, "runtime access revoked")
+				return false
+			}
+		}
 		return true
 	}
 
@@ -203,10 +214,11 @@ type DaemonRegisterRequest struct {
 	CLIVersion      string   `json:"cli_version"` // multica CLI version
 	LaunchedBy      string   `json:"launched_by"` // "desktop" when spawned by the Electron app
 	Runtimes        []struct {
-		Name    string `json:"name"`
-		Type    string `json:"type"`
-		Version string `json:"version"` // agent CLI version (claude/codex)
-		Status  string `json:"status"`
+		Name        string `json:"name"`
+		RuntimeMode string `json:"runtime_mode,omitempty"`
+		Type        string `json:"type"`
+		Version     string `json:"version"` // agent CLI version (claude/codex)
+		Status      string `json:"status"`
 		// ProfileID, when non-empty, marks this as an instance of a custom
 		// runtime_profile (MUL-3284). Empty = built-in runtime (legacy path).
 		// Type carries the protocol family for both built-in and custom rows
@@ -227,6 +239,9 @@ type daemonWorkspaceReposResponse struct {
 	P4Depots        []P4DepotData   `json:"p4_depots"`
 	P4DepotsVersion string          `json:"p4_depots_version"`
 	Settings        json.RawMessage `json:"settings,omitempty"`
+	// CACerts carries the backend's extra CA certificates (PEM) for the
+	// daemon's git. Older daemons ignore it.
+	CACerts string `json:"ca_certs,omitempty"`
 }
 
 func normalizeWorkspaceRepos(repos []RepoData) []RepoData {
@@ -317,11 +332,11 @@ func parseWorkspaceRepos(raw []byte) []RepoData {
 	return normalizeWorkspaceRepos(repos)
 }
 
-func workspaceReposResponse(workspaceID string, raw []byte, settingsRaw []byte) daemonWorkspaceReposResponse {
-	return workspaceReposAndP4Response(workspaceID, raw, nil, settingsRaw)
+func workspaceReposResponse(workspaceID string, raw []byte, settingsRaw []byte, caCerts []byte) daemonWorkspaceReposResponse {
+	return workspaceReposAndP4Response(workspaceID, raw, nil, settingsRaw, caCerts)
 }
 
-func workspaceReposAndP4Response(workspaceID string, reposRaw []byte, p4Raw []byte, settingsRaw []byte) daemonWorkspaceReposResponse {
+func workspaceReposAndP4Response(workspaceID string, reposRaw []byte, p4Raw []byte, settingsRaw []byte, caCerts []byte) daemonWorkspaceReposResponse {
 	repos := parseWorkspaceRepos(reposRaw)
 	depots := parseWorkspaceP4Depots(p4Raw)
 	resp := daemonWorkspaceReposResponse{
@@ -330,6 +345,7 @@ func workspaceReposAndP4Response(workspaceID string, reposRaw []byte, p4Raw []by
 		ReposVersion:    workspaceReposVersion(repos),
 		P4Depots:        depots,
 		P4DepotsVersion: workspaceP4DepotsVersion(depots),
+		CACerts:         string(caCerts),
 	}
 	if len(settingsRaw) > 0 {
 		resp.Settings = json.RawMessage(settingsRaw)
@@ -474,11 +490,48 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "at least one runtime or failed profile is required")
 		return
 	}
+	// Validate all entries before writing any registration. Custom profiles
+	// launch a local command and cannot declare managed cloud execution.
+	for i := range req.Runtimes {
+		rt := &req.Runtimes[i]
+		if rt.RuntimeMode == "" {
+			rt.RuntimeMode = "local"
+		}
+		if (rt.RuntimeMode != "local" && rt.RuntimeMode != "cloud") || (rt.ProfileID != "" && rt.RuntimeMode != "local") {
+			writeError(w, http.StatusBadRequest, "invalid runtime_mode for registration")
+			return
+		}
+	}
 	wsUUID, ok := parseUUIDOrBadRequest(w, req.WorkspaceID, "workspace_id")
 	if !ok {
 		return
 	}
 	req.WorkspaceID = uuidToString(wsUUID)
+	if id := middleware.DaemonIDFromContext(r.Context()); id != "" && id != req.DaemonID {
+		writeError(w, http.StatusForbidden, "daemon identity mismatch")
+		return
+	}
+	for _, rt := range req.Runtimes {
+		if normalizeProvider(rt.Type) != "qoder_cloud" {
+			continue
+		}
+		if middleware.DaemonIDFromContext(r.Context()) != "" {
+			allowed, err := h.qoderCredentialAllowed(r, req.WorkspaceID, req.DaemonID)
+			if err != nil || !allowed {
+				writeError(w, http.StatusForbidden, "managed runtime credential required")
+				return
+			}
+		} else {
+			member, ok := h.requireWorkspaceMember(w, r, req.WorkspaceID, "workspace not found")
+			if !ok {
+				return
+			}
+			if !roleAllowed(member.Role, "owner", "admin") {
+				writeError(w, http.StatusForbidden, "workspace administrator required")
+				return
+			}
+		}
+	}
 
 	// Verify workspace access and resolve owner.
 	// Daemon tokens (mdt_) prove workspace access directly; OwnerID will be zero
@@ -618,7 +671,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 				WorkspaceID: wsUUID,
 				DaemonID:    strToText(req.DaemonID),
 				Name:        name,
-				RuntimeMode: "local",
+				RuntimeMode: runtime.RuntimeMode,
 				Provider:    provider,
 				Status:      status,
 				DeviceInfo:  deviceInfo,
@@ -785,16 +838,20 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		"runtimes": resp,
 	})
 
-	repoResp := workspaceReposAndP4Response(req.WorkspaceID, ws.Repos, ws.P4Depots, ws.Settings)
+	repoResp := workspaceReposAndP4Response(req.WorkspaceID, ws.Repos, ws.P4Depots, ws.Settings, h.cfg.GitExtraCACerts)
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"runtimes":          resp,
 		"repos":             repoResp.Repos,
 		"repos_version":     repoResp.ReposVersion,
 		"p4_depots":         repoResp.P4Depots,
 		"p4_depots_version": repoResp.P4DepotsVersion,
 		"settings":          repoResp.Settings,
-	})
+	}
+	if repoResp.CACerts != "" {
+		body["ca_certs"] = repoResp.CACerts
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // mergeLegacyRuntimes folds every runtime row keyed on a prior hostname-derived
@@ -971,7 +1028,7 @@ func (h *Handler) GetDaemonWorkspaceRepos(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	writeJSON(w, http.StatusOK, workspaceReposAndP4Response(workspaceID, ws.Repos, ws.P4Depots, ws.Settings))
+	writeJSON(w, http.StatusOK, workspaceReposAndP4Response(workspaceID, ws.Repos, ws.P4Depots, ws.Settings, h.cfg.GitExtraCACerts))
 }
 
 // setRuntimeOffline flips a runtime offline, recording the daemon's reason when
@@ -5188,6 +5245,8 @@ type TaskMessageRequest struct {
 	// never as false. Recording an unmeasured output as complete is the one
 	// claim this data is not entitled to make.
 	OutputTruncated *bool `json:"output_truncated,omitempty"`
+	// IdempotencyKey scopes provider event replays to this task.
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
 type TaskMessageBatchRequest struct {
@@ -5236,7 +5295,7 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 	// string means SQL NULL, applied by the query's NULLIF.
 	n := len(req.Messages)
 	params := db.CreateTaskMessagesParams{
-		TaskID:   parseUUID(taskID),
+		TaskID:   task.ID,
 		Ids:      make([]pgtype.UUID, 0, n),
 		Seqs:     make([]int32, 0, n),
 		Types:    make([]string, 0, n),
@@ -5255,11 +5314,21 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	createdAts := taskMessageCreatedAts(req.Messages, time.Now().UTC())
 	for i, msg := range req.Messages {
-		id, err := uuid.NewV7()
-		if err != nil {
-			slog.Error("failed to generate task message id", "task_id", taskID, "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to persist task message")
+		if len(msg.IdempotencyKey) > 512 {
+			writeError(w, http.StatusBadRequest, "message idempotency_key exceeds 512 bytes")
 			return
+		}
+		var id uuid.UUID
+		if msg.IdempotencyKey != "" {
+			id = uuid.NewSHA1(uuid.UUID(task.ID.Bytes), []byte(msg.IdempotencyKey))
+		} else {
+			var err error
+			id, err = uuid.NewV7()
+			if err != nil {
+				slog.Error("failed to generate task message id", "task_id", taskID, "error", err)
+				writeError(w, http.StatusInternalServerError, "failed to persist task message")
+				return
+			}
 		}
 
 		// Redact sensitive information before persisting or broadcasting.

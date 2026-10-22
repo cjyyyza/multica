@@ -141,6 +141,14 @@ multica skill import --url <skill-url> --on-conflict skip
 
 `overwrite` n'est autorisé que pour le créateur du skill et conserve l'ID d'origine ainsi que les liaisons avec les agents.
 
+## Discussion
+
+```bash
+multica chat create --agent "Agent backend" --prompt "Examine l'échec du déploiement"
+```
+
+`--agent` accepte un nom d'agent ou un ID. Avec `--prompt`, le message est immédiatement mis en file d'exécution ; sans lui, seule une discussion vide est créée. `--prompt-stdin` et `--prompt-file` acceptent les prompts longs ou multilignes. `multica chat history` et `multica chat thread` ne lisent pas la discussion que cette commande vient de créer. Un agent les utilise pendant une tâche de discussion pour lire la conversation de cette tâche.
+
 ## Daemon et runtimes
 
 ```bash
@@ -171,6 +179,7 @@ Consultez [Daemon et runtimes](/daemon-runtimes) pour son fonctionnement et les 
 | `autopilot` | Gérer les automatisations, les déclencheurs et l'historique des exécutions |
 | `workspace` | Créer, consulter et changer d'espace de travail, et inviter des membres |
 | `repo` | Gérer les dépôts de l'espace de travail et les extraire localement |
+| `chat` | Démarrer une discussion avec un agent ou lire la discussion qu'un agent traite |
 | `daemon`, `runtime` | Démarrer et arrêter le daemon local ; consulter et gérer les runtimes |
 | `attachment` | Envoyer ou télécharger des pièces jointes |
 | `user profile` | Consulter ou mettre à jour le profil de l'utilisateur actuel |
@@ -178,7 +187,7 @@ Consultez [Daemon et runtimes](/daemon-runtimes) pour son fonctionnement et les 
 | `config` | Consulter ou modifier la configuration locale du profil CLI actuel |
 | `update`, `version` | Mettre à jour le CLI ou afficher la version |
 
-`multica chat` lit **la session de messagerie externe qu'un agent traite actuellement** ; elle sert surtout aux agents des intégrations de messagerie et n'est pas une commande générale pour parcourir n'importe quelle discussion de l'espace de travail.
+`multica chat create` démarre une nouvelle discussion avec un agent. `multica chat history` et `multica chat thread` lisent **la session de messagerie externe qu'un agent traite actuellement** ; elles servent surtout aux agents des intégrations de messagerie et ne permettent pas de parcourir n'importe quelle discussion de l'espace de travail.
 
 ## ID et formats de sortie
 
@@ -282,7 +291,8 @@ Les tableaux ci-dessous couvrent toutes les commandes de premier niveau actuelle
 | `squad` | `list/get/create/update/delete` | Gérer les squads (`delete` archive) | |
 | | `member list/add/set-role/remove` | Gérer les membres d'un squad | |
 | | `activity <issue-id> <outcome>` | Enregistrer une évaluation du chef | |
-| `chat` | `history`, `thread [id]` | Lire la session de messagerie externe qu'un agent traite actuellement | `--limit`, `--before` |
+| `chat` | `create` | Démarrer une discussion avec un agent et envoyer éventuellement le prompt initial | `--agent` (obligatoire), `--prompt` / `--prompt-stdin` / `--prompt-file`, `--title` |
+| | `history`, `thread [id]` | Lire la session de messagerie externe qu'un agent traite actuellement | `--limit`, `--before` |
 
 ### Runtime
 

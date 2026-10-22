@@ -39,7 +39,7 @@ func TestAgentTaskHistoryIndexMigrationAndPagePlans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, history, ok := strings.Cut(string(source), "-- name: ListAgentTasks :many\n")
+	_, history, ok := strings.Cut(strings.ReplaceAll(string(source), "\r\n", "\n"), "-- name: ListAgentTasks :many\n")
 	if !ok {
 		t.Fatal("ListAgentTasks query missing")
 	}

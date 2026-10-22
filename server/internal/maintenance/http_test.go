@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -140,6 +141,9 @@ func TestInternalHTTPCreateAdvanceReplayAndConfigure(t *testing.T) {
 	}
 	// Build the same standalone driver shipped in the backend image.
 	driver := filepath.Join(t.TempDir(), "maintenance")
+	if runtime.GOOS == "windows" {
+		driver += ".exe"
+	}
 	if output, err := exec.Command("go", "build", "-o", driver, "../../cmd/maintenance").CombinedOutput(); err != nil {
 		t.Fatalf("build driver: %v\n%s", err, output)
 	}

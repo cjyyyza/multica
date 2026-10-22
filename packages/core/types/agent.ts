@@ -128,6 +128,7 @@ export const RUNTIME_PROFILE_PROTOCOL_FAMILIES = [
   "qwen",
   "qwenpaw",
   "mcode",
+  "muse",
   "zeroclaw",
 ] as const;
 
@@ -194,6 +195,7 @@ export type TaskFailureReason =
   | "timeout"
   | "codex_semantic_inactivity"
   | "runtime_offline"
+  | "runtime_access_revoked"
   | "runtime_reconnect_timeout"
   | "runtime_recovery"
   | "manual";
@@ -713,6 +715,7 @@ export type AgentPermissionScope = "private" | "workspace" | "members";
  * over edits the user made after it.
  */
 export interface StoredAgentDraft {
+  qoder_agent_id?: string;
   name: string;
   description: string;
   instructions: string;

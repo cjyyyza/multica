@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -64,6 +65,9 @@ func TestLocalStorageUploadStreamFailureKeepsPreviousObject(t *testing.T) {
 // narrowed permissions on deployments that serve the upload dir with a
 // front-end web server running as another user.
 func TestLocalStorageUploadsAreWorldReadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits do not represent Windows file access")
+	}
 	dir := t.TempDir()
 	s := &LocalStorage{uploadDir: dir}
 	if _, err := s.Upload(context.Background(), "buffered", []byte("a"), "text/plain", "a.txt"); err != nil {

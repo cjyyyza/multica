@@ -19,6 +19,16 @@
     "toast_deleted": "Tâche supprimée",
     "toast_delete_failed": "Échec de la suppression de la tâche"
   },
+  "rename_issue": {
+    "title": "Renommer la tâche",
+    "placeholder": "Titre de la tâche",
+    "input_aria_label": "Renommer {{identifier}}",
+    "submit": "Enregistrer",
+    "saving": "Enregistrement...",
+    "title_required": "Saisissez un titre",
+    "toast_renamed": "Tâche renommée",
+    "toast_failed": "Échec du renommage de la tâche"
+  },
   "feedback": {
     "title": "Faire un retour",
     "placeholder": "Parlez-nous de votre expérience, des bugs rencontrés ou des fonctionnalités que vous aimeriez voir…",
@@ -78,6 +88,10 @@
     "members_label": "Membres supplémentaires",
     "members_optional": "(facultatif)",
     "members_hint": "Le chef peut déléguer des sous-tâches à ces membres.",
+    "max_concurrent_tasks_label": "Tâches simultanées max.",
+    "max_concurrent_tasks_hint": "Limite le nombre de tâches menées en parallèle et le nombre d'exécutions simultanées dans le squad (1-50). Laissez vide pour illimité.",
+    "max_concurrent_tasks_placeholder": "Illimité",
+    "max_concurrent_tasks_invalid": "Saisissez un nombre entier entre 1 et 50.",
     "members_placeholder": "Ajouter des agents ou des membres de l'espace de travail",
     "members_selected_count_one": "{{count}} sélectionné",
     "members_selected_count_other": "{{count}} sélectionnés",

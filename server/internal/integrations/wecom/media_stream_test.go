@@ -215,13 +215,7 @@ func TestTheTempFileIsPrivateAndUnlinked(t *testing.T) {
 		t.Fatalf("the temp directory still holds %d entries; the plaintext file was not unlinked", len(entries))
 	}
 
-	info, err := f.Stat()
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		t.Errorf("the plaintext file is mode %v, want no group or other access", perm)
-	}
+	assertMediaTempFilePrivate(t, f)
 }
 
 // peekFile has to leave the file where it found it, or the upload sends a

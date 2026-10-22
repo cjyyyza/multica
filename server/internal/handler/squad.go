@@ -36,6 +36,8 @@ type SquadResponse struct {
 	ArchivedBy    *string                      `json:"archived_by"`
 	MemberCount   int                          `json:"member_count"`
 	MemberPreview []SquadMemberPreviewResponse `json:"member_preview"`
+	// MaxConcurrentTasks is the squad-wide execution cap. NULL means unlimited.
+	MaxConcurrentTasks *int32 `json:"max_concurrent_tasks"`
 }
 
 type SquadMemberPreviewResponse struct {
@@ -75,6 +77,8 @@ func (h *Handler) squadToResponse(s db.Squad) SquadResponse {
 		ArchivedAt:    timestampToPtr(s.ArchivedAt),
 		ArchivedBy:    uuidToPtr(s.ArchivedBy),
 		MemberPreview: []SquadMemberPreviewResponse{},
+		// A nil pointer keeps the JSON field null, matching the column.
+		MaxConcurrentTasks: int4ToPtr(s.MaxConcurrentTasks),
 	}
 }
 
@@ -235,10 +239,11 @@ func (h *Handler) CreateSquad(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name        string  `json:"name"`
-		Description string  `json:"description"`
-		LeaderID    string  `json:"leader_id"`
-		AvatarURL   *string `json:"avatar_url"`
+		Name               string  `json:"name"`
+		Description        string  `json:"description"`
+		LeaderID           string  `json:"leader_id"`
+		AvatarURL          *string `json:"avatar_url"`
+		MaxConcurrentTasks *int32  `json:"max_concurrent_tasks"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -250,6 +255,10 @@ func (h *Handler) CreateSquad(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.LeaderID == "" {
 		writeError(w, http.StatusBadRequest, "leader_id is required")
+		return
+	}
+	if req.MaxConcurrentTasks != nil && (*req.MaxConcurrentTasks < 1 || *req.MaxConcurrentTasks > 50) {
+		writeError(w, http.StatusBadRequest, "max_concurrent_tasks must be between 1 and 50")
 		return
 	}
 
@@ -288,12 +297,13 @@ func (h *Handler) CreateSquad(w http.ResponseWriter, r *http.Request) {
 	}
 
 	squad, err := h.Queries.CreateSquad(r.Context(), db.CreateSquadParams{
-		WorkspaceID: wsUUID,
-		Name:        req.Name,
-		Description: req.Description,
-		LeaderID:    leaderUUID,
-		CreatorID:   member.UserID,
-		AvatarUrl:   avatarURL,
+		WorkspaceID:        wsUUID,
+		Name:               req.Name,
+		Description:        req.Description,
+		LeaderID:           leaderUUID,
+		CreatorID:          member.UserID,
+		AvatarUrl:          avatarURL,
+		MaxConcurrentTasks: ptrToInt4(req.MaxConcurrentTasks),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create squad")
@@ -362,6 +372,10 @@ func (h *Handler) UpdateSquad(w http.ResponseWriter, r *http.Request) {
 		Instructions *string `json:"instructions"`
 		LeaderID     *string `json:"leader_id"`
 		AvatarURL    *string `json:"avatar_url"`
+		// MaxConcurrentTasks is tri-state. Omitted leaves the limit unchanged,
+		// null or 0 clears it back to NULL (unlimited), and 1..50 sets it.
+		// RawMessage distinguishes an omitted key from an explicit null.
+		MaxConcurrentTasks json.RawMessage `json:"max_concurrent_tasks"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -369,6 +383,22 @@ func (h *Handler) UpdateSquad(w http.ResponseWriter, r *http.Request) {
 	}
 
 	params := db.UpdateSquadParams{ID: squad.ID}
+	if len(req.MaxConcurrentTasks) > 0 {
+		var limit *int32
+		if err := json.Unmarshal(req.MaxConcurrentTasks, &limit); err != nil {
+			writeError(w, http.StatusBadRequest, "max_concurrent_tasks must be a number between 1 and 50")
+			return
+		}
+		switch {
+		case limit == nil || *limit == 0:
+			params.ClearMaxConcurrentTasks = true
+		case *limit < 1 || *limit > 50:
+			writeError(w, http.StatusBadRequest, "max_concurrent_tasks must be between 1 and 50")
+			return
+		default:
+			params.MaxConcurrentTasks = pgtype.Int4{Int32: *limit, Valid: true}
+		}
+	}
 	if req.Name != nil {
 		params.Name = pgtype.Text{String: *req.Name, Valid: true}
 	}
@@ -448,6 +478,14 @@ func (h *Handler) UpdateSquad(w http.ResponseWriter, r *http.Request) {
 		newLeaderRuntimeBound = newLeader.RuntimeID.Valid
 	}
 
+	if len(req.MaxConcurrentTasks) > 0 {
+		// Claims take agent -> capacity. Acquire capacity after any leader
+		// agent lock so combined leader/cap edits keep the same order.
+		if err := qtx.LockSquadClaimAdvisory(r.Context(), squad.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update squad")
+			return
+		}
+	}
 	updated, err := qtx.UpdateSquad(r.Context(), params)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update squad")
@@ -464,6 +502,9 @@ func (h *Handler) UpdateSquad(w http.ResponseWriter, r *http.Request) {
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update squad")
 		return
+	}
+	if len(req.MaxConcurrentTasks) > 0 && h.TaskService != nil {
+		h.TaskService.NotifySquadCapacityChanged(squad.ID)
 	}
 
 	resp, err := h.squadToResponseWithPreview(r.Context(), updated)
@@ -501,6 +542,21 @@ func (h *Handler) DeleteSquad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Capture the runtimes parked behind this squad's cap before
+	// TransferSquadAssignees rewrites `assignee_type` from 'squad' to 'agent':
+	// afterwards the queued rows that resolved through the issue assignee no
+	// longer resolve to this squad, so a squad-wide lookup would find nothing
+	// and those runtimes would keep serving a cached empty-claim verdict.
+	var blockedRuntimes []pgtype.UUID
+	if h.TaskService != nil {
+		collected, err := h.Queries.ListQueuedTaskRuntimesBySquad(r.Context(), squad.ID)
+		if err != nil {
+			slog.Warn("list blocked squad runtimes failed", "squad_id", uuidToString(squad.ID), "error", err)
+		} else {
+			blockedRuntimes = collected
+		}
+	}
+
 	// Transfer issues assigned to this squad to the leader agent.
 	if err := h.Queries.TransferSquadAssignees(r.Context(), db.TransferSquadAssigneesParams{
 		AssigneeID:   squad.ID,
@@ -531,6 +587,12 @@ func (h *Handler) DeleteSquad(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to archive squad")
 		return
+	}
+
+	// The squad's cap is gone now, so every runtime that was parked behind it
+	// must be allowed to re-evaluate instead of waiting out its empty-claim TTL.
+	if h.TaskService != nil {
+		h.TaskService.NotifyRuntimesMayHaveWork(blockedRuntimes)
 	}
 
 	h.publish(protocol.EventSquadDeleted, workspaceID, "member", userID, map[string]any{

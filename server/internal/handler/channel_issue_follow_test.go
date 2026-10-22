@@ -86,8 +86,8 @@ func TestCreateMemberCommentSteersTheSingleSteerableRun(t *testing.T) {
 
 func TestCreateMemberCommentWaitsWhenSteerIsRefused(t *testing.T) {
 	// The run looks steerable (running, capability, actor may invoke) but the
-	// bind only accepts codex and claude. The ack must follow that refusal.
-	issueID, agentID, taskID := seedChannelSteerIssue(t, "grok", true)
+	// provider is unsupported by the bind. The ack must follow that refusal.
+	issueID, agentID, taskID := seedChannelSteerIssue(t, "unsupported", true)
 
 	result := postChannelComment(t, issueID, "please continue")
 	if result.Delivery != engine.CommentDeliveryWaiting {

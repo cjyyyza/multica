@@ -298,13 +298,15 @@ func TestPrepareOpenclawConfigWorstCaseCLIBudgets(t *testing.T) {
 	// And that the config-schema pair shares its budget the same way, since a
 	// fresh deadline there is exactly what took the old ceiling to four.
 	if len(stub.calls) >= 4 {
-		if stub.calls[2].deadline != stub.calls[3].deadline {
+		if stub.calls[2].ctx != stub.calls[3].ctx {
 			t.Errorf("`config get agents.list --json` and `config get agents.entries --json` ran "+
 				"under separate deadlines (%v vs %v); they answer the same question and must "+
 				"share one budget, or the worst case grows a deadline",
 				stub.calls[2].deadline, stub.calls[3].deadline)
 		}
-		if stub.calls[4].deadline == stub.calls[2].deadline {
+	}
+	if len(stub.calls) >= 5 {
+		if stub.calls[4].ctx == stub.calls[2].ctx {
 			t.Errorf("the registry fallback shares the config-schema deadline; it reads a " +
 				"different source and must keep its own budget")
 		}

@@ -1089,6 +1089,12 @@ describe("SquadListSchema member preview drift", () => {
     const parsed = SquadListSchema.parse([baseSquad]);
     expect(parsed[0]?.member_count).toBe(0);
     expect(parsed[0]?.member_preview).toEqual([]);
+    expect(parsed[0]?.max_concurrent_tasks).toBeNull();
+  });
+
+  it("preserves max_concurrent_tasks when the backend sets it", () => {
+    const parsed = SquadSchema.parse({ ...baseSquad, max_concurrent_tasks: 4 });
+    expect(parsed.max_concurrent_tasks).toBe(4);
   });
 
   it("defaults preview fields on a single squad response", () => {

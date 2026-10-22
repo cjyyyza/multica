@@ -29,7 +29,7 @@ func withBrowserMcpTestHost(t *testing.T, goos string, env map[string]string, ex
 }
 
 func TestHardenBrowserMcpConfigNoopOffWindows(t *testing.T) {
-	t.Parallel()
+	withBrowserMcpTestHost(t, "linux", nil, nil)
 
 	raw := json.RawMessage(`{"mcpServers":{"playwright":{"command":"node","args":["@playwright/mcp","--headless"]}}}`)
 	got, err := hardenBrowserMcpConfig(raw, t.TempDir())

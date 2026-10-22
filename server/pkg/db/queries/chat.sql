@@ -167,7 +167,8 @@ WHERE cs.workspace_id = $1
 ORDER BY COALESCE(lm.created_at, d.updated_at, cs.updated_at) DESC;
 
 -- name: UpdateChatSessionTitle :one
-UPDATE chat_session SET title = $2, updated_at = now()
+-- title_edited_at is the manual-rename mark. Automatic titling does not set it.
+UPDATE chat_session SET title = $2, title_edited_at = now(), updated_at = now()
 WHERE id = $1
 RETURNING *;
 
@@ -237,16 +238,15 @@ WHERE id = sqlc.arg('id') AND workspace_id = sqlc.arg('workspace_id')
 RETURNING *;
 
 -- name: UpdateChatSessionTitleIfCurrent :one
--- Compare-and-swap the title: only overwrite it when it still equals the
--- value the caller observed (@expected_title). This is the idempotency /
--- no-clobber guard behind LLM auto-titling (MUL-4295): the async generator
--- captures the session's current (default/original) title before calling the
--- model, and this write lands only if a manual rename or a competing writer
--- has not changed the title in the meantime. A mismatch returns pgx.ErrNoRows
--- (zero rows updated), which the caller treats as "someone renamed it — leave
--- it alone", NOT as an error.
+-- Compare-and-swap the title. The generator records the title and
+-- title_edited_at it observed, and this write lands only if both are still
+-- unchanged. A manual rename stamps title_edited_at even when the text stays
+-- the same, so that rename wins. A mismatch returns pgx.ErrNoRows, which the
+-- caller treats as "someone renamed it — leave it alone", NOT as an error.
 UPDATE chat_session SET title = @new_title, updated_at = now()
-WHERE id = @id AND title = @expected_title
+WHERE id = @id
+  AND title = @expected_title
+  AND title_edited_at IS NOT DISTINCT FROM @expected_title_edited_at
 RETURNING *;
 
 -- name: SetChatSessionPinned :one

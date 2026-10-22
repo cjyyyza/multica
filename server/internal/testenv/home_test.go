@@ -13,6 +13,17 @@ func TestSetHomeUsesTestProfileOnEveryPlatform(t *testing.T) {
 	if err != nil || actual != home || os.Getenv("HOME") != home || os.Getenv("USERPROFILE") != home {
 		t.Fatalf("home lookup escaped fixture: home=%q error=%v", actual, err)
 	}
+	for key, want := range map[string]string{
+		"APPDATA":         filepath.Join(home, "AppData", "Roaming"),
+		"LOCALAPPDATA":    filepath.Join(home, "AppData", "Local"),
+		"XDG_CONFIG_HOME": filepath.Join(home, ".config"),
+		"XDG_CACHE_HOME":  filepath.Join(home, ".cache"),
+		"XDG_DATA_HOME":   filepath.Join(home, ".local", "share"),
+	} {
+		if got := os.Getenv(key); got != want {
+			t.Errorf("%s escaped fixture: got %q, want %q", key, got, want)
+		}
+	}
 }
 
 func TestRunIsolatedPreservesExplicitChildOverridesAndRestoresParent(t *testing.T) {

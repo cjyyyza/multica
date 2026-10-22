@@ -141,6 +141,14 @@ multica skill import --url <skill-url> --on-conflict skip
 
 `overwrite` はスキルの作成者だけが使え、元の ID とエージェントの紐付けを維持します。
 
+## チャット
+
+```bash
+multica chat create --agent "バックエンドエージェント" --prompt "デプロイ失敗の原因を調査して"
+```
+
+`--agent` にはエージェント名または ID を指定します。`--prompt` を付けるとメッセージがすぐに実行キューに入り、省略すると空のチャットだけを作成します。長い・複数行のプロンプトには `--prompt-stdin` と `--prompt-file` を使えます。`multica chat history` と `multica chat thread` は、このコマンドで作成したチャットを読みません。対話タスクの実行中に、エージェントがそのタスクの会話を読むためのコマンドです。
+
 ## デーモンとランタイム
 
 ```bash
@@ -171,6 +179,7 @@ multica runtime activity <runtime-id>
 | `autopilot` | オートパイロット、トリガー、実行履歴を管理 |
 | `workspace` | ワークスペースの作成、表示、切り替えとメンバーの招待 |
 | `repo` | ワークスペースのリポジトリを管理し、ローカルにチェックアウト |
+| `chat` | エージェントとのチャットを開始、またはエージェントが処理中のチャットを読み取り |
 | `daemon`、`runtime` | ローカルデーモンの起動と停止。ランタイムの表示と管理 |
 | `attachment` | 添付ファイルのアップロードとダウンロード |
 | `user profile` | 現在のユーザーのプロフィールを表示・更新 |
@@ -178,7 +187,7 @@ multica runtime activity <runtime-id>
 | `config` | 現在の CLI プロファイルのローカル設定を表示・編集 |
 | `update`、`version` | CLI の更新とバージョンの表示 |
 
-`multica chat` が読み取るのは、**エージェントが現在処理している外部チャットセッション**です。主にチャット統合の中のエージェントが使うもので、任意のワークスペースの会話を閲覧するための汎用コマンドではありません。
+`multica chat create` はエージェントとの新しいチャットを開始します。`multica chat history` と `multica chat thread` が読み取るのは、**エージェントが現在処理している外部チャットセッション**です。これらは主にチャット統合の中のエージェントが使うもので、任意のワークスペースの会話を閲覧するための汎用コマンドではありません。
 
 ## ID と出力形式
 
@@ -226,7 +235,7 @@ CLI の設定ファイルには、あなたとして Multica にアクセスで�
 
 | コマンド | サブコマンド | 用途 | 主なフラグ |
 | --- | --- | --- | --- |
-| `issue` | `list` | タスクを一覧 | `--status`、`--priority`、`--assignee`、`--project`、`--metadata`（繰り返し可）、`--property`（繰り返し可、`"名前=値"`；`__none__` は未設定に一致）、`--limit`、`--offset`、`--sort`（`property:<名前または id>` に対応）、`--full-id`、`--resolve-properties`（JSON のみ；保存された id に加えてプロパティ名・選択肢名・メンバー名を返します） |
+| `issue` | `list` | タスクを一覧 | `--status`、`--priority`、`--assignee`、`--project`、`--metadata`（繰り返し可）、`--property`（繰り返し可、`"名前=値"` または `"Score>=3"`、`"Due<2026-01-01"`、`"Notes~=text"` のような比較；`__none__` は未設定に一致）、`--limit`、`--offset`、`--sort`（`property:<名前または id>` に対応）、`--full-id`、`--resolve-properties`（JSON のみ；保存された id に加えてプロパティ名・選択肢名・メンバー名を返します） |
 | | `get <id>` | 単一のタスクを表示 | `--resolve-properties`（JSON のみ；保存された id に加えてプロパティ名・選択肢名・メンバー名を返します） |
 | | `create` | タスクを作成 | `--title`（必須）、`--description` / `--description-stdin` / `--description-file`、`--status`、`--priority`、`--assignee`、`--parent`、`--stage`、`--project`、`--start-date`、`--due-date`、`--attachment`（繰り返し可） |
 | | `update <id>` | タスクのフィールドを更新 | `create` と同系のフィールドに加え `--position`、`--no-start`、`--duplicate-of` |
@@ -274,7 +283,8 @@ CLI の設定ファイルには、あなたとして Multica にアクセスで�
 | `squad` | `list/get/create/update/delete` | スクワッドを管理（`delete` はアーカイブ） | |
 | | `member list/add/set-role/remove` | スクワッドのメンバーを管理 | |
 | | `activity <issue-id> <outcome>` | リーダーの評価を記録 | |
-| `chat` | `history`、`thread [id]` | エージェントが現在処理している外部チャットセッションを読み取り | `--limit`、`--before` |
+| `chat` | `create` | エージェントとのチャットを開始し、必要なら最初のプロンプトを送信 | `--agent`（必須）、`--prompt` / `--prompt-stdin` / `--prompt-file`、`--title` |
+| | `history`、`thread [id]` | エージェントが現在処理している外部チャットセッションを読み取り | `--limit`、`--before` |
 
 ### Runtime
 

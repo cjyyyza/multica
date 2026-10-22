@@ -1,6 +1,6 @@
 -- name: CreateSquad :one
-INSERT INTO squad (workspace_id, name, description, leader_id, creator_id, avatar_url)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO squad (workspace_id, name, description, leader_id, creator_id, avatar_url, max_concurrent_tasks)
+VALUES ($1, $2, $3, $4, $5, $6, sqlc.narg('max_concurrent_tasks'))
 RETURNING *;
 
 -- name: GetSquad :one
@@ -63,12 +63,19 @@ ORDER BY
 SELECT * FROM squad WHERE workspace_id = $1 ORDER BY created_at ASC;
 
 -- name: UpdateSquad :one
+-- max_concurrent_tasks is tri-state: clear_max_concurrent_tasks wins and resets
+-- the limit to NULL (unlimited); otherwise a provided value sets it and an
+-- omitted value leaves the current limit untouched.
 UPDATE squad SET
     name = COALESCE(sqlc.narg('name'), name),
     description = COALESCE(sqlc.narg('description'), description),
     leader_id = COALESCE(sqlc.narg('leader_id'), leader_id),
     avatar_url = COALESCE(sqlc.narg('avatar_url'), avatar_url),
     instructions = COALESCE(sqlc.narg('instructions'), instructions),
+    max_concurrent_tasks = CASE
+        WHEN @clear_max_concurrent_tasks::boolean THEN NULL
+        ELSE COALESCE(sqlc.narg('max_concurrent_tasks'), max_concurrent_tasks)
+    END,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
@@ -168,3 +175,91 @@ LEFT JOIN issue i
        ON i.id = atq.issue_id
 WHERE sm.squad_id = $1
 ORDER BY sm.created_at ASC, atq.dispatched_at DESC NULLS LAST;
+
+-- name: GetEffectiveSquadConcurrencyForTask :one
+-- Resolve scheduling ownership without changing squad_id's leader-role meaning.
+-- Explicit task, autopilot and quick-create ownership follows delegation before
+-- falling back to issue assignment. All gates and wakeups share this resolver.
+-- Unlimited squads still return an ID so claims serialize with cap changes.
+SELECT
+    s.id AS squad_id,
+    s.max_concurrent_tasks
+FROM agent_task_queue t
+JOIN squad s ON s.id = task_effective_squad_id(t.id)
+WHERE t.id = @task_id
+  AND s.archived_at IS NULL;
+
+-- name: LockSquadClaimAdvisory :exec
+-- Serializes squad capacity checks for claims. An advisory lock is used
+-- instead of locking the squad row so claimTask's agent -> squad access order
+-- can never invert LockSquadForUpdate's squad -> agent order.
+-- Cap writers acquire any needed agent rows before taking this lock too.
+SELECT pg_advisory_xact_lock(hashtext('squad_claim:' || (@squad_id::uuid)::text));
+
+-- name: CountActiveTasksForEffectiveSquad :one
+-- Active execution capacity for one squad, using the same effective-squad
+-- resolution as ClaimAgentTask. The caller holds the squad claim advisory lock
+-- and compares this count with the squad's max_concurrent_tasks.
+SELECT count(*)
+FROM agent_task_queue t
+WHERE t.status IN ('dispatched', 'running', 'waiting_local_directory')
+  AND task_effective_squad_id(t.id) = @squad_id::uuid;
+
+-- name: CountOtherInFlightIssuesForEffectiveSquad :one
+-- Counts distinct other issues holding an in-flight chain slot for the squad
+-- ahead of the claimed task. Evaluated under LockSquadClaimAdvisory so two
+-- concurrent claims across different issues cannot both slip past Gate 2 when
+-- an earlier issue is in its queued handoff gap.
+SELECT count(DISTINCT in_flight.issue_id)
+FROM agent_task_queue in_flight
+WHERE in_flight.issue_id IS NOT NULL
+  AND in_flight.issue_id <> @issue_id::uuid
+  AND task_effective_squad_id(in_flight.id) = @squad_id::uuid
+  AND (
+    in_flight.status IN ('dispatched', 'running', 'waiting_local_directory')
+    OR (
+      in_flight.status = 'queued'
+      AND in_flight.delegated_from_task_id IS NOT NULL
+      AND (
+        sqlc.narg('delegated_from_task_id')::uuid IS NULL
+        OR (in_flight.created_at, in_flight.id) < (@task_created_at::timestamptz, @task_id::uuid)
+      )
+    )
+  );
+
+-- name: ListQueuedTaskRuntimesBySquad :many
+-- Runtimes holding queued work for a specific squad. Used when a squad's
+-- concurrency cap is raised or cleared so blocked runtimes wake immediately.
+SELECT DISTINCT queued.runtime_id
+FROM agent_task_queue queued
+WHERE queued.status = 'queued'
+  AND queued.runtime_id IS NOT NULL
+  AND task_effective_squad_id(queued.id) = @squad_id::uuid;
+
+-- name: ListQueuedTaskRuntimesByIssues :many
+-- Runtimes holding queued work on specific issues. Used when issues move off
+-- a squad so tasks that only resolved their squad via issue.assignee_id are
+-- woken even after the issue row has been updated.
+SELECT DISTINCT queued.runtime_id
+FROM agent_task_queue queued
+WHERE queued.status = 'queued'
+  AND queued.runtime_id IS NOT NULL
+  AND queued.issue_id = ANY(@issue_ids::uuid[]);
+
+-- name: ListQueuedSquadTaskRuntimes :many
+-- Runtimes holding queued work for the finished task's squad. A squad limit
+-- couples agents across machines, so finishing one task must wake peers on
+-- other runtimes instead of leaving them parked behind their empty-claim cache.
+WITH finished AS (
+    SELECT task_effective_squad_id(t.id) AS squad_id
+    FROM agent_task_queue t
+    WHERE t.id = @task_id
+)
+SELECT DISTINCT queued.runtime_id
+FROM agent_task_queue queued
+CROSS JOIN finished
+WHERE finished.squad_id IS NOT NULL
+  AND queued.status = 'queued'
+  AND queued.runtime_id IS NOT NULL
+  AND queued.runtime_id IS DISTINCT FROM @finished_runtime_id::uuid
+  AND task_effective_squad_id(queued.id) = finished.squad_id;

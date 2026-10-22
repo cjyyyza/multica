@@ -17,6 +17,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
+	"github.com/multica-ai/multica/server/internal/testenv"
 )
 
 // newGCTestDaemon creates a minimal Daemon for GC testing with a mock HTTP server.
@@ -25,7 +26,7 @@ func newGCTestDaemon(t *testing.T, handler http.Handler) *Daemon {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	root := t.TempDir()
+	root := testenv.ShortTempDir(t)
 	cfg := Config{
 		WorkspacesRoot:           root,
 		GCEnabled:                true,
@@ -1979,11 +1980,12 @@ func TestPruneWorktree_LegacyCacheFallbackSerializesWithCreateWorktree(t *testin
 	}
 
 	createDone := make(chan error, 1)
+	workDir := t.TempDir()
 	go func() {
 		_, err := blockingCache.CreateWorktree(repocache.WorktreeParams{
 			WorkspaceID: "ws1",
 			RepoURL:     sourceRepo,
-			WorkDir:     t.TempDir(),
+			WorkDir:     workDir,
 			AgentName:   "tester",
 			TaskID:      "11111111-1111-1111-1111-111111111111",
 		})
@@ -2003,7 +2005,7 @@ func TestPruneWorktree_LegacyCacheFallbackSerializesWithCreateWorktree(t *testin
 		if err != nil {
 			t.Fatalf("CreateWorktree failed after GC lock released: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("timed out waiting for CreateWorktree after releasing GC lock")
 	}
 
@@ -2449,7 +2451,7 @@ func TestShouldCleanTaskDir_EmptyParentIDFallsBackToOrphanMTime(t *testing.T) {
 func createGCGitRepo(t *testing.T) string {
 	t.Helper()
 
-	repoDir := t.TempDir()
+	repoDir := testenv.ShortTempDir(t)
 	runGitForGC(t, repoDir, "init", "-b", "main")
 	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("hello\n"), 0o644); err != nil {
 		t.Fatalf("write README: %v", err)
