@@ -643,14 +643,15 @@ type Daemon struct {
 	wsClaimHTTPFallbackAfter atomic.Int64
 
 	// runtimeGoneMu guards runtimeGoneInflight, reregisterNextAttempt, and
-	// reregisterLastCompletedAt. The state lets heartbeat / poller / WS-ack
+	// reregisterLastCompletedGeneration. The state lets heartbeat / poller / WS-ack
 	// handlers converge on a single recovery path when they each detect that a
 	// runtime row was deleted server-side without three of them stampeding
 	// registerRuntimesForWorkspace.
-	runtimeGoneMu             sync.Mutex
-	runtimeGoneInflight       map[string]struct{}  // runtime_id -> currently recovering
-	reregisterNextAttempt     map[string]time.Time // workspace_id -> earliest time the next re-register attempt may run
-	reregisterLastCompletedAt map[string]time.Time // workspace_id -> wall-clock at which the last SUCCESSFUL re-register call returned (failures intentionally not stamped — see recordRegisterCompletion)
+	runtimeGoneMu                     sync.Mutex
+	runtimeGoneInflight               map[string]struct{}  // runtime_id -> currently recovering
+	reregisterNextAttempt             map[string]time.Time // workspace_id -> earliest time the next re-register attempt may run
+	reregisterLastCompletedGeneration map[string]uint64
+	runtimeRecoveryGeneration         atomic.Uint64
 
 	// pendingWorkMu guards pendingWorkInflight and pendingWorkLastRun, which
 	// coalesce and rate-limit server-pushed "heartbeat now" hints (MUL-5444).
@@ -798,47 +799,47 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	// server can split logs/metrics by client version (parallel to the CLI).
 	client.SetVersion(cfg.CLIVersion)
 	d := &Daemon{
-		cfg:                         cfg,
-		client:                      client,
-		repoCache:                   repocache.New(cacheRoot, logger),
-		p4Cache:                     &p4cache.Cache{Logger: logger, Timeout: cfg.P4Timeout},
-		skillCache:                  NewSkillBundleCache(skillCacheRoot),
-		logger:                      logger,
-		terminalReports:             newTerminalReportStore(cfg),
-		terminalReportWakeup:        make(chan struct{}, 1),
-		terminalReportNow:           time.Now,
-		terminalReportFlight:        make(map[string]struct{}),
-		workspaces:                  make(map[string]*workspaceState),
-		runtimeIndex:                make(map[string]Runtime),
-		profileLaunchSpecs:          make(map[string]profileLaunchSpec),
-		runtimeSet:                  newRuntimeSetWatcher(),
-		agentDiscoveryKick:          make(chan struct{}, 1),
-		agentVersions:               make(map[string]string),
-		skippedAgents:               make(map[string]string),
-		resolvedPaths:               make(map[string]healedAgent),
-		wsHBLastAck:                 make(map[string]time.Time),
-		activeEnvRoots:              make(map[string]int),
-		deletingEnvRoots:            make(map[string]bool),
-		activeStores:                make(map[string]int),
-		deletingStores:              make(map[string]bool),
-		localPathLocks:              NewLocalPathLocker(),
-		p4ClientLocks:               NewLocalPathLocker(),
-		p4Bindings:                  make(map[string]*p4TaskBinding),
-		runtimeGoneInflight:         make(map[string]struct{}),
-		pendingWorkInflight:         make(map[string]struct{}),
-		pendingWorkLastRun:          make(map[string]time.Time),
-		reregisterNextAttempt:       make(map[string]time.Time),
-		reregisterLastCompletedAt:   make(map[string]time.Time),
-		cancelPollInterval:          5 * time.Second,
-		taskSlotWait:                taskSlotWaitTimeout,
-		taskSupplementPollInterval:  defaultTaskSupplementPollInterval,
-		taskSupplementReadyInterval: defaultTaskSupplementReadyInterval,
-		envRootBusyWait:             15 * time.Second,
-		taskPrepareTimeout:          defaultTaskPrepareTimeout,
-		prepareLeaseRefresh:         taskPrepareLeaseRefresh,
-		reconcile:                   newReconcileBroadcaster(),
-		workspaceChanges:            newWorkspaceChangeSignal(),
-		wsRPC:                       newWSRPCClient(wsRPCResponseGrace),
+		cfg:                               cfg,
+		client:                            client,
+		repoCache:                         repocache.New(cacheRoot, logger),
+		p4Cache:                           &p4cache.Cache{Logger: logger, Timeout: cfg.P4Timeout},
+		skillCache:                        NewSkillBundleCache(skillCacheRoot),
+		logger:                            logger,
+		terminalReports:                   newTerminalReportStore(cfg),
+		terminalReportWakeup:              make(chan struct{}, 1),
+		terminalReportNow:                 time.Now,
+		terminalReportFlight:              make(map[string]struct{}),
+		workspaces:                        make(map[string]*workspaceState),
+		runtimeIndex:                      make(map[string]Runtime),
+		profileLaunchSpecs:                make(map[string]profileLaunchSpec),
+		runtimeSet:                        newRuntimeSetWatcher(),
+		agentDiscoveryKick:                make(chan struct{}, 1),
+		agentVersions:                     make(map[string]string),
+		skippedAgents:                     make(map[string]string),
+		resolvedPaths:                     make(map[string]healedAgent),
+		wsHBLastAck:                       make(map[string]time.Time),
+		activeEnvRoots:                    make(map[string]int),
+		deletingEnvRoots:                  make(map[string]bool),
+		activeStores:                      make(map[string]int),
+		deletingStores:                    make(map[string]bool),
+		localPathLocks:                    NewLocalPathLocker(),
+		p4ClientLocks:                     NewLocalPathLocker(),
+		p4Bindings:                        make(map[string]*p4TaskBinding),
+		runtimeGoneInflight:               make(map[string]struct{}),
+		pendingWorkInflight:               make(map[string]struct{}),
+		pendingWorkLastRun:                make(map[string]time.Time),
+		reregisterNextAttempt:             make(map[string]time.Time),
+		reregisterLastCompletedGeneration: make(map[string]uint64),
+		cancelPollInterval:                5 * time.Second,
+		taskSlotWait:                      taskSlotWaitTimeout,
+		taskSupplementPollInterval:        defaultTaskSupplementPollInterval,
+		taskSupplementReadyInterval:       defaultTaskSupplementReadyInterval,
+		envRootBusyWait:                   15 * time.Second,
+		taskPrepareTimeout:                defaultTaskPrepareTimeout,
+		prepareLeaseRefresh:               taskPrepareLeaseRefresh,
+		reconcile:                         newReconcileBroadcaster(),
+		workspaceChanges:                  newWorkspaceChangeSignal(),
+		wsRPC:                             newWSRPCClient(wsRPCResponseGrace),
 	}
 	d.activeEnvRootsCond = sync.NewCond(&d.activeEnvRootsMu)
 	d.activeStoresCond = sync.NewCond(&d.activeStoresMu)
@@ -1343,10 +1344,9 @@ func (d *Daemon) handleRuntimeGone(runtimeID string) {
 		return
 	}
 
-	// entryAt anchors the same-wave-straggler check at the bottom of the
-	// function. Captured at the very top so removeStaleRuntime mutex
-	// contention can't push it past a sibling's register completion.
-	entryAt := time.Now()
+	// Observe recovery before pruning: a successful sibling recovery makes
+	// this observation stale, even when the clock has not advanced.
+	entryGeneration := d.runtimeRecoveryGeneration.Load()
 
 	// Stampede control per runtime ID.
 	d.runtimeGoneMu.Lock()
@@ -1373,7 +1373,7 @@ func (d *Daemon) handleRuntimeGone(runtimeID string) {
 		"runtime_id", runtimeID, "workspace_id", workspaceID)
 	d.notifyRuntimeSetChanged()
 
-	if !d.tryClaimRegisterSlot(workspaceID, entryAt, time.Now()) {
+	if !d.tryClaimRegisterSlot(workspaceID, entryGeneration, time.Now()) {
 		d.logger.Debug("skip re-register: coalescing with recent attempt",
 			"workspace_id", workspaceID)
 		return
@@ -1390,49 +1390,24 @@ func (d *Daemon) handleRuntimeGone(runtimeID string) {
 	}
 }
 
-// tryClaimRegisterSlot atomically decides whether the calling goroutine should
-// run registerRuntimesForWorkspace. Returns true and claims the in-flight slot
-// when the caller may proceed; returns false (without mutating state) when the
-// call must be coalesced with a peer.
-//
-// Two gates are checked under runtimeGoneMu:
-//
-//  1. reregisterNextAttempt: a future timestamp means a peer holds the slot or
-//     a previous attempt failed and we are inside the failure backoff window.
-//  2. reregisterLastCompletedAt: a timestamp at or after our entryAt means a
-//     peer's register SUCCEEDED after we entered handleRuntimeGone, so the
-//     workspace state is already covered for our wave and we can bail.
-//     Failures intentionally don't stamp this field (see
-//     recordRegisterCompletion), so a same-wave straggler whose entryAt
-//     predates a failed sibling can still retry once the failure backoff
-//     expires — failures don't cover anything.
-//
-// entryAt is the wall-clock captured at the top of handleRuntimeGone. now is
-// passed in (rather than read inside) so tests can drive the gate
-// deterministically without sleeping.
-func (d *Daemon) tryClaimRegisterSlot(workspaceID string, entryAt, now time.Time) bool {
+// tryClaimRegisterSlot coalesces in-flight work and observations covered by a
+// successful recovery. Logical generations distinguish sequential events on
+// Windows clocks with coarse resolution; time is used only for failure backoff.
+func (d *Daemon) tryClaimRegisterSlot(workspaceID string, entryGeneration uint64, now time.Time) bool {
 	d.runtimeGoneMu.Lock()
 	defer d.runtimeGoneMu.Unlock()
 	if next, ok := d.reregisterNextAttempt[workspaceID]; ok && now.Before(next) {
 		return false
 	}
-	if last, ok := d.reregisterLastCompletedAt[workspaceID]; ok && !last.Before(entryAt) {
+	if last, ok := d.reregisterLastCompletedGeneration[workspaceID]; ok && last > entryGeneration {
 		return false
 	}
 	d.reregisterNextAttempt[workspaceID] = now.Add(reregisterCoalesceWindow)
 	return true
 }
 
-// recordRegisterCompletion records the outcome of a register call. On success
-// it stamps lastCompletedAt (which suppresses same-wave stragglers via
-// tryClaimRegisterSlot) and clears the in-flight slot so a genuinely later
-// runtime deletion can claim immediately. On failure it extends
-// reregisterNextAttempt by the failure backoff and intentionally does NOT
-// stamp lastCompletedAt — a failed register did not cover any workspace
-// state, so a same-wave straggler whose entryAt predates the failure must
-// still be allowed to retry once the backoff expires. workspaceSyncLoop only
-// retries when the workspace's runtimeIDs fully drain, so partial-deletion
-// recovery has to come from the straggler path.
+// Successful recovery covers earlier observations and releases the slot.
+// Failure only starts a backoff; it does not cover any pending observation.
 func (d *Daemon) recordRegisterCompletion(workspaceID string, completedAt time.Time, err error) {
 	d.runtimeGoneMu.Lock()
 	defer d.runtimeGoneMu.Unlock()
@@ -1440,7 +1415,7 @@ func (d *Daemon) recordRegisterCompletion(workspaceID string, completedAt time.T
 		d.reregisterNextAttempt[workspaceID] = completedAt.Add(reregisterFailureBackoff)
 		return
 	}
-	d.reregisterLastCompletedAt[workspaceID] = completedAt
+	d.reregisterLastCompletedGeneration[workspaceID] = d.runtimeRecoveryGeneration.Add(1)
 	delete(d.reregisterNextAttempt, workspaceID)
 }
 
