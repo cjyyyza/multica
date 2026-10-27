@@ -17,6 +17,7 @@ WITH renewed AS (
     lease_expires_at = now() + interval '60 seconds', updated_at = now()
   WHERE cmd.id = $1 AND cmd.bridge_id = $2 AND cmd.status IN ('pending', 'leased')
     AND cmd.type = 'send'
+    AND (cmd.expires_at IS NULL OR cmd.expires_at > now())
     AND EXISTS (SELECT 1 FROM popo_bridge b WHERE b.id = cmd.bridge_id AND b.status = 'active')
     AND EXISTS (SELECT 1 FROM channel_installation ci
       WHERE ci.id = cmd.installation_id AND ci.status = 'active'
@@ -63,7 +64,12 @@ func (q *Queries) CancelPopoBridgeOpenCommands(ctx context.Context, arg CancelPo
 }
 
 const cancelPopoInstallationCommands = `-- name: CancelPopoInstallationCommands :exec
-UPDATE popo_bridge_command SET status = 'cancelled', lease_expires_at = NULL, updated_at = now()
+UPDATE popo_bridge_command
+SET status = 'cancelled',
+    not_sent = CASE WHEN requirement_id IS NOT NULL THEN true ELSE not_sent END,
+    evidence_finalized = CASE WHEN requirement_id IS NOT NULL THEN true ELSE evidence_finalized END,
+    lease_expires_at = NULL,
+    updated_at = now()
 WHERE installation_id = $1 AND status IN ('pending', 'leased')
 `
 
@@ -74,7 +80,11 @@ func (q *Queries) CancelPopoInstallationCommands(ctx context.Context, installati
 
 const cancelRevokedPopoBridgeCommands = `-- name: CancelRevokedPopoBridgeCommands :exec
 UPDATE popo_bridge_command AS cmd
-SET status = 'cancelled', lease_expires_at = NULL, updated_at = now()
+SET status = 'cancelled',
+    not_sent = CASE WHEN cmd.requirement_id IS NOT NULL THEN true ELSE cmd.not_sent END,
+    evidence_finalized = CASE WHEN cmd.requirement_id IS NOT NULL THEN true ELSE cmd.evidence_finalized END,
+    lease_expires_at = NULL,
+    updated_at = now()
 WHERE cmd.bridge_id = $1 AND cmd.status IN ('pending', 'leased')
   AND (NOT EXISTS (SELECT 1 FROM popo_bridge b WHERE b.id = cmd.bridge_id AND b.status = 'active')
     OR (cmd.type = 'send' AND NOT EXISTS (
@@ -87,6 +97,38 @@ WHERE cmd.bridge_id = $1 AND cmd.status IN ('pending', 'leased')
 func (q *Queries) CancelRevokedPopoBridgeCommands(ctx context.Context, bridgeID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, cancelRevokedPopoBridgeCommands, bridgeID)
 	return err
+}
+
+const claimPopoInboundExecution = `-- name: ClaimPopoInboundExecution :one
+UPDATE popo_inbound_event
+SET execution_received_at = now(),
+    execution_claim_token = $1::uuid
+WHERE bridge_id = $2
+  AND robot_id = $3
+  AND event_id = $4
+  AND dedupe_enabled
+  AND execution_processed_at IS NULL
+  AND (execution_claim_token IS NULL OR execution_received_at < now() - INTERVAL '60 seconds')
+RETURNING execution_claim_token
+`
+
+type ClaimPopoInboundExecutionParams struct {
+	ClaimToken pgtype.UUID `json:"claim_token"`
+	BridgeID   pgtype.UUID `json:"bridge_id"`
+	RobotID    string      `json:"robot_id"`
+	EventID    string      `json:"event_id"`
+}
+
+func (q *Queries) ClaimPopoInboundExecution(ctx context.Context, arg ClaimPopoInboundExecutionParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, claimPopoInboundExecution,
+		arg.ClaimToken,
+		arg.BridgeID,
+		arg.RobotID,
+		arg.EventID,
+	)
+	var execution_claim_token pgtype.UUID
+	err := row.Scan(&execution_claim_token)
+	return execution_claim_token, err
 }
 
 const consumePopoBridgePairing = `-- name: ConsumePopoBridgePairing :one
@@ -136,7 +178,7 @@ type CountPendingPopoMediaStagingByBridgeRow struct {
 }
 
 // Inbound backlog is pending media uploads. Engine Handle is synchronous on
-// the inbound HTTP request, and popo_inbound_event has no processed column.
+// the inbound HTTP request; transport dedupe evidence is tracked separately.
 func (q *Queries) CountPendingPopoMediaStagingByBridge(ctx context.Context, workspaceID pgtype.UUID) ([]CountPendingPopoMediaStagingByBridgeRow, error) {
 	rows, err := q.db.Query(ctx, countPendingPopoMediaStagingByBridge, workspaceID)
 	if err != nil {
@@ -244,7 +286,7 @@ INSERT INTO popo_bridge_command (
     $1, $2, $3, $4, $5, $6, 'pending'
 )
 ON CONFLICT (delivery_id) DO NOTHING
-RETURNING id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at
+RETURNING id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at, attempt, requirement_id, requirement_kind, occurrence_id, operation_id, recipient_user_id, recipient_binding_id, requirement_revision, issue_revision, snapshot_payload, request_hash, payload_hash, lease_id, dispatched_at, not_sent, retryable, partial_delivery, evidence_finalized, needs_reconcile, next_attempt_at, expires_at, accepted_at, delivered_at, superseded_at, unknown_at
 `
 
 type EnqueuePopoBridgeCommandParams struct {
@@ -280,6 +322,31 @@ func (q *Queries) EnqueuePopoBridgeCommand(ctx context.Context, arg EnqueuePopoB
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Attempt,
+		&i.RequirementID,
+		&i.RequirementKind,
+		&i.OccurrenceID,
+		&i.OperationID,
+		&i.RecipientUserID,
+		&i.RecipientBindingID,
+		&i.RequirementRevision,
+		&i.IssueRevision,
+		&i.SnapshotPayload,
+		&i.RequestHash,
+		&i.PayloadHash,
+		&i.LeaseID,
+		&i.DispatchedAt,
+		&i.NotSent,
+		&i.Retryable,
+		&i.PartialDelivery,
+		&i.EvidenceFinalized,
+		&i.NeedsReconcile,
+		&i.NextAttemptAt,
+		&i.ExpiresAt,
+		&i.AcceptedAt,
+		&i.DeliveredAt,
+		&i.SupersededAt,
+		&i.UnknownAt,
 	)
 	return i, err
 }
@@ -341,8 +408,60 @@ func (q *Queries) GetLatestPopoIssueStatus(ctx context.Context, arg GetLatestPop
 	return issue_status, err
 }
 
+const getLegacyPopoExecutionFence = `-- name: GetLegacyPopoExecutionFence :one
+SELECT installation_id, message_id
+FROM channel_inbound_message_dedup
+WHERE installation_id = $1
+  AND right(message_id, length($2::text) + 1) = ':' || $2::text
+  AND (processed_at IS NOT NULL OR received_at >= now() - INTERVAL '60 seconds')
+LIMIT 1
+`
+
+type GetLegacyPopoExecutionFenceParams struct {
+	InstallationID pgtype.UUID `json:"installation_id"`
+	EventID        string      `json:"event_id"`
+}
+
+type GetLegacyPopoExecutionFenceRow struct {
+	InstallationID pgtype.UUID `json:"installation_id"`
+	MessageID      string      `json:"message_id"`
+}
+
+func (q *Queries) GetLegacyPopoExecutionFence(ctx context.Context, arg GetLegacyPopoExecutionFenceParams) (GetLegacyPopoExecutionFenceRow, error) {
+	row := q.db.QueryRow(ctx, getLegacyPopoExecutionFence, arg.InstallationID, arg.EventID)
+	var i GetLegacyPopoExecutionFenceRow
+	err := row.Scan(&i.InstallationID, &i.MessageID)
+	return i, err
+}
+
+const getPopoBridgeByID = `-- name: GetPopoBridgeByID :one
+SELECT id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by, capabilities_json, supported_protocol_versions, selected_protocol_version, protocol_health_json FROM popo_bridge WHERE id = $1
+`
+
+func (q *Queries) GetPopoBridgeByID(ctx context.Context, id pgtype.UUID) (PopoBridge, error) {
+	row := q.db.QueryRow(ctx, getPopoBridgeByID, id)
+	var i PopoBridge
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.TokenHash,
+		&i.Hostname,
+		&i.Status,
+		&i.LastHeartbeatAt,
+		&i.RobotsJson,
+		&i.CreatedAt,
+		&i.RevokedAt,
+		&i.RevokedBy,
+		&i.CapabilitiesJson,
+		&i.SupportedProtocolVersions,
+		&i.SelectedProtocolVersion,
+		&i.ProtocolHealthJson,
+	)
+	return i, err
+}
+
 const getPopoBridgeByTokenHash = `-- name: GetPopoBridgeByTokenHash :one
-SELECT id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by FROM popo_bridge
+SELECT id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by, capabilities_json, supported_protocol_versions, selected_protocol_version, protocol_health_json FROM popo_bridge
 WHERE token_hash = $1
 `
 
@@ -360,12 +479,16 @@ func (q *Queries) GetPopoBridgeByTokenHash(ctx context.Context, tokenHash string
 		&i.CreatedAt,
 		&i.RevokedAt,
 		&i.RevokedBy,
+		&i.CapabilitiesJson,
+		&i.SupportedProtocolVersions,
+		&i.SelectedProtocolVersion,
+		&i.ProtocolHealthJson,
 	)
 	return i, err
 }
 
 const getPopoBridgeCommandByDeliveryID = `-- name: GetPopoBridgeCommandByDeliveryID :one
-SELECT id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at FROM popo_bridge_command WHERE delivery_id = $1
+SELECT id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at, attempt, requirement_id, requirement_kind, occurrence_id, operation_id, recipient_user_id, recipient_binding_id, requirement_revision, issue_revision, snapshot_payload, request_hash, payload_hash, lease_id, dispatched_at, not_sent, retryable, partial_delivery, evidence_finalized, needs_reconcile, next_attempt_at, expires_at, accepted_at, delivered_at, superseded_at, unknown_at FROM popo_bridge_command WHERE delivery_id = $1
 `
 
 func (q *Queries) GetPopoBridgeCommandByDeliveryID(ctx context.Context, deliveryID pgtype.UUID) (PopoBridgeCommand, error) {
@@ -385,12 +508,37 @@ func (q *Queries) GetPopoBridgeCommandByDeliveryID(ctx context.Context, delivery
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Attempt,
+		&i.RequirementID,
+		&i.RequirementKind,
+		&i.OccurrenceID,
+		&i.OperationID,
+		&i.RecipientUserID,
+		&i.RecipientBindingID,
+		&i.RequirementRevision,
+		&i.IssueRevision,
+		&i.SnapshotPayload,
+		&i.RequestHash,
+		&i.PayloadHash,
+		&i.LeaseID,
+		&i.DispatchedAt,
+		&i.NotSent,
+		&i.Retryable,
+		&i.PartialDelivery,
+		&i.EvidenceFinalized,
+		&i.NeedsReconcile,
+		&i.NextAttemptAt,
+		&i.ExpiresAt,
+		&i.AcceptedAt,
+		&i.DeliveredAt,
+		&i.SupersededAt,
+		&i.UnknownAt,
 	)
 	return i, err
 }
 
 const getPopoBridgeCommandForBridge = `-- name: GetPopoBridgeCommandForBridge :one
-SELECT id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at FROM popo_bridge_command
+SELECT id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at, attempt, requirement_id, requirement_kind, occurrence_id, operation_id, recipient_user_id, recipient_binding_id, requirement_revision, issue_revision, snapshot_payload, request_hash, payload_hash, lease_id, dispatched_at, not_sent, retryable, partial_delivery, evidence_finalized, needs_reconcile, next_attempt_at, expires_at, accepted_at, delivered_at, superseded_at, unknown_at FROM popo_bridge_command
 WHERE id = $1 AND bridge_id = $2
 `
 
@@ -416,12 +564,37 @@ func (q *Queries) GetPopoBridgeCommandForBridge(ctx context.Context, arg GetPopo
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Attempt,
+		&i.RequirementID,
+		&i.RequirementKind,
+		&i.OccurrenceID,
+		&i.OperationID,
+		&i.RecipientUserID,
+		&i.RecipientBindingID,
+		&i.RequirementRevision,
+		&i.IssueRevision,
+		&i.SnapshotPayload,
+		&i.RequestHash,
+		&i.PayloadHash,
+		&i.LeaseID,
+		&i.DispatchedAt,
+		&i.NotSent,
+		&i.Retryable,
+		&i.PartialDelivery,
+		&i.EvidenceFinalized,
+		&i.NeedsReconcile,
+		&i.NextAttemptAt,
+		&i.ExpiresAt,
+		&i.AcceptedAt,
+		&i.DeliveredAt,
+		&i.SupersededAt,
+		&i.UnknownAt,
 	)
 	return i, err
 }
 
 const getPopoBridgeInWorkspace = `-- name: GetPopoBridgeInWorkspace :one
-SELECT id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by FROM popo_bridge
+SELECT id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by, capabilities_json, supported_protocol_versions, selected_protocol_version, protocol_health_json FROM popo_bridge
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -444,6 +617,10 @@ func (q *Queries) GetPopoBridgeInWorkspace(ctx context.Context, arg GetPopoBridg
 		&i.CreatedAt,
 		&i.RevokedAt,
 		&i.RevokedBy,
+		&i.CapabilitiesJson,
+		&i.SupportedProtocolVersions,
+		&i.SelectedProtocolVersion,
+		&i.ProtocolHealthJson,
 	)
 	return i, err
 }
@@ -471,18 +648,22 @@ func (q *Queries) GetPopoBridgePairingByCodeHashForUpdate(ctx context.Context, c
 	return i, err
 }
 
-const getPopoInboundEvent = `-- name: GetPopoInboundEvent :one
-SELECT id, workspace_id, bridge_id, installation_id, event_id, robot_id, accepted, duplicate, created_at FROM popo_inbound_event
-WHERE installation_id = $1 AND event_id = $2
+const getPopoInboundEventByIdentity = `-- name: GetPopoInboundEventByIdentity :one
+SELECT id, workspace_id, bridge_id, installation_id, event_id, robot_id, accepted, duplicate, created_at, payload_hash, payload_evidence, dedupe_enabled, execution_claim_token, execution_received_at, execution_processed_at FROM popo_inbound_event
+WHERE bridge_id = $1
+  AND robot_id = $2
+  AND event_id = $3
+  AND dedupe_enabled
 `
 
-type GetPopoInboundEventParams struct {
-	InstallationID pgtype.UUID `json:"installation_id"`
-	EventID        string      `json:"event_id"`
+type GetPopoInboundEventByIdentityParams struct {
+	BridgeID pgtype.UUID `json:"bridge_id"`
+	RobotID  string      `json:"robot_id"`
+	EventID  string      `json:"event_id"`
 }
 
-func (q *Queries) GetPopoInboundEvent(ctx context.Context, arg GetPopoInboundEventParams) (PopoInboundEvent, error) {
-	row := q.db.QueryRow(ctx, getPopoInboundEvent, arg.InstallationID, arg.EventID)
+func (q *Queries) GetPopoInboundEventByIdentity(ctx context.Context, arg GetPopoInboundEventByIdentityParams) (PopoInboundEvent, error) {
+	row := q.db.QueryRow(ctx, getPopoInboundEventByIdentity, arg.BridgeID, arg.RobotID, arg.EventID)
 	var i PopoInboundEvent
 	err := row.Scan(
 		&i.ID,
@@ -494,6 +675,12 @@ func (q *Queries) GetPopoInboundEvent(ctx context.Context, arg GetPopoInboundEve
 		&i.Accepted,
 		&i.Duplicate,
 		&i.CreatedAt,
+		&i.PayloadHash,
+		&i.PayloadEvidence,
+		&i.DedupeEnabled,
+		&i.ExecutionClaimToken,
+		&i.ExecutionReceivedAt,
+		&i.ExecutionProcessedAt,
 	)
 	return i, err
 }
@@ -693,19 +880,31 @@ func (q *Queries) GetPopoRegistrationInWorkspace(ctx context.Context, arg GetPop
 const heartbeatPopoBridge = `-- name: HeartbeatPopoBridge :one
 UPDATE popo_bridge
 SET last_heartbeat_at = now(),
-    robots_json = $2
-WHERE id = $1
+    robots_json = $1::jsonb,
+    supported_protocol_versions = $2::jsonb,
+    selected_protocol_version = $3,
+    protocol_health_json = $4::jsonb
+WHERE id = $5
   AND status = 'active'
-RETURNING id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by
+RETURNING id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by, capabilities_json, supported_protocol_versions, selected_protocol_version, protocol_health_json
 `
 
 type HeartbeatPopoBridgeParams struct {
-	ID         pgtype.UUID `json:"id"`
-	RobotsJson []byte      `json:"robots_json"`
+	RobotsJson                []byte      `json:"robots_json"`
+	SupportedProtocolVersions []byte      `json:"supported_protocol_versions"`
+	SelectedProtocolVersion   int32       `json:"selected_protocol_version"`
+	ProtocolHealthJson        []byte      `json:"protocol_health_json"`
+	ID                        pgtype.UUID `json:"id"`
 }
 
 func (q *Queries) HeartbeatPopoBridge(ctx context.Context, arg HeartbeatPopoBridgeParams) (PopoBridge, error) {
-	row := q.db.QueryRow(ctx, heartbeatPopoBridge, arg.ID, arg.RobotsJson)
+	row := q.db.QueryRow(ctx, heartbeatPopoBridge,
+		arg.RobotsJson,
+		arg.SupportedProtocolVersions,
+		arg.SelectedProtocolVersion,
+		arg.ProtocolHealthJson,
+		arg.ID,
+	)
 	var i PopoBridge
 	err := row.Scan(
 		&i.ID,
@@ -718,27 +917,37 @@ func (q *Queries) HeartbeatPopoBridge(ctx context.Context, arg HeartbeatPopoBrid
 		&i.CreatedAt,
 		&i.RevokedAt,
 		&i.RevokedBy,
+		&i.CapabilitiesJson,
+		&i.SupportedProtocolVersions,
+		&i.SelectedProtocolVersion,
+		&i.ProtocolHealthJson,
 	)
 	return i, err
 }
 
 const insertPopoBridge = `-- name: InsertPopoBridge :one
 INSERT INTO popo_bridge (
-    workspace_id, token_hash, hostname, status
+    workspace_id, token_hash, hostname, status, capabilities_json
 ) VALUES (
-    $1, $2, $3, 'active'
+    $1, $2, $3, 'active', $4::jsonb
 )
-RETURNING id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by
+RETURNING id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by, capabilities_json, supported_protocol_versions, selected_protocol_version, protocol_health_json
 `
 
 type InsertPopoBridgeParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	TokenHash   string      `json:"token_hash"`
-	Hostname    string      `json:"hostname"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	TokenHash        string      `json:"token_hash"`
+	Hostname         string      `json:"hostname"`
+	CapabilitiesJson []byte      `json:"capabilities_json"`
 }
 
 func (q *Queries) InsertPopoBridge(ctx context.Context, arg InsertPopoBridgeParams) (PopoBridge, error) {
-	row := q.db.QueryRow(ctx, insertPopoBridge, arg.WorkspaceID, arg.TokenHash, arg.Hostname)
+	row := q.db.QueryRow(ctx, insertPopoBridge,
+		arg.WorkspaceID,
+		arg.TokenHash,
+		arg.Hostname,
+		arg.CapabilitiesJson,
+	)
 	var i PopoBridge
 	err := row.Scan(
 		&i.ID,
@@ -751,27 +960,36 @@ func (q *Queries) InsertPopoBridge(ctx context.Context, arg InsertPopoBridgePara
 		&i.CreatedAt,
 		&i.RevokedAt,
 		&i.RevokedBy,
+		&i.CapabilitiesJson,
+		&i.SupportedProtocolVersions,
+		&i.SelectedProtocolVersion,
+		&i.ProtocolHealthJson,
 	)
 	return i, err
 }
 
 const insertPopoInboundEvent = `-- name: InsertPopoInboundEvent :one
 INSERT INTO popo_inbound_event (
-    workspace_id, bridge_id, installation_id, event_id, robot_id, accepted, duplicate
+    workspace_id, bridge_id, installation_id, event_id, robot_id,
+    accepted, duplicate, payload_hash, payload_evidence
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7
+    $1, $2, $3, $4, $5, $6, $7,
+    $8::text,
+    $9::jsonb
 )
-RETURNING id, workspace_id, bridge_id, installation_id, event_id, robot_id, accepted, duplicate, created_at
+RETURNING id, workspace_id, bridge_id, installation_id, event_id, robot_id, accepted, duplicate, created_at, payload_hash, payload_evidence, dedupe_enabled, execution_claim_token, execution_received_at, execution_processed_at
 `
 
 type InsertPopoInboundEventParams struct {
-	WorkspaceID    pgtype.UUID `json:"workspace_id"`
-	BridgeID       pgtype.UUID `json:"bridge_id"`
-	InstallationID pgtype.UUID `json:"installation_id"`
-	EventID        string      `json:"event_id"`
-	RobotID        string      `json:"robot_id"`
-	Accepted       bool        `json:"accepted"`
-	Duplicate      bool        `json:"duplicate"`
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	BridgeID        pgtype.UUID `json:"bridge_id"`
+	InstallationID  pgtype.UUID `json:"installation_id"`
+	EventID         string      `json:"event_id"`
+	RobotID         string      `json:"robot_id"`
+	Accepted        bool        `json:"accepted"`
+	Duplicate       bool        `json:"duplicate"`
+	PayloadHash     pgtype.Text `json:"payload_hash"`
+	PayloadEvidence []byte      `json:"payload_evidence"`
 }
 
 func (q *Queries) InsertPopoInboundEvent(ctx context.Context, arg InsertPopoInboundEventParams) (PopoInboundEvent, error) {
@@ -783,6 +1001,8 @@ func (q *Queries) InsertPopoInboundEvent(ctx context.Context, arg InsertPopoInbo
 		arg.RobotID,
 		arg.Accepted,
 		arg.Duplicate,
+		arg.PayloadHash,
+		arg.PayloadEvidence,
 	)
 	var i PopoInboundEvent
 	err := row.Scan(
@@ -795,6 +1015,12 @@ func (q *Queries) InsertPopoInboundEvent(ctx context.Context, arg InsertPopoInbo
 		&i.Accepted,
 		&i.Duplicate,
 		&i.CreatedAt,
+		&i.PayloadHash,
+		&i.PayloadEvidence,
+		&i.DedupeEnabled,
+		&i.ExecutionClaimToken,
+		&i.ExecutionReceivedAt,
+		&i.ExecutionProcessedAt,
 	)
 	return i, err
 }
@@ -975,6 +1201,7 @@ WITH picked AS (
     FROM popo_bridge_command AS cmd
     WHERE cmd.bridge_id = $3
       AND cmd.status = 'pending'
+      AND (cmd.expires_at IS NULL OR cmd.expires_at > now())
       AND EXISTS (SELECT 1 FROM popo_bridge b WHERE b.id = cmd.bridge_id AND b.status = 'active')
       AND (cmd.type <> 'send' OR EXISTS (
         SELECT 1 FROM channel_installation ci
@@ -987,13 +1214,15 @@ WITH picked AS (
 )
 UPDATE popo_bridge_command AS c
 SET status = 'leased',
+    lease_id = gen_random_uuid(),
+    dispatched_at = COALESCE(c.dispatched_at, now()),
     lease_expires_at = CASE WHEN c.type = 'register_qr'
       THEN $1::timestamptz
       ELSE $2::timestamptz END,
     updated_at = now()
 FROM picked
 WHERE c.id = picked.id
-RETURNING c.id, c.workspace_id, c.bridge_id, c.installation_id, c.type, c.delivery_id, c.payload, c.status, c.lease_expires_at, c.remote_message_id, c.last_error, c.created_at, c.updated_at
+RETURNING c.id, c.workspace_id, c.bridge_id, c.installation_id, c.type, c.delivery_id, c.payload, c.status, c.lease_expires_at, c.remote_message_id, c.last_error, c.created_at, c.updated_at, c.attempt, c.requirement_id, c.requirement_kind, c.occurrence_id, c.operation_id, c.recipient_user_id, c.recipient_binding_id, c.requirement_revision, c.issue_revision, c.snapshot_payload, c.request_hash, c.payload_hash, c.lease_id, c.dispatched_at, c.not_sent, c.retryable, c.partial_delivery, c.evidence_finalized, c.needs_reconcile, c.next_attempt_at, c.expires_at, c.accepted_at, c.delivered_at, c.superseded_at, c.unknown_at
 `
 
 type LeasePopoBridgeCommandsParams struct {
@@ -1031,6 +1260,31 @@ func (q *Queries) LeasePopoBridgeCommands(ctx context.Context, arg LeasePopoBrid
 			&i.LastError,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Attempt,
+			&i.RequirementID,
+			&i.RequirementKind,
+			&i.OccurrenceID,
+			&i.OperationID,
+			&i.RecipientUserID,
+			&i.RecipientBindingID,
+			&i.RequirementRevision,
+			&i.IssueRevision,
+			&i.SnapshotPayload,
+			&i.RequestHash,
+			&i.PayloadHash,
+			&i.LeaseID,
+			&i.DispatchedAt,
+			&i.NotSent,
+			&i.Retryable,
+			&i.PartialDelivery,
+			&i.EvidenceFinalized,
+			&i.NeedsReconcile,
+			&i.NextAttemptAt,
+			&i.ExpiresAt,
+			&i.AcceptedAt,
+			&i.DeliveredAt,
+			&i.SupersededAt,
+			&i.UnknownAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1043,7 +1297,7 @@ func (q *Queries) LeasePopoBridgeCommands(ctx context.Context, arg LeasePopoBrid
 }
 
 const listPopoBridgesByWorkspace = `-- name: ListPopoBridgesByWorkspace :many
-SELECT id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by FROM popo_bridge
+SELECT id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by, capabilities_json, supported_protocol_versions, selected_protocol_version, protocol_health_json FROM popo_bridge
 WHERE workspace_id = $1
 ORDER BY created_at ASC
 `
@@ -1068,6 +1322,10 @@ func (q *Queries) ListPopoBridgesByWorkspace(ctx context.Context, workspaceID pg
 			&i.CreatedAt,
 			&i.RevokedAt,
 			&i.RevokedBy,
+			&i.CapabilitiesJson,
+			&i.SupportedProtocolVersions,
+			&i.SelectedProtocolVersion,
+			&i.ProtocolHealthJson,
 		); err != nil {
 			return nil, err
 		}
@@ -1226,7 +1484,7 @@ func (q *Queries) ListPopoRecoveryCandidates(ctx context.Context, limit int32) (
 }
 
 const lockPopoBridgeCommandForReceipt = `-- name: LockPopoBridgeCommandForReceipt :one
-SELECT id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at FROM popo_bridge_command WHERE id = $1 AND bridge_id = $2 FOR UPDATE
+SELECT id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at, attempt, requirement_id, requirement_kind, occurrence_id, operation_id, recipient_user_id, recipient_binding_id, requirement_revision, issue_revision, snapshot_payload, request_hash, payload_hash, lease_id, dispatched_at, not_sent, retryable, partial_delivery, evidence_finalized, needs_reconcile, next_attempt_at, expires_at, accepted_at, delivered_at, superseded_at, unknown_at FROM popo_bridge_command WHERE id = $1 AND bridge_id = $2 FOR UPDATE
 `
 
 type LockPopoBridgeCommandForReceiptParams struct {
@@ -1251,8 +1509,63 @@ func (q *Queries) LockPopoBridgeCommandForReceipt(ctx context.Context, arg LockP
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Attempt,
+		&i.RequirementID,
+		&i.RequirementKind,
+		&i.OccurrenceID,
+		&i.OperationID,
+		&i.RecipientUserID,
+		&i.RecipientBindingID,
+		&i.RequirementRevision,
+		&i.IssueRevision,
+		&i.SnapshotPayload,
+		&i.RequestHash,
+		&i.PayloadHash,
+		&i.LeaseID,
+		&i.DispatchedAt,
+		&i.NotSent,
+		&i.Retryable,
+		&i.PartialDelivery,
+		&i.EvidenceFinalized,
+		&i.NeedsReconcile,
+		&i.NextAttemptAt,
+		&i.ExpiresAt,
+		&i.AcceptedAt,
+		&i.DeliveredAt,
+		&i.SupersededAt,
+		&i.UnknownAt,
 	)
 	return i, err
+}
+
+const markPopoInboundExecutionProcessed = `-- name: MarkPopoInboundExecutionProcessed :execrows
+UPDATE popo_inbound_event
+SET execution_processed_at = now()
+WHERE bridge_id = $1
+  AND robot_id = $2
+  AND event_id = $3
+  AND execution_claim_token = $4
+  AND execution_processed_at IS NULL
+`
+
+type MarkPopoInboundExecutionProcessedParams struct {
+	BridgeID   pgtype.UUID `json:"bridge_id"`
+	RobotID    string      `json:"robot_id"`
+	EventID    string      `json:"event_id"`
+	ClaimToken pgtype.UUID `json:"claim_token"`
+}
+
+func (q *Queries) MarkPopoInboundExecutionProcessed(ctx context.Context, arg MarkPopoInboundExecutionProcessedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markPopoInboundExecutionProcessed,
+		arg.BridgeID,
+		arg.RobotID,
+		arg.EventID,
+		arg.ClaimToken,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const markPopoMediaStagingFailed = `-- name: MarkPopoMediaStagingFailed :one
@@ -1383,13 +1696,48 @@ SET status = 'pending',
     updated_at = now()
 WHERE bridge_id = $1
   AND status = 'leased'
+  AND requirement_id IS NULL
   AND lease_expires_at IS NOT NULL
   AND lease_expires_at < now()
 `
 
+// Requirement command leases that expired after dispatch are an unknown
+// outcome and are handled by ExpireRequirementPopoCommandLeases; they must
+// never return to pending. Ordinary commands keep the v1 reclaim behavior.
 func (q *Queries) ReclaimExpiredPopoBridgeCommandLeases(ctx context.Context, bridgeID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, reclaimExpiredPopoBridgeCommandLeases, bridgeID)
 	return err
+}
+
+const releasePopoInboundExecution = `-- name: ReleasePopoInboundExecution :execrows
+UPDATE popo_inbound_event
+SET execution_claim_token = NULL,
+    execution_received_at = NULL
+WHERE bridge_id = $1
+  AND robot_id = $2
+  AND event_id = $3
+  AND execution_claim_token = $4
+  AND execution_processed_at IS NULL
+`
+
+type ReleasePopoInboundExecutionParams struct {
+	BridgeID   pgtype.UUID `json:"bridge_id"`
+	RobotID    string      `json:"robot_id"`
+	EventID    string      `json:"event_id"`
+	ClaimToken pgtype.UUID `json:"claim_token"`
+}
+
+func (q *Queries) ReleasePopoInboundExecution(ctx context.Context, arg ReleasePopoInboundExecutionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releasePopoInboundExecution,
+		arg.BridgeID,
+		arg.RobotID,
+		arg.EventID,
+		arg.ClaimToken,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const resetPopoMediaStaging = `-- name: ResetPopoMediaStaging :one
@@ -1467,7 +1815,7 @@ SET status = 'revoked',
 WHERE id = $1
   AND workspace_id = $2
   AND status = 'active'
-RETURNING id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by
+RETURNING id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by, capabilities_json, supported_protocol_versions, selected_protocol_version, protocol_health_json
 `
 
 type RevokePopoBridgeParams struct {
@@ -1490,6 +1838,10 @@ func (q *Queries) RevokePopoBridge(ctx context.Context, arg RevokePopoBridgePara
 		&i.CreatedAt,
 		&i.RevokedAt,
 		&i.RevokedBy,
+		&i.CapabilitiesJson,
+		&i.SupportedProtocolVersions,
+		&i.SelectedProtocolVersion,
+		&i.ProtocolHealthJson,
 	)
 	return i, err
 }
@@ -1502,7 +1854,7 @@ SET status = $3,
     lease_expires_at = NULL,
     updated_at = now()
 WHERE id = $1 AND bridge_id = $2
-RETURNING id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at
+RETURNING id, workspace_id, bridge_id, installation_id, type, delivery_id, payload, status, lease_expires_at, remote_message_id, last_error, created_at, updated_at, attempt, requirement_id, requirement_kind, occurrence_id, operation_id, recipient_user_id, recipient_binding_id, requirement_revision, issue_revision, snapshot_payload, request_hash, payload_hash, lease_id, dispatched_at, not_sent, retryable, partial_delivery, evidence_finalized, needs_reconcile, next_attempt_at, expires_at, accepted_at, delivered_at, superseded_at, unknown_at
 `
 
 type SetPopoBridgeCommandReceiptParams struct {
@@ -1536,6 +1888,101 @@ func (q *Queries) SetPopoBridgeCommandReceipt(ctx context.Context, arg SetPopoBr
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Attempt,
+		&i.RequirementID,
+		&i.RequirementKind,
+		&i.OccurrenceID,
+		&i.OperationID,
+		&i.RecipientUserID,
+		&i.RecipientBindingID,
+		&i.RequirementRevision,
+		&i.IssueRevision,
+		&i.SnapshotPayload,
+		&i.RequestHash,
+		&i.PayloadHash,
+		&i.LeaseID,
+		&i.DispatchedAt,
+		&i.NotSent,
+		&i.Retryable,
+		&i.PartialDelivery,
+		&i.EvidenceFinalized,
+		&i.NeedsReconcile,
+		&i.NextAttemptAt,
+		&i.ExpiresAt,
+		&i.AcceptedAt,
+		&i.DeliveredAt,
+		&i.SupersededAt,
+		&i.UnknownAt,
+	)
+	return i, err
+}
+
+const setPopoRequirementTemplate = `-- name: SetPopoRequirementTemplate :one
+UPDATE channel_installation
+SET config = jsonb_set(config, '{requirement_template_url}', to_jsonb($1::text)), updated_at = now()
+WHERE id = $2 AND workspace_id = $3 AND channel_type = 'popo' AND status = 'active'
+RETURNING id, workspace_id, agent_id, channel_type, config, status, ws_lease_token, ws_lease_expires_at, installer_user_id, installed_at, created_at, updated_at
+`
+
+type SetPopoRequirementTemplateParams struct {
+	TemplateUrl string      `json:"template_url"`
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) SetPopoRequirementTemplate(ctx context.Context, arg SetPopoRequirementTemplateParams) (ChannelInstallation, error) {
+	row := q.db.QueryRow(ctx, setPopoRequirementTemplate, arg.TemplateUrl, arg.ID, arg.WorkspaceID)
+	var i ChannelInstallation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentID,
+		&i.ChannelType,
+		&i.Config,
+		&i.Status,
+		&i.WsLeaseToken,
+		&i.WsLeaseExpiresAt,
+		&i.InstallerUserID,
+		&i.InstalledAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updatePopoBridgeProtocolSelection = `-- name: UpdatePopoBridgeProtocolSelection :one
+UPDATE popo_bridge
+SET supported_protocol_versions = $1::jsonb,
+    selected_protocol_version = $2
+WHERE id = $3
+  AND status = 'active'
+RETURNING id, workspace_id, token_hash, hostname, status, last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by, capabilities_json, supported_protocol_versions, selected_protocol_version, protocol_health_json
+`
+
+type UpdatePopoBridgeProtocolSelectionParams struct {
+	SupportedProtocolVersions []byte      `json:"supported_protocol_versions"`
+	SelectedProtocolVersion   int32       `json:"selected_protocol_version"`
+	ID                        pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdatePopoBridgeProtocolSelection(ctx context.Context, arg UpdatePopoBridgeProtocolSelectionParams) (PopoBridge, error) {
+	row := q.db.QueryRow(ctx, updatePopoBridgeProtocolSelection, arg.SupportedProtocolVersions, arg.SelectedProtocolVersion, arg.ID)
+	var i PopoBridge
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.TokenHash,
+		&i.Hostname,
+		&i.Status,
+		&i.LastHeartbeatAt,
+		&i.RobotsJson,
+		&i.CreatedAt,
+		&i.RevokedAt,
+		&i.RevokedBy,
+		&i.CapabilitiesJson,
+		&i.SupportedProtocolVersions,
+		&i.SelectedProtocolVersion,
+		&i.ProtocolHealthJson,
 	)
 	return i, err
 }

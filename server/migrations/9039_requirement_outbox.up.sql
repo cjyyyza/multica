@@ -1,0 +1,27 @@
+CREATE TABLE requirement_outbox (
+    id                    UUID NOT NULL DEFAULT gen_random_uuid(),
+    workspace_id          UUID NOT NULL,
+    requirement_id        UUID NOT NULL,
+    kind                  TEXT NOT NULL,
+    occurrence_id         UUID NOT NULL,
+    recipient_binding     JSONB NOT NULL,
+    delivery_id           UUID NOT NULL,
+    operation_id          UUID,
+    request_hash          TEXT,
+    payload               JSONB NOT NULL DEFAULT '{}'::jsonb,
+    requirement_revision  BIGINT NOT NULL CHECK (requirement_revision > 0),
+    issue_revision        BIGINT CHECK (issue_revision > 0),
+    status                TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'delivered', 'failed', 'conflict', 'unknown', 'superseded')),
+    attempt               INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+    next_attempt_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    lease_token           UUID,
+    lease_expires_at      TIMESTAMPTZ,
+    last_error            TEXT,
+    delivered_at          TIMESTAMPTZ,
+    superseded_at         TIMESTAMPTZ,
+    unknown_at            TIMESTAMPTZ,
+    needs_reconcile       BOOLEAN NOT NULL DEFAULT false,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);

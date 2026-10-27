@@ -138,6 +138,7 @@ WHERE i.workspace_id = sqlc.arg('workspace_id')::uuid
   AND i.project_id = ANY(sqlc.arg('project_ids')::uuid[])
   AND i.status = sqlc.arg('from_status')::text
   AND i.status <> sqlc.arg('to_status')::text
+  AND NOT EXISTS (SELECT 1 FROM requirement r WHERE r.issue_id = i.id)
 RETURNING i.*;
 
 -- name: LockProjectForWorkflowChange :one

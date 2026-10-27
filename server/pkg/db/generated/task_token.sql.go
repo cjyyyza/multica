@@ -70,13 +70,32 @@ func (q *Queries) DeleteTaskTokensByTask(ctx context.Context, taskID pgtype.UUID
 }
 
 const getTaskTokenByHash = `-- name: GetTaskTokenByHash :one
-SELECT id, token_hash, task_id, agent_id, workspace_id, user_id, expires_at, created_at FROM task_token
+SELECT task_token.id, task_token.token_hash, task_token.task_id, task_token.agent_id, task_token.workspace_id, task_token.user_id, task_token.expires_at, task_token.created_at, task.mode, task.requirement_id, task.chat_session_id, task.issue_id
+FROM task_token
+JOIN agent_task_queue AS task
+  ON task.id = task_token.task_id
+ AND task.agent_id = task_token.agent_id
 WHERE token_hash = $1 AND expires_at > now()
 `
 
-func (q *Queries) GetTaskTokenByHash(ctx context.Context, tokenHash string) (TaskToken, error) {
+type GetTaskTokenByHashRow struct {
+	ID            pgtype.UUID        `json:"id"`
+	TokenHash     string             `json:"token_hash"`
+	TaskID        pgtype.UUID        `json:"task_id"`
+	AgentID       pgtype.UUID        `json:"agent_id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	UserID        pgtype.UUID        `json:"user_id"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	Mode          string             `json:"mode"`
+	RequirementID pgtype.UUID        `json:"requirement_id"`
+	ChatSessionID pgtype.UUID        `json:"chat_session_id"`
+	IssueID       pgtype.UUID        `json:"issue_id"`
+}
+
+func (q *Queries) GetTaskTokenByHash(ctx context.Context, tokenHash string) (GetTaskTokenByHashRow, error) {
 	row := q.db.QueryRow(ctx, getTaskTokenByHash, tokenHash)
-	var i TaskToken
+	var i GetTaskTokenByHashRow
 	err := row.Scan(
 		&i.ID,
 		&i.TokenHash,
@@ -86,6 +105,10 @@ func (q *Queries) GetTaskTokenByHash(ctx context.Context, tokenHash string) (Tas
 		&i.UserID,
 		&i.ExpiresAt,
 		&i.CreatedAt,
+		&i.Mode,
+		&i.RequirementID,
+		&i.ChatSessionID,
+		&i.IssueID,
 	)
 	return i, err
 }

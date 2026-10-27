@@ -11,23 +11,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const claimYixiezuoOperation = `-- name: ClaimYixiezuoOperation :one
-WITH next AS (
-    SELECT candidate.id FROM yixiezuo_operation candidate
-    WHERE candidate.workspace_id = $1 AND candidate.requested_by = $2 AND candidate.state = 'pending'
-    ORDER BY candidate.created_at, candidate.id FOR UPDATE SKIP LOCKED LIMIT 1
-)
-UPDATE yixiezuo_operation op SET state = 'running', lease_token = gen_random_uuid(), started_at = now()
-FROM next WHERE op.id = next.id RETURNING op.id, op.workspace_id, op.requested_by, op.kind, op.issue_id, op.payload, op.state, op.result, op.error, op.lease_token, op.started_at, op.created_at, op.completed_at, op.request_key
+const bindYixiezuoDraftRequirement = `-- name: BindYixiezuoDraftRequirement :one
+UPDATE yixiezuo_operation SET requirement_id = $1::uuid
+WHERE workspace_id = $2 AND requested_by = $3 AND id = $4
+  AND kind = 'draft' AND state = 'succeeded'
+  AND (requirement_id IS NULL OR requirement_id = $1::uuid)
+RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key, requirement_id, target_operation_id, request_hash
 `
 
-type ClaimYixiezuoOperationParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	RequestedBy pgtype.UUID `json:"requested_by"`
+type BindYixiezuoDraftRequirementParams struct {
+	RequirementID pgtype.UUID `json:"requirement_id"`
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	RequestedBy   pgtype.UUID `json:"requested_by"`
+	OperationID   pgtype.UUID `json:"operation_id"`
 }
 
-func (q *Queries) ClaimYixiezuoOperation(ctx context.Context, arg ClaimYixiezuoOperationParams) (YixiezuoOperation, error) {
-	row := q.db.QueryRow(ctx, claimYixiezuoOperation, arg.WorkspaceID, arg.RequestedBy)
+func (q *Queries) BindYixiezuoDraftRequirement(ctx context.Context, arg BindYixiezuoDraftRequirementParams) (YixiezuoOperation, error) {
+	row := q.db.QueryRow(ctx, bindYixiezuoDraftRequirement,
+		arg.RequirementID,
+		arg.WorkspaceID,
+		arg.RequestedBy,
+		arg.OperationID,
+	)
 	var i YixiezuoOperation
 	err := row.Scan(
 		&i.ID,
@@ -44,15 +49,82 @@ func (q *Queries) ClaimYixiezuoOperation(ctx context.Context, arg ClaimYixiezuoO
 		&i.CreatedAt,
 		&i.CompletedAt,
 		&i.RequestKey,
+		&i.RequirementID,
+		&i.TargetOperationID,
+		&i.RequestHash,
+	)
+	return i, err
+}
+
+const claimYixiezuoOperation = `-- name: ClaimYixiezuoOperation :one
+WITH next AS (
+    SELECT candidate.id FROM yixiezuo_operation candidate
+    WHERE candidate.workspace_id = $1 AND candidate.requested_by = $2 AND candidate.state = 'pending'
+      AND (
+          candidate.requirement_id IS NULL
+          OR EXISTS (
+              SELECT 1 FROM requirement bound
+              JOIN member current_member
+                ON current_member.workspace_id = bound.workspace_id
+               AND current_member.user_id = $2
+              JOIN requirement_participant approver
+                ON approver.workspace_id = bound.workspace_id
+               AND approver.requirement_id = bound.id
+               AND approver.user_id = $2
+               AND approver.role = 'approver'
+              WHERE bound.id = candidate.requirement_id
+                AND bound.workspace_id = candidate.workspace_id
+                AND bound.issue_id = candidate.issue_id
+          )
+      )
+      AND (
+          $3::boolean
+          OR (candidate.kind <> 'draft' AND (candidate.kind <> 'publish' OR candidate.requirement_id IS NULL))
+      )
+    ORDER BY candidate.created_at, candidate.id FOR UPDATE SKIP LOCKED LIMIT 1
+)
+UPDATE yixiezuo_operation op SET state = 'running', lease_token = gen_random_uuid(), started_at = now()
+FROM next WHERE op.id = next.id RETURNING op.id, op.workspace_id, op.requested_by, op.kind, op.issue_id, op.payload, op.state, op.result, op.error, op.lease_token, op.started_at, op.created_at, op.completed_at, op.request_key, op.requirement_id, op.target_operation_id, op.request_hash
+`
+
+type ClaimYixiezuoOperationParams struct {
+	WorkspaceID           pgtype.UUID `json:"workspace_id"`
+	RequestedBy           pgtype.UUID `json:"requested_by"`
+	AllowRequirementWrite bool        `json:"allow_requirement_write"`
+}
+
+func (q *Queries) ClaimYixiezuoOperation(ctx context.Context, arg ClaimYixiezuoOperationParams) (YixiezuoOperation, error) {
+	row := q.db.QueryRow(ctx, claimYixiezuoOperation, arg.WorkspaceID, arg.RequestedBy, arg.AllowRequirementWrite)
+	var i YixiezuoOperation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.RequestedBy,
+		&i.Kind,
+		&i.IssueID,
+		&i.Payload,
+		&i.State,
+		&i.Result,
+		&i.Error,
+		&i.LeaseToken,
+		&i.StartedAt,
+		&i.CreatedAt,
+		&i.CompletedAt,
+		&i.RequestKey,
+		&i.RequirementID,
+		&i.TargetOperationID,
+		&i.RequestHash,
 	)
 	return i, err
 }
 
 const completeYixiezuoOperation = `-- name: CompleteYixiezuoOperation :one
-UPDATE yixiezuo_operation SET state = $5, result = $6, error = $7, completed_at = now()
+UPDATE yixiezuo_operation SET state = $5, result = $6, error = $7, completed_at = now(),
+    payload = CASE WHEN kind = 'draft' AND $5 = 'succeeded'
+        THEN jsonb_set(payload, '{source}', $6::jsonb->'source') ELSE payload END
 WHERE workspace_id = $1 AND requested_by = $2 AND id = $3 AND lease_token = $4
   AND state = 'running' AND started_at >= now() - interval '3 minutes'
-RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key
+RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key, requirement_id, target_operation_id, request_hash
 `
 
 type CompleteYixiezuoOperationParams struct {
@@ -91,6 +163,9 @@ func (q *Queries) CompleteYixiezuoOperation(ctx context.Context, arg CompleteYix
 		&i.CreatedAt,
 		&i.CompletedAt,
 		&i.RequestKey,
+		&i.RequirementID,
+		&i.TargetOperationID,
+		&i.RequestHash,
 	)
 	return i, err
 }
@@ -139,19 +214,30 @@ func (q *Queries) CreateYixiezuoImport(ctx context.Context, arg CreateYixiezuoIm
 }
 
 const createYixiezuoOperation = `-- name: CreateYixiezuoOperation :one
-INSERT INTO yixiezuo_operation (workspace_id, requested_by, kind, issue_id, payload, request_key)
-VALUES ($1, $2, $3, $5, $4, $6)
+INSERT INTO yixiezuo_operation (
+    workspace_id, requested_by, kind, issue_id, payload, request_key,
+    requirement_id, target_operation_id, request_hash, error
+)
+VALUES (
+    $1, $2, $3, $5, $4, $6,
+    $7, $8,
+    $9, COALESCE($10, '')
+)
 ON CONFLICT (workspace_id, requested_by, request_key) WHERE request_key IS NOT NULL
-DO UPDATE SET request_key = EXCLUDED.request_key RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key
+DO UPDATE SET request_key = EXCLUDED.request_key RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key, requirement_id, target_operation_id, request_hash
 `
 
 type CreateYixiezuoOperationParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	RequestedBy pgtype.UUID `json:"requested_by"`
-	Kind        string      `json:"kind"`
-	Payload     []byte      `json:"payload"`
-	IssueID     pgtype.UUID `json:"issue_id"`
-	RequestKey  pgtype.Text `json:"request_key"`
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	RequestedBy       pgtype.UUID `json:"requested_by"`
+	Kind              string      `json:"kind"`
+	Payload           []byte      `json:"payload"`
+	IssueID           pgtype.UUID `json:"issue_id"`
+	RequestKey        pgtype.Text `json:"request_key"`
+	RequirementID     pgtype.UUID `json:"requirement_id"`
+	TargetOperationID pgtype.UUID `json:"target_operation_id"`
+	RequestHash       pgtype.Text `json:"request_hash"`
+	Error             interface{} `json:"error"`
 }
 
 func (q *Queries) CreateYixiezuoOperation(ctx context.Context, arg CreateYixiezuoOperationParams) (YixiezuoOperation, error) {
@@ -162,6 +248,10 @@ func (q *Queries) CreateYixiezuoOperation(ctx context.Context, arg CreateYixiezu
 		arg.Payload,
 		arg.IssueID,
 		arg.RequestKey,
+		arg.RequirementID,
+		arg.TargetOperationID,
+		arg.RequestHash,
+		arg.Error,
 	)
 	var i YixiezuoOperation
 	err := row.Scan(
@@ -179,24 +269,28 @@ func (q *Queries) CreateYixiezuoOperation(ctx context.Context, arg CreateYixiezu
 		&i.CreatedAt,
 		&i.CompletedAt,
 		&i.RequestKey,
+		&i.RequirementID,
+		&i.TargetOperationID,
+		&i.RequestHash,
 	)
 	return i, err
 }
 
 const createYixiezuoReview = `-- name: CreateYixiezuoReview :one
-INSERT INTO yixiezuo_operation (workspace_id, requested_by, kind, issue_id, payload, result, state, request_key)
-VALUES ($1, $2, 'review', $3, $4, $5, 'succeeded', $6)
+INSERT INTO yixiezuo_operation (workspace_id, requested_by, kind, issue_id, payload, result, state, request_key, requirement_id)
+VALUES ($1, $2, 'review', $3, $4, $5, 'succeeded', $6, $7)
 ON CONFLICT (workspace_id, requested_by, request_key) WHERE request_key IS NOT NULL
-DO UPDATE SET request_key = EXCLUDED.request_key RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key
+DO UPDATE SET request_key = EXCLUDED.request_key RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key, requirement_id, target_operation_id, request_hash
 `
 
 type CreateYixiezuoReviewParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	RequestedBy pgtype.UUID `json:"requested_by"`
-	IssueID     pgtype.UUID `json:"issue_id"`
-	Payload     []byte      `json:"payload"`
-	Result      []byte      `json:"result"`
-	RequestKey  pgtype.Text `json:"request_key"`
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	RequestedBy   pgtype.UUID `json:"requested_by"`
+	IssueID       pgtype.UUID `json:"issue_id"`
+	Payload       []byte      `json:"payload"`
+	Result        []byte      `json:"result"`
+	RequestKey    pgtype.Text `json:"request_key"`
+	RequirementID pgtype.UUID `json:"requirement_id"`
 }
 
 func (q *Queries) CreateYixiezuoReview(ctx context.Context, arg CreateYixiezuoReviewParams) (YixiezuoOperation, error) {
@@ -207,6 +301,7 @@ func (q *Queries) CreateYixiezuoReview(ctx context.Context, arg CreateYixiezuoRe
 		arg.Payload,
 		arg.Result,
 		arg.RequestKey,
+		arg.RequirementID,
 	)
 	var i YixiezuoOperation
 	err := row.Scan(
@@ -224,6 +319,9 @@ func (q *Queries) CreateYixiezuoReview(ctx context.Context, arg CreateYixiezuoRe
 		&i.CreatedAt,
 		&i.CompletedAt,
 		&i.RequestKey,
+		&i.RequirementID,
+		&i.TargetOperationID,
+		&i.RequestHash,
 	)
 	return i, err
 }
@@ -246,13 +344,13 @@ func (q *Queries) DeleteYixiezuoImportForMissingIssue(ctx context.Context, arg D
 
 const expireYixiezuoOperations = `-- name: ExpireYixiezuoOperations :many
 UPDATE yixiezuo_operation SET
-    state = CASE WHEN kind = 'publish' AND state = 'running' THEN 'unknown' ELSE 'failed' END,
-    error = CASE WHEN state = 'running' THEN 'The local bridge stopped before reporting a result. Refresh the source before retrying.' ELSE 'The local bridge did not pick up this request. Start multica yixiezuo bridge, then retry.' END,
+    state = CASE WHEN kind IN ('publish', 'draft') AND state = 'running' THEN 'unknown' ELSE 'failed' END,
+    error = CASE WHEN kind = 'draft' AND state = 'running' THEN 'Draft creation is unconfirmed. Do not create it again. Inspect the source for [Multica draft ' || id::text || '] and reconcile its URL.' WHEN state = 'running' THEN 'The local bridge stopped before reporting a result. Refresh the source before retrying.' ELSE 'The local bridge did not pick up this request. Start multica yixiezuo bridge, then retry.' END,
     completed_at = now()
 WHERE workspace_id = $1 AND
     ((state = 'pending' AND created_at < now() - interval '5 minutes') OR
      (state = 'running' AND started_at < now() - interval '3 minutes'))
-RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key
+RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key, requirement_id, target_operation_id, request_hash
 `
 
 func (q *Queries) ExpireYixiezuoOperations(ctx context.Context, workspaceID pgtype.UUID) ([]YixiezuoOperation, error) {
@@ -279,6 +377,9 @@ func (q *Queries) ExpireYixiezuoOperations(ctx context.Context, workspaceID pgty
 			&i.CreatedAt,
 			&i.CompletedAt,
 			&i.RequestKey,
+			&i.RequirementID,
+			&i.TargetOperationID,
+			&i.RequestHash,
 		); err != nil {
 			return nil, err
 		}
@@ -288,6 +389,44 @@ func (q *Queries) ExpireYixiezuoOperations(ctx context.Context, workspaceID pgty
 		return nil, err
 	}
 	return items, nil
+}
+
+const fencePendingYixiezuoOperation = `-- name: FencePendingYixiezuoOperation :exec
+UPDATE yixiezuo_operation
+SET state = 'failed',
+    error = 'Requirement was cancelled before the operation started',
+    completed_at = now(),
+    lease_token = NULL
+WHERE workspace_id = $1 AND id = $2 AND state = 'pending'
+`
+
+type FencePendingYixiezuoOperationParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	OperationID pgtype.UUID `json:"operation_id"`
+}
+
+func (q *Queries) FencePendingYixiezuoOperation(ctx context.Context, arg FencePendingYixiezuoOperationParams) error {
+	_, err := q.db.Exec(ctx, fencePendingYixiezuoOperation, arg.WorkspaceID, arg.OperationID)
+	return err
+}
+
+const fencePendingYixiezuoOperationsForIssue = `-- name: FencePendingYixiezuoOperationsForIssue :exec
+UPDATE yixiezuo_operation
+SET state = 'failed',
+    error = 'Requirement was cancelled before writeback started',
+    completed_at = now(),
+    lease_token = NULL
+WHERE workspace_id = $1 AND issue_id = $2 AND state = 'pending'
+`
+
+type FencePendingYixiezuoOperationsForIssueParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	IssueID     pgtype.UUID `json:"issue_id"`
+}
+
+func (q *Queries) FencePendingYixiezuoOperationsForIssue(ctx context.Context, arg FencePendingYixiezuoOperationsForIssueParams) error {
+	_, err := q.db.Exec(ctx, fencePendingYixiezuoOperationsForIssue, arg.WorkspaceID, arg.IssueID)
+	return err
 }
 
 const getYixiezuoImportByIssue = `-- name: GetYixiezuoImportByIssue :one
@@ -350,7 +489,7 @@ func (q *Queries) GetYixiezuoImportBySource(ctx context.Context, arg GetYixiezuo
 }
 
 const getYixiezuoOperation = `-- name: GetYixiezuoOperation :one
-SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key FROM yixiezuo_operation WHERE workspace_id = $1 AND requested_by = $2 AND id = $3
+SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key, requirement_id, target_operation_id, request_hash FROM yixiezuo_operation WHERE workspace_id = $1 AND requested_by = $2 AND id = $3
 `
 
 type GetYixiezuoOperationParams struct {
@@ -377,12 +516,15 @@ func (q *Queries) GetYixiezuoOperation(ctx context.Context, arg GetYixiezuoOpera
 		&i.CreatedAt,
 		&i.CompletedAt,
 		&i.RequestKey,
+		&i.RequirementID,
+		&i.TargetOperationID,
+		&i.RequestHash,
 	)
 	return i, err
 }
 
 const getYixiezuoOperationByRequestKey = `-- name: GetYixiezuoOperationByRequestKey :one
-SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key FROM yixiezuo_operation WHERE workspace_id = $1 AND requested_by = $2 AND request_key = $3
+SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key, requirement_id, target_operation_id, request_hash FROM yixiezuo_operation WHERE workspace_id = $1 AND requested_by = $2 AND request_key = $3
 `
 
 type GetYixiezuoOperationByRequestKeyParams struct {
@@ -409,12 +551,94 @@ func (q *Queries) GetYixiezuoOperationByRequestKey(ctx context.Context, arg GetY
 		&i.CreatedAt,
 		&i.CompletedAt,
 		&i.RequestKey,
+		&i.RequirementID,
+		&i.TargetOperationID,
+		&i.RequestHash,
+	)
+	return i, err
+}
+
+const getYixiezuoOperationInWorkspace = `-- name: GetYixiezuoOperationInWorkspace :one
+SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key, requirement_id, target_operation_id, request_hash FROM yixiezuo_operation WHERE workspace_id = $1 AND id = $2
+`
+
+type GetYixiezuoOperationInWorkspaceParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) GetYixiezuoOperationInWorkspace(ctx context.Context, arg GetYixiezuoOperationInWorkspaceParams) (YixiezuoOperation, error) {
+	row := q.db.QueryRow(ctx, getYixiezuoOperationInWorkspace, arg.WorkspaceID, arg.ID)
+	var i YixiezuoOperation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.RequestedBy,
+		&i.Kind,
+		&i.IssueID,
+		&i.Payload,
+		&i.State,
+		&i.Result,
+		&i.Error,
+		&i.LeaseToken,
+		&i.StartedAt,
+		&i.CreatedAt,
+		&i.CompletedAt,
+		&i.RequestKey,
+		&i.RequirementID,
+		&i.TargetOperationID,
+		&i.RequestHash,
+	)
+	return i, err
+}
+
+const latestYixiezuoDraftByChannel = `-- name: LatestYixiezuoDraftByChannel :one
+SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key, requirement_id, target_operation_id, request_hash FROM yixiezuo_operation
+WHERE workspace_id = $1 AND requested_by = $2 AND kind = 'draft'
+  AND payload->'channel'->>'installation_id' = $3::text
+  AND payload->'channel'->>'chat_id' = $4::text
+ORDER BY created_at DESC, id DESC LIMIT 1
+`
+
+type LatestYixiezuoDraftByChannelParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	RequestedBy    pgtype.UUID `json:"requested_by"`
+	InstallationID string      `json:"installation_id"`
+	ChatID         string      `json:"chat_id"`
+}
+
+func (q *Queries) LatestYixiezuoDraftByChannel(ctx context.Context, arg LatestYixiezuoDraftByChannelParams) (YixiezuoOperation, error) {
+	row := q.db.QueryRow(ctx, latestYixiezuoDraftByChannel,
+		arg.WorkspaceID,
+		arg.RequestedBy,
+		arg.InstallationID,
+		arg.ChatID,
+	)
+	var i YixiezuoOperation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.RequestedBy,
+		&i.Kind,
+		&i.IssueID,
+		&i.Payload,
+		&i.State,
+		&i.Result,
+		&i.Error,
+		&i.LeaseToken,
+		&i.StartedAt,
+		&i.CreatedAt,
+		&i.CompletedAt,
+		&i.RequestKey,
+		&i.RequirementID,
+		&i.TargetOperationID,
+		&i.RequestHash,
 	)
 	return i, err
 }
 
 const latestYixiezuoOperation = `-- name: LatestYixiezuoOperation :one
-SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key FROM yixiezuo_operation WHERE workspace_id = $1 AND issue_id = $2 AND kind <> 'review'
+SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key, requirement_id, target_operation_id, request_hash FROM yixiezuo_operation WHERE workspace_id = $1 AND issue_id = $2 AND kind <> 'review'
 ORDER BY created_at DESC, id DESC LIMIT 1
 `
 
@@ -441,8 +665,61 @@ func (q *Queries) LatestYixiezuoOperation(ctx context.Context, arg LatestYixiezu
 		&i.CreatedAt,
 		&i.CompletedAt,
 		&i.RequestKey,
+		&i.RequirementID,
+		&i.TargetOperationID,
+		&i.RequestHash,
 	)
 	return i, err
+}
+
+const listUnsettledYixiezuoDrafts = `-- name: ListUnsettledYixiezuoDrafts :many
+SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key, requirement_id, target_operation_id, request_hash FROM yixiezuo_operation
+WHERE workspace_id = $1 AND requested_by = $2
+  AND kind = 'draft' AND state = 'succeeded' AND requirement_id IS NULL
+ORDER BY created_at, id LIMIT 20
+`
+
+type ListUnsettledYixiezuoDraftsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RequestedBy pgtype.UUID `json:"requested_by"`
+}
+
+func (q *Queries) ListUnsettledYixiezuoDrafts(ctx context.Context, arg ListUnsettledYixiezuoDraftsParams) ([]YixiezuoOperation, error) {
+	rows, err := q.db.Query(ctx, listUnsettledYixiezuoDrafts, arg.WorkspaceID, arg.RequestedBy)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []YixiezuoOperation{}
+	for rows.Next() {
+		var i YixiezuoOperation
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.RequestedBy,
+			&i.Kind,
+			&i.IssueID,
+			&i.Payload,
+			&i.State,
+			&i.Result,
+			&i.Error,
+			&i.LeaseToken,
+			&i.StartedAt,
+			&i.CreatedAt,
+			&i.CompletedAt,
+			&i.RequestKey,
+			&i.RequirementID,
+			&i.TargetOperationID,
+			&i.RequestHash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listYixiezuoImportStates = `-- name: ListYixiezuoImportStates :many
@@ -496,6 +773,55 @@ func (q *Queries) ListYixiezuoImportStates(ctx context.Context, workspaceID pgty
 	return items, nil
 }
 
+const listYixiezuoOperationsByIssue = `-- name: ListYixiezuoOperationsByIssue :many
+SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key, requirement_id, target_operation_id, request_hash FROM yixiezuo_operation
+WHERE workspace_id = $1 AND issue_id = $2
+ORDER BY created_at, id
+`
+
+type ListYixiezuoOperationsByIssueParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	IssueID     pgtype.UUID `json:"issue_id"`
+}
+
+func (q *Queries) ListYixiezuoOperationsByIssue(ctx context.Context, arg ListYixiezuoOperationsByIssueParams) ([]YixiezuoOperation, error) {
+	rows, err := q.db.Query(ctx, listYixiezuoOperationsByIssue, arg.WorkspaceID, arg.IssueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []YixiezuoOperation{}
+	for rows.Next() {
+		var i YixiezuoOperation
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.RequestedBy,
+			&i.Kind,
+			&i.IssueID,
+			&i.Payload,
+			&i.State,
+			&i.Result,
+			&i.Error,
+			&i.LeaseToken,
+			&i.StartedAt,
+			&i.CreatedAt,
+			&i.CompletedAt,
+			&i.RequestKey,
+			&i.RequirementID,
+			&i.TargetOperationID,
+			&i.RequestHash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockYixiezuoImportSource = `-- name: LockYixiezuoImportSource :exec
 SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 `
@@ -503,6 +829,99 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 func (q *Queries) LockYixiezuoImportSource(ctx context.Context, sourceKey string) error {
 	_, err := q.db.Exec(ctx, lockYixiezuoImportSource, sourceKey)
 	return err
+}
+
+const lockYixiezuoOperation = `-- name: LockYixiezuoOperation :one
+SELECT id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key, requirement_id, target_operation_id, request_hash FROM yixiezuo_operation WHERE workspace_id = $1 AND id = $2 FOR UPDATE
+`
+
+type LockYixiezuoOperationParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) LockYixiezuoOperation(ctx context.Context, arg LockYixiezuoOperationParams) (YixiezuoOperation, error) {
+	row := q.db.QueryRow(ctx, lockYixiezuoOperation, arg.WorkspaceID, arg.ID)
+	var i YixiezuoOperation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.RequestedBy,
+		&i.Kind,
+		&i.IssueID,
+		&i.Payload,
+		&i.State,
+		&i.Result,
+		&i.Error,
+		&i.LeaseToken,
+		&i.StartedAt,
+		&i.CreatedAt,
+		&i.CompletedAt,
+		&i.RequestKey,
+		&i.RequirementID,
+		&i.TargetOperationID,
+		&i.RequestHash,
+	)
+	return i, err
+}
+
+const reconcileYixiezuoOperationState = `-- name: ReconcileYixiezuoOperationState :one
+UPDATE yixiezuo_operation
+SET state = $1,
+    result = $2::jsonb,
+    error = $3,
+    completed_at = COALESCE(completed_at, now()),
+    lease_token = NULL
+WHERE workspace_id = $4
+  AND id = $5
+  AND (
+      state = $1
+      OR (
+          state IN ('pending', 'running', 'unknown', 'conflict', 'needs_reconcile')
+          AND $1 IN ('succeeded', 'failed', 'needs_reconcile')
+      )
+      OR (state = 'failed' AND $1 = 'succeeded')
+  )
+RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key, requirement_id, target_operation_id, request_hash
+`
+
+type ReconcileYixiezuoOperationStateParams struct {
+	State             string      `json:"state"`
+	Result            []byte      `json:"result"`
+	Error             string      `json:"error"`
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	TargetOperationID pgtype.UUID `json:"target_operation_id"`
+}
+
+func (q *Queries) ReconcileYixiezuoOperationState(ctx context.Context, arg ReconcileYixiezuoOperationStateParams) (YixiezuoOperation, error) {
+	row := q.db.QueryRow(ctx, reconcileYixiezuoOperationState,
+		arg.State,
+		arg.Result,
+		arg.Error,
+		arg.WorkspaceID,
+		arg.TargetOperationID,
+	)
+	var i YixiezuoOperation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.RequestedBy,
+		&i.Kind,
+		&i.IssueID,
+		&i.Payload,
+		&i.State,
+		&i.Result,
+		&i.Error,
+		&i.LeaseToken,
+		&i.StartedAt,
+		&i.CreatedAt,
+		&i.CompletedAt,
+		&i.RequestKey,
+		&i.RequirementID,
+		&i.TargetOperationID,
+		&i.RequestHash,
+	)
+	return i, err
 }
 
 const recordYixiezuoPublication = `-- name: RecordYixiezuoPublication :exec
@@ -525,6 +944,70 @@ func (q *Queries) RecordYixiezuoPublication(ctx context.Context, arg RecordYixie
 		arg.PublishedRevision,
 	)
 	return err
+}
+
+const releaseYixiezuoOperation = `-- name: ReleaseYixiezuoOperation :exec
+UPDATE yixiezuo_operation
+SET state = 'pending', lease_token = NULL, started_at = NULL,
+    error = 'pmmcp_write is disabled; requirement publication remains pending'
+WHERE workspace_id = $1 AND requested_by = $2 AND id = $3 AND state = 'running'
+`
+
+type ReleaseYixiezuoOperationParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RequestedBy pgtype.UUID `json:"requested_by"`
+	ID          pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) ReleaseYixiezuoOperation(ctx context.Context, arg ReleaseYixiezuoOperationParams) error {
+	_, err := q.db.Exec(ctx, releaseYixiezuoOperation, arg.WorkspaceID, arg.RequestedBy, arg.ID)
+	return err
+}
+
+const resolveYixiezuoDraft = `-- name: ResolveYixiezuoDraft :one
+UPDATE yixiezuo_operation SET state = 'succeeded', result = $1::jsonb,
+    payload = jsonb_set(payload, '{source}', $1::jsonb->'source'),
+    error = '', completed_at = now(), lease_token = NULL
+WHERE workspace_id = $2 AND requested_by = $3 AND id = $4
+  AND kind = 'draft' AND state IN ('unknown', 'needs_reconcile')
+RETURNING id, workspace_id, requested_by, kind, issue_id, payload, state, result, error, lease_token, started_at, created_at, completed_at, request_key, requirement_id, target_operation_id, request_hash
+`
+
+type ResolveYixiezuoDraftParams struct {
+	Snapshot    []byte      `json:"snapshot"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RequestedBy pgtype.UUID `json:"requested_by"`
+	OperationID pgtype.UUID `json:"operation_id"`
+}
+
+func (q *Queries) ResolveYixiezuoDraft(ctx context.Context, arg ResolveYixiezuoDraftParams) (YixiezuoOperation, error) {
+	row := q.db.QueryRow(ctx, resolveYixiezuoDraft,
+		arg.Snapshot,
+		arg.WorkspaceID,
+		arg.RequestedBy,
+		arg.OperationID,
+	)
+	var i YixiezuoOperation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.RequestedBy,
+		&i.Kind,
+		&i.IssueID,
+		&i.Payload,
+		&i.State,
+		&i.Result,
+		&i.Error,
+		&i.LeaseToken,
+		&i.StartedAt,
+		&i.CreatedAt,
+		&i.CompletedAt,
+		&i.RequestKey,
+		&i.RequirementID,
+		&i.TargetOperationID,
+		&i.RequestHash,
+	)
+	return i, err
 }
 
 const updateYixiezuoImportSnapshot = `-- name: UpdateYixiezuoImportSnapshot :exec
