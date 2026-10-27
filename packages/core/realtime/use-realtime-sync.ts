@@ -19,6 +19,8 @@ import { labelKeys } from "../labels/queries";
 import { propertyKeys } from "../properties/queries";
 import { issueStatusKeys } from "../issue-statuses/queries";
 import { issueWorkflowKeys } from "../issue-workflows/queries";
+import { requirementKeys } from "../requirements/queries";
+import { applyRequirementEventToCache } from "../requirements/realtime";
 import {
   agentTaskSnapshotKeys,
   workspaceWorkingAgentsKeys,
@@ -671,6 +673,7 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     // archived, or to keep painting its old name.
     qc.invalidateQueries({ queryKey: issueStatusKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: issueWorkflowKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: requirementKeys.all(wsId) });
   }
   // Cross-workspace, so outside the wsId guard: a reconnect may have missed
   // inbox events from any workspace, so re-pull the switcher-dot summary.
@@ -1055,6 +1058,7 @@ export function useRealtimeSync(
     const specificEvents = new Set([
       "workspace:updated",
       "issue:updated", "issue:created", "issue:deleted", "issue_attachments:changed", "issue_labels:changed", "issue_metadata:changed", "issue_properties:changed", "property:created", "property:updated", "inbox:new",
+      "requirement:created", "requirement:updated",
       "comment:created", "comment:updated", "comment:deleted",
       "comment:resolved", "comment:unresolved",
       "activity:created",
@@ -1082,7 +1086,15 @@ export function useRealtimeSync(
       const prefix = msg.type.split(":")[0] ?? "";
       if (prefix === "agent" || (prefix === "task" && msg.type !== "task:progress")) {
         const wsId = getCurrentWsId();
-        if (wsId) scheduleWorkingAgentRefresh(wsId);
+        if (wsId) {
+          scheduleWorkingAgentRefresh(wsId);
+          if (prefix === "task") {
+            // Requirement state and permissions also project Issue run state.
+            debouncedRefresh("requirement-task", () => {
+              qc.invalidateQueries({ queryKey: requirementKeys.all(wsId) });
+            });
+          }
+        }
       }
       const refresh = refreshMap[prefix];
       if (refresh) debouncedRefresh(prefix, refresh);
@@ -1133,6 +1145,19 @@ export function useRealtimeSync(
         void onInboxIssueDeleted(qc, wsId, issue_id);
       }
     });
+
+    const applyRequirementEvent = (payload: unknown) => {
+      const wsId = getCurrentWsId();
+      if (wsId) {
+        applyRequirementEventToCache(
+          qc,
+          wsId,
+          payload as import("../types/events").RequirementEventPayload,
+        );
+      }
+    };
+    const unsubRequirementCreated = ws.on("requirement:created", applyRequirementEvent);
+    const unsubRequirementUpdated = ws.on("requirement:updated", applyRequirementEvent);
 
     const unsubIssueLabelsChanged = ws.on("issue_labels:changed", (p) => {
       const { issue_id, labels, issue_revision } = p as IssueLabelsChangedPayload;
@@ -1833,6 +1858,8 @@ export function useRealtimeSync(
       unsubIssueUpdated();
       unsubIssueCreated();
       unsubIssueDeleted();
+      unsubRequirementCreated();
+      unsubRequirementUpdated();
       unsubIssueAttachmentsChanged();
       unsubIssueLabelsChanged();
       unsubIssueMetadataChanged();

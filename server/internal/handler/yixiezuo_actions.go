@@ -28,6 +28,9 @@ func (e *yixiezuoActionError) Error() string       { return e.message }
 func sourceError(status int, message string) error { return &yixiezuoActionError{status, message} }
 
 func writeSourceError(w http.ResponseWriter, err error) {
+	if writeRequirementChatExecutionError(w, err) {
+		return
+	}
 	var action *yixiezuoActionError
 	if errors.As(err, &action) {
 		writeError(w, action.status, action.message)
@@ -73,6 +76,33 @@ func sourceScopeMatches(a, b *yixiezuo.ChannelScope) bool {
 	return *a == *b
 }
 
+func authorizeRequirementSourceOperation(ctx context.Context, q *db.Queries, ws, actor, issueID pgtype.UUID) (pgtype.UUID, error) {
+	requirement, err := q.GetRequirementByIssue(ctx, db.GetRequirementByIssueParams{WorkspaceID: ws, IssueID: issueID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return pgtype.UUID{}, nil
+	}
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	if _, err := q.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{WorkspaceID: ws, UserID: actor}); errors.Is(err, pgx.ErrNoRows) {
+		return pgtype.UUID{}, sourceError(http.StatusForbidden, "requirement source operations require an approver who is a current workspace member")
+	} else if err != nil {
+		return pgtype.UUID{}, err
+	}
+	roles, err := q.ListRequirementParticipantRoles(ctx, db.ListRequirementParticipantRolesParams{
+		WorkspaceID: ws, RequirementID: requirement.ID, UserID: actor,
+	})
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	for _, role := range roles {
+		if role.Role == "approver" {
+			return requirement.ID, nil
+		}
+	}
+	return pgtype.UUID{}, sourceError(http.StatusForbidden, "requirement source operations require an approver who is a current workspace member")
+}
+
 // These actor-explicit actions are shared by HTTP and authenticated channel
 // commands. Neither transport simulates HTTP requests for the other.
 func (h *Handler) previewYixiezuo(ctx context.Context, ws, actor pgtype.UUID, rawURL, key string, scope *yixiezuo.ChannelScope) (db.YixiezuoOperation, error) {
@@ -92,7 +122,7 @@ func (h *Handler) queueYixiezuoPreview(ctx context.Context, ws, actor pgtype.UUI
 		return row, err
 	}
 	var saved yixiezuo.OperationPayload
-	if json.Unmarshal(row.Payload, &saved) != nil || row.Kind != "preview" || saved.Source != source || !sourceScopeMatches(saved.Channel, scope) || saved.AutoImport != extra.AutoImport || saved.ProjectID != extra.ProjectID {
+	if json.Unmarshal(row.Payload, &saved) != nil || row.Kind != "preview" || saved.Source != source || !sourceScopeMatches(saved.Channel, scope) || saved.AutoImport != extra.AutoImport || saved.ProjectID != extra.ProjectID || saved.DraftOperationID != extra.DraftOperationID {
 		return row, sourceError(409, "this message already identifies a different source operation")
 	}
 	return row, nil
@@ -110,6 +140,7 @@ func (h *Handler) expireYixiezuoOperations(ctx context.Context, ws pgtype.UUID) 
 func (h *Handler) settleExpiredYixiezuoAutoImports(ctx context.Context, rows []db.YixiezuoOperation) {
 	for _, row := range rows {
 		h.settleYixiezuoAutoImport(ctx, row)
+		h.notifyRequirementDraftOutcome(ctx, row)
 	}
 }
 
@@ -296,6 +327,10 @@ func (h *Handler) enqueueYixiezuo(ctx context.Context, ws, actor, id pgtype.UUID
 	if err != nil {
 		return db.YixiezuoOperation{}, sourceError(404, "issue not found")
 	}
+	requirementID, err := authorizeRequirementSourceOperation(ctx, q, ws, actor, id)
+	if err != nil {
+		return db.YixiezuoOperation{}, err
+	}
 	var snapshot yixiezuo.Snapshot
 	if json.Unmarshal(link.Snapshot, &snapshot) != nil {
 		return db.YixiezuoOperation{}, sourceError(500, "invalid source snapshot")
@@ -356,9 +391,9 @@ func (h *Handler) enqueueYixiezuo(ctx context.Context, ws, actor, id pgtype.UUID
 	payload, _ := json.Marshal(yixiezuo.OperationPayload{Source: snapshot.Source, ExpectedDigest: snapshot.Digest, Revision: recordedRevision, StatusName: req.StatusName, Summary: strings.TrimSpace(req.Summary), Channel: scope})
 	var row db.YixiezuoOperation
 	if kind == "review" {
-		row, err = q.CreateYixiezuoReview(ctx, db.CreateYixiezuoReviewParams{WorkspaceID: ws, RequestedBy: actor, IssueID: id, Payload: payload, Result: link.Snapshot, RequestKey: sourceRequestKey(key)})
+		row, err = q.CreateYixiezuoReview(ctx, db.CreateYixiezuoReviewParams{WorkspaceID: ws, RequestedBy: actor, IssueID: id, Payload: payload, Result: link.Snapshot, RequestKey: sourceRequestKey(key), RequirementID: requirementID})
 	} else {
-		row, err = q.CreateYixiezuoOperation(ctx, db.CreateYixiezuoOperationParams{WorkspaceID: ws, RequestedBy: actor, Kind: kind, IssueID: id, Payload: payload, RequestKey: sourceRequestKey(key)})
+		row, err = q.CreateYixiezuoOperation(ctx, db.CreateYixiezuoOperationParams{WorkspaceID: ws, RequestedBy: actor, Kind: kind, IssueID: id, Payload: payload, RequestKey: sourceRequestKey(key), RequirementID: requirementID})
 	}
 	if err != nil {
 		return row, err

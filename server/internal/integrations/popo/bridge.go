@@ -16,31 +16,32 @@ import (
 )
 
 var (
-	ErrUnknownProtocol          = errors.New("popo: unknown protocol version")
-	ErrPairingInvalid           = errors.New("popo: pairing code invalid, expired, or already used")
-	ErrBridgeNotFound           = errors.New("popo: bridge not found")
-	ErrBridgeRevoked            = errors.New("popo: bridge token revoked")
-	ErrInvalidBridgeID          = errors.New("popo: bridge_id is required")
-	ErrRobotNotIdle             = errors.New("popo: robot is not idle on a recent heartbeat")
-	ErrRobotOccupied            = errors.New("popo: robot is occupied")
-	ErrCommandNotFound          = errors.New("popo: command not found")
-	ErrReceiptConflict          = errors.New("popo: command receipt conflicts with a previous result")
-	ErrInvalidReceipt           = errors.New("popo: invalid command receipt")
-	ErrMissingEventID           = errors.New("popo: event_id is required")
-	ErrMissingSender            = errors.New("popo: sender.id is required")
-	ErrMissingChat              = errors.New("popo: chat.id is required")
-	ErrInstallationWrong        = errors.New("popo: robot is not installed in this workspace")
-	ErrMediaSessionNotFound     = errors.New("popo: media session not found")
-	ErrMediaSessionExpired      = errors.New("popo: media session expired")
-	ErrMediaTooLarge            = errors.New("popo: media exceeds 20 MiB")
-	ErrMediaStorageUnavailable  = errors.New("popo: media storage is not configured")
-	ErrMediaInvalid             = errors.New("popo: invalid media session request")
-	ErrOutboundMediaDenied      = errors.New("popo: outbound media is not granted to this bridge")
-	ErrMediaContentTypeMismatch = errors.New("popo: media content type does not match the session")
-	ErrNoOnlineBridge           = errors.New("popo: pair a Windows host first")
-	ErrRegistrationNotFound     = errors.New("popo: registration not found")
-	ErrInvalidQRURL             = errors.New("popo: qr_url must be an http(s) URL")
-	ErrInvalidProgress          = errors.New("popo: qr_url, robot_id, or error_reason is required")
+	ErrUnknownProtocol           = errors.New("popo: unknown protocol version")
+	ErrPairingInvalid            = errors.New("popo: pairing code invalid, expired, or already used")
+	ErrBridgeNotFound            = errors.New("popo: bridge not found")
+	ErrBridgeRevoked             = errors.New("popo: bridge token revoked")
+	ErrInvalidBridgeID           = errors.New("popo: bridge_id is required")
+	ErrRobotNotIdle              = errors.New("popo: robot is not idle on a recent heartbeat")
+	ErrRobotOccupied             = errors.New("popo: robot is occupied")
+	ErrCommandNotFound           = errors.New("popo: command not found")
+	ErrReceiptConflict           = errors.New("popo: command receipt conflicts with a previous result")
+	ErrInvalidReceipt            = errors.New("popo: invalid command receipt")
+	ErrMissingEventID            = errors.New("popo: event_id is required")
+	ErrMissingSender             = errors.New("popo: sender.id is required")
+	ErrMissingChat               = errors.New("popo: chat.id is required")
+	ErrInvalidInboundPayloadHash = errors.New("popo: invalid inbound payload_hash")
+	ErrInstallationWrong         = errors.New("popo: robot is not installed in this workspace")
+	ErrMediaSessionNotFound      = errors.New("popo: media session not found")
+	ErrMediaSessionExpired       = errors.New("popo: media session expired")
+	ErrMediaTooLarge             = errors.New("popo: media exceeds 20 MiB")
+	ErrMediaStorageUnavailable   = errors.New("popo: media storage is not configured")
+	ErrMediaInvalid              = errors.New("popo: invalid media session request")
+	ErrOutboundMediaDenied       = errors.New("popo: outbound media is not granted to this bridge")
+	ErrMediaContentTypeMismatch  = errors.New("popo: media content type does not match the session")
+	ErrNoOnlineBridge            = errors.New("popo: pair a Windows host first")
+	ErrRegistrationNotFound      = errors.New("popo: registration not found")
+	ErrInvalidQRURL              = errors.New("popo: qr_url must be an http(s) URL")
+	ErrInvalidProgress           = errors.New("popo: qr_url, robot_id, or error_reason is required")
 )
 
 type RobotReport struct {
@@ -50,22 +51,39 @@ type RobotReport struct {
 	OccupiedBy  *string `json:"occupied_by"`
 }
 
+type RequirementOccurrence struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+}
+
+type RequirementRecipient struct {
+	UserID        string `json:"user_id"`
+	BindingID     string `json:"binding_id"`
+	ChannelUserID string `json:"channel_user_id"`
+}
+
 type SendPayload struct {
-	RobotID          string           `json:"robot_id"`
-	ChatID           string           `json:"chat_id"`
-	ChatType         string           `json:"chat_type"`
-	Text             string           `json:"text"`
-	ReplyToMessageID *string          `json:"reply_to_message_id"`
-	IssueID          string           `json:"issue_id,omitempty"`
-	CommentID        string           `json:"comment_id,omitempty"`
-	TaskID           string           `json:"task_id,omitempty"`
-	BindingID        string           `json:"binding_id,omitempty"`
-	RouteRevision    int64            `json:"route_revision,omitempty"`
-	OutboundKind     string           `json:"outbound_kind,omitempty"`
-	SourceKey        string           `json:"source_key,omitempty"`
-	IssueStatus      string           `json:"issue_status,omitempty"`
-	Attachments      []SendAttachment `json:"attachments,omitempty"`
-	Reply            *ReplySnapshot   `json:"reply,omitempty"`
+	RobotID             string                 `json:"robot_id"`
+	ChatID              string                 `json:"chat_id"`
+	ChatType            string                 `json:"chat_type"`
+	Text                string                 `json:"text"`
+	ReplyToMessageID    *string                `json:"reply_to_message_id"`
+	IssueID             string                 `json:"issue_id,omitempty"`
+	CommentID           string                 `json:"comment_id,omitempty"`
+	TaskID              string                 `json:"task_id,omitempty"`
+	BindingID           string                 `json:"binding_id,omitempty"`
+	RouteRevision       int64                  `json:"route_revision,omitempty"`
+	OutboundKind        string                 `json:"outbound_kind,omitempty"`
+	SourceKey           string                 `json:"source_key,omitempty"`
+	IssueStatus         string                 `json:"issue_status,omitempty"`
+	RequirementID       string                 `json:"requirement_id,omitempty"`
+	Occurrence          *RequirementOccurrence `json:"occurrence,omitempty"`
+	Recipient           *RequirementRecipient  `json:"recipient,omitempty"`
+	RequirementRevision int64                  `json:"requirement_revision,omitempty"`
+	IssueRevision       int64                  `json:"issue_revision,omitempty"`
+	RequestHash         string                 `json:"request_hash,omitempty"`
+	Attachments         []SendAttachment       `json:"attachments,omitempty"`
+	Reply               *ReplySnapshot         `json:"reply,omitempty"`
 }
 
 // SendAttachment is one file the Windows bridge should fetch and deliver.
@@ -176,10 +194,15 @@ func (s *BridgeService) Register(ctx context.Context, p RegisterBridgeParams) (R
 	if hostname == "" {
 		hostname = pairing.Hostname
 	}
+	capabilities, err := json.Marshal(normalizeBridgeCapabilities(p.Capabilities))
+	if err != nil {
+		return RegisteredBridge{}, fmt.Errorf("encode bridge capabilities: %w", err)
+	}
 	bridge, err := qtx.InsertPopoBridge(ctx, db.InsertPopoBridgeParams{
-		WorkspaceID: pairing.WorkspaceID,
-		TokenHash:   hashBindingToken(token),
-		Hostname:    hostname,
+		WorkspaceID:      pairing.WorkspaceID,
+		TokenHash:        hashBindingToken(token),
+		Hostname:         hostname,
+		CapabilitiesJson: capabilities,
 	})
 	if err != nil {
 		return RegisteredBridge{}, fmt.Errorf("insert bridge: %w", err)
@@ -215,30 +238,6 @@ func (s *BridgeService) Authenticate(ctx context.Context, rawToken string) (db.P
 		return db.PopoBridge{}, ErrBridgeRevoked
 	}
 	return bridge, nil
-}
-
-func (s *BridgeService) Heartbeat(ctx context.Context, bridgeID pgtype.UUID, protocolVersion int, robots []RobotReport) (db.PopoBridge, error) {
-	if protocolVersion != ProtocolVersion {
-		return db.PopoBridge{}, ErrUnknownProtocol
-	}
-	if robots == nil {
-		robots = []RobotReport{}
-	}
-	payload, err := json.Marshal(robots)
-	if err != nil {
-		return db.PopoBridge{}, fmt.Errorf("encode robots: %w", err)
-	}
-	row, err := s.q.HeartbeatPopoBridge(ctx, db.HeartbeatPopoBridgeParams{
-		ID:         bridgeID,
-		RobotsJson: payload,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return db.PopoBridge{}, ErrBridgeRevoked
-		}
-		return db.PopoBridge{}, err
-	}
-	return row, nil
 }
 
 func (s *BridgeService) List(ctx context.Context, workspaceID pgtype.UUID) ([]db.PopoBridge, error) {
@@ -309,6 +308,40 @@ func DecodeRobots(raw []byte) []RobotReport {
 		return []RobotReport{}
 	}
 	return robots
+}
+
+// BridgeCapabilityReceiptAttemptV1 is reserved for a future explicitly
+// negotiated bridge. The current dj01bot v1 register does not declare it.
+const BridgeCapabilityReceiptAttemptV1 = "receipt_attempt_v1"
+
+func normalizeBridgeCapabilities(raw []string) []string {
+	if len(raw) == 0 {
+		raw = []string{"inbound", "send"}
+	}
+	seen := make(map[string]bool, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, capability := range raw {
+		capability = strings.TrimSpace(capability)
+		if capability == "" || seen[capability] {
+			continue
+		}
+		seen[capability] = true
+		out = append(out, capability)
+	}
+	return out
+}
+
+func BridgeSupportsReceiptAttempt(bridge db.PopoBridge) bool {
+	var capabilities []string
+	if json.Unmarshal(bridge.CapabilitiesJson, &capabilities) != nil {
+		return false
+	}
+	for _, capability := range capabilities {
+		if capability == BridgeCapabilityReceiptAttemptV1 {
+			return true
+		}
+	}
+	return false
 }
 
 func robotIdleOnHeartbeat(bridge db.PopoBridge, robotID string, agentID pgtype.UUID, liveOwnerAgent pgtype.UUID, now time.Time) error {

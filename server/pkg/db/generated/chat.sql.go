@@ -101,7 +101,7 @@ SELECT EXISTS (
     SELECT 1 FROM chat_message
     WHERE chat_session_id = $1
       AND role = 'user'
-      AND message_kind != 'channel_command'
+      AND message_kind NOT IN ('channel_command', 'requirement_context')
 ) AS has_public_user_message
 `
 
@@ -377,7 +377,7 @@ INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, chat_session_id,
     initiator_user_id, originator_user_id, accountable_user_id, force_fresh_session, runtime_mcp_overlay,
     runtime_connected_apps, originator_source, trigger_evidence_kind, trigger_evidence_ref_id,
-    fire_at, channel_context_revision, id
+    fire_at, channel_context_revision, id, mode, requirement_id
 )
 SELECT
     $1, $2, NULL,
@@ -393,9 +393,18 @@ SELECT
     $14,
     $6::timestamptz,
     $15::bigint,
-    COALESCE($16::uuid, gen_random_uuid())
+    COALESCE($16::uuid, gen_random_uuid()),
+    CASE WHEN EXISTS (
+        SELECT 1 FROM requirement r
+        WHERE r.chat_session_id = $4 AND r.issue_id IS NULL AND r.cancelled_at IS NULL
+    ) THEN 'plan' ELSE 'execute' END,
+    (SELECT r.id FROM requirement r WHERE r.chat_session_id = $4)
 WHERE lock_task_owner_rows($1, NULL, $2)
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step
+  AND NOT EXISTS (
+      SELECT 1 FROM requirement r
+      WHERE r.chat_session_id = $4 AND (r.issue_id IS NOT NULL OR r.cancelled_at IS NOT NULL)
+  )
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step, mode, requirement_id
 `
 
 type CreateChatTaskParams struct {
@@ -505,6 +514,8 @@ func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) 
 		&i.CancelledByName,
 		&i.IssueSnapshot,
 		&i.WorkflowStep,
+		&i.Mode,
+		&i.RequirementID,
 	)
 	return i, err
 }
@@ -585,7 +596,7 @@ FROM (
 WHERE task.id = $1
   AND pending.max_until IS NOT NULL
   AND (task.fire_at IS NULL OR task.fire_at < pending.max_until)
-RETURNING task.id, task.agent_id, task.issue_id, task.status, task.priority, task.dispatched_at, task.started_at, task.completed_at, task.result, task.error, task.created_at, task.context, task.runtime_id, task.session_id, task.work_dir, task.trigger_comment_id, task.chat_session_id, task.autopilot_run_id, task.attempt, task.max_attempts, task.parent_task_id, task.failure_reason, task.trigger_summary, task.force_fresh_session, task.is_leader_task, task.wait_reason, task.initiator_user_id, task.handoff_note, task.prepare_lease_expires_at, task.squad_id, task.runtime_mcp_overlay, task.escalation_for_task_id, task.fire_at, task.originator_user_id, task.runtime_connected_apps, task.coalesced_comment_ids, task.delivered_comment_ids, task.chat_input_task_id, task.chat_finalize_deferred_at, task.originator_source, task.delegated_from_task_id, task.retry_of_task_id, task.rerun_of_task_id, task.rule_version_id, task.trigger_evidence_kind, task.trigger_evidence_ref_id, task.accountable_user_id, task.session_rollout_missing, task.retired_session_id, task.quick_actions_disabled, task.regenerate_quick_actions_for, task.branch_name, task.durable_work_dir, task.channel_context_revision, task.comment_thread_id, task.cancelled_by_type, task.cancelled_by_id, task.cancelled_by_name, task.issue_snapshot, task.workflow_step
+RETURNING task.id, task.agent_id, task.issue_id, task.status, task.priority, task.dispatched_at, task.started_at, task.completed_at, task.result, task.error, task.created_at, task.context, task.runtime_id, task.session_id, task.work_dir, task.trigger_comment_id, task.chat_session_id, task.autopilot_run_id, task.attempt, task.max_attempts, task.parent_task_id, task.failure_reason, task.trigger_summary, task.force_fresh_session, task.is_leader_task, task.wait_reason, task.initiator_user_id, task.handoff_note, task.prepare_lease_expires_at, task.squad_id, task.runtime_mcp_overlay, task.escalation_for_task_id, task.fire_at, task.originator_user_id, task.runtime_connected_apps, task.coalesced_comment_ids, task.delivered_comment_ids, task.chat_input_task_id, task.chat_finalize_deferred_at, task.originator_source, task.delegated_from_task_id, task.retry_of_task_id, task.rerun_of_task_id, task.rule_version_id, task.trigger_evidence_kind, task.trigger_evidence_ref_id, task.accountable_user_id, task.session_rollout_missing, task.retired_session_id, task.quick_actions_disabled, task.regenerate_quick_actions_for, task.branch_name, task.durable_work_dir, task.channel_context_revision, task.comment_thread_id, task.cancelled_by_type, task.cancelled_by_id, task.cancelled_by_name, task.issue_snapshot, task.workflow_step, task.mode, task.requirement_id
 `
 
 // Closes the enqueue-vs-append race: under READ COMMITTED a media message can
@@ -658,6 +669,8 @@ func (q *Queries) DeferChatTaskForSealedPendingMedia(ctx context.Context, taskID
 		&i.CancelledByName,
 		&i.IssueSnapshot,
 		&i.WorkflowStep,
+		&i.Mode,
+		&i.RequirementID,
 	)
 	return i, err
 }
@@ -1209,7 +1222,7 @@ WHERE cs.id = $1
     EXISTS (
       SELECT 1 FROM chat_message AS public_message
       WHERE public_message.chat_session_id = cs.id
-        AND public_message.message_kind != 'channel_command'
+        AND public_message.message_kind NOT IN ('channel_command', 'requirement_context')
     )
   )
 `
@@ -1371,7 +1384,15 @@ SELECT EXISTS (
     -- never light the FAB "running" indicator (MUL-5149 refresh follow-up).
     AND atq.regenerate_quick_actions_for IS NULL
     AND cs.workspace_id = $1
-    AND cs.creator_id = $2
+    AND (
+      cs.creator_id = $2
+      OR EXISTS (
+        SELECT 1 FROM requirement r
+        JOIN requirement_participant rp
+          ON rp.requirement_id = r.id AND rp.workspace_id = cs.workspace_id
+        WHERE r.chat_session_id = cs.id AND rp.user_id = $2
+      )
+    )
     AND cs.agent_id = ANY($3::uuid[])
 ) AS has_pending
 `
@@ -1429,13 +1450,13 @@ WHERE session.id = $2
     WHERE message.id = $3
       AND message.chat_session_id = session.id
       AND message.role = 'user'
-      AND message.message_kind != 'channel_command'
+      AND message.message_kind NOT IN ('channel_command', 'requirement_context')
   )
   AND NOT EXISTS (
     SELECT 1 FROM chat_message AS other_message
     WHERE other_message.chat_session_id = session.id
       AND other_message.role = 'user'
-      AND other_message.message_kind != 'channel_command'
+      AND other_message.message_kind NOT IN ('channel_command', 'requirement_context')
       AND other_message.id != $3
   )
 RETURNING id, workspace_id, agent_id, creator_id, title, session_id, work_dir, status, created_at, updated_at, unread_since, runtime_id, last_read_at, is_agent_intro, pinned_at, project_id, explicitly_created_at, title_edited_at
@@ -1482,7 +1503,7 @@ WHERE session.id = $2
     SELECT 1 FROM chat_message AS message
     WHERE message.chat_session_id = session.id
       AND message.role = 'user'
-      AND message.message_kind != 'channel_command'
+      AND message.message_kind NOT IN ('channel_command', 'requirement_context')
   )
 RETURNING id, workspace_id, agent_id, creator_id, title, session_id, work_dir, status, created_at, updated_at, unread_since, runtime_id, last_read_at, is_agent_intro, pinned_at, project_id, explicitly_created_at, title_edited_at
 `
@@ -1542,7 +1563,7 @@ WHERE message.chat_session_id = $2
   AND task.id = $1
   AND message.role = 'user'
   AND message.task_id IS NULL
-  AND message.message_kind != 'channel_command'
+  AND message.message_kind NOT IN ('channel_command', 'requirement_context')
   AND (
       task.channel_context_revision IS NULL
       OR message.channel_context_revision = task.channel_context_revision
@@ -1724,11 +1745,20 @@ LEFT JOIN LATERAL (
   SELECT content, role, created_at, failure_reason, message_kind
     FROM chat_message m
    WHERE m.chat_session_id = cs.id
-     AND m.message_kind != 'channel_command'
+     AND m.message_kind NOT IN ('channel_command', 'requirement_context')
    ORDER BY m.created_at DESC
    LIMIT 1
 ) lm ON true
-WHERE cs.workspace_id = $1 AND cs.creator_id = $2
+WHERE cs.workspace_id = $1
+  AND (
+    cs.creator_id = $2
+    OR EXISTS (
+      SELECT 1 FROM requirement r
+      JOIN requirement_participant rp
+        ON rp.requirement_id = r.id AND rp.workspace_id = cs.workspace_id
+      WHERE r.chat_session_id = cs.id AND rp.user_id = $2
+    )
+  )
   AND (
     cs.explicitly_created_at IS NOT NULL
     OR
@@ -1966,7 +1996,7 @@ func (q *Queries) ListChatInputMessages(ctx context.Context, taskID pgtype.UUID)
 const listChatMessages = `-- name: ListChatMessages :many
 SELECT message.id, message.chat_session_id, message.role, message.content, message.task_id, message.created_at, message.failure_reason, message.elapsed_ms, message.message_kind, message.channel_media_pending_until, message.channel_ingested, message.quick_actions, message.channel_context_revision, message.channel_outbound_type, message.channel_outbound_installation_id, message.channel_outbound_chat_id, message.channel_outbound_message_ids, message.channel_typing_settled FROM chat_message AS message
 WHERE message.chat_session_id = $1
-  AND message.message_kind != 'channel_command'
+  AND message.message_kind NOT IN ('channel_command', 'requirement_context')
   AND NOT (
     message.role = 'user'
     AND EXISTS (
@@ -2125,7 +2155,7 @@ func (q *Queries) ListChatMessagesForLegacyTask(ctx context.Context, chatSession
 const listChatMessagesPage = `-- name: ListChatMessagesPage :many
 SELECT message.id, message.chat_session_id, message.role, message.content, message.task_id, message.created_at, message.failure_reason, message.elapsed_ms, message.message_kind, message.channel_media_pending_until, message.channel_ingested, message.quick_actions, message.channel_context_revision, message.channel_outbound_type, message.channel_outbound_installation_id, message.channel_outbound_chat_id, message.channel_outbound_message_ids, message.channel_typing_settled FROM chat_message AS message
 WHERE message.chat_session_id = $1
-  AND message.message_kind != 'channel_command'
+  AND message.message_kind NOT IN ('channel_command', 'requirement_context')
   AND NOT (
     message.role = 'user'
     AND EXISTS (
@@ -2217,7 +2247,7 @@ SELECT message.id, message.chat_session_id, message.role, message.content, messa
 FROM chat_message AS message
 LEFT JOIN agent_task_queue AS owner ON owner.id = message.task_id
 WHERE message.chat_session_id = $1
-  AND message.message_kind != 'channel_command'
+  AND message.message_kind NOT IN ('channel_command', 'requirement_context')
   AND (
       (
           message.role = 'user'
@@ -2316,11 +2346,21 @@ LEFT JOIN LATERAL (
   SELECT content, role, created_at, failure_reason, message_kind
     FROM chat_message m
    WHERE m.chat_session_id = cs.id
-     AND m.message_kind != 'channel_command'
+     AND m.message_kind NOT IN ('channel_command', 'requirement_context')
    ORDER BY m.created_at DESC
    LIMIT 1
 ) lm ON true
-WHERE cs.workspace_id = $1 AND cs.creator_id = $2 AND cs.status = 'active'
+WHERE cs.workspace_id = $1
+  AND (
+    cs.creator_id = $2
+    OR EXISTS (
+      SELECT 1 FROM requirement r
+      JOIN requirement_participant rp
+        ON rp.requirement_id = r.id AND rp.workspace_id = cs.workspace_id
+      WHERE r.chat_session_id = cs.id AND rp.user_id = $2
+    )
+  )
+  AND cs.status = 'active'
   AND (
     cs.explicitly_created_at IS NOT NULL
     OR
@@ -2419,7 +2459,15 @@ WHERE atq.chat_session_id IS NOT NULL
   -- turn and must not surface as "running" chat work (MUL-5149 refresh follow-up).
   AND atq.regenerate_quick_actions_for IS NULL
   AND cs.workspace_id = $1
-  AND cs.creator_id = $2
+  AND (
+    cs.creator_id = $2
+    OR EXISTS (
+      SELECT 1 FROM requirement r
+      JOIN requirement_participant rp
+        ON rp.requirement_id = r.id AND rp.workspace_id = cs.workspace_id
+      WHERE r.chat_session_id = cs.id AND rp.user_id = $2
+    )
+  )
 ORDER BY atq.created_at DESC
 `
 
@@ -2489,6 +2537,7 @@ LEFT JOIN LATERAL (
     FROM chat_message AS input
     WHERE input.task_id = COALESCE(task.chat_input_task_id, task.id)
       AND input.role = 'user'
+      AND input.message_kind NOT IN ('channel_command', 'requirement_context')
     ORDER BY input.created_at ASC, input.id ASC
     LIMIT 1
 ) AS message ON TRUE
@@ -2557,7 +2606,7 @@ WITH pending AS (
     WHERE chat_session_id = $1
       AND role = 'user'
       AND task_id IS NULL
-      AND message_kind != 'channel_command'
+      AND message_kind NOT IN ('channel_command', 'requirement_context')
 )
 SELECT pending.context_revision, generation.initiator_user_id
 FROM pending
@@ -3003,7 +3052,7 @@ WHERE task.chat_session_id = $1
         AND message.role = 'user'
         AND message.channel_media_pending_until > now()
   )
-RETURNING task.id, task.agent_id, task.issue_id, task.status, task.priority, task.dispatched_at, task.started_at, task.completed_at, task.result, task.error, task.created_at, task.context, task.runtime_id, task.session_id, task.work_dir, task.trigger_comment_id, task.chat_session_id, task.autopilot_run_id, task.attempt, task.max_attempts, task.parent_task_id, task.failure_reason, task.trigger_summary, task.force_fresh_session, task.is_leader_task, task.wait_reason, task.initiator_user_id, task.handoff_note, task.prepare_lease_expires_at, task.squad_id, task.runtime_mcp_overlay, task.escalation_for_task_id, task.fire_at, task.originator_user_id, task.runtime_connected_apps, task.coalesced_comment_ids, task.delivered_comment_ids, task.chat_input_task_id, task.chat_finalize_deferred_at, task.originator_source, task.delegated_from_task_id, task.retry_of_task_id, task.rerun_of_task_id, task.rule_version_id, task.trigger_evidence_kind, task.trigger_evidence_ref_id, task.accountable_user_id, task.session_rollout_missing, task.retired_session_id, task.quick_actions_disabled, task.regenerate_quick_actions_for, task.branch_name, task.durable_work_dir, task.channel_context_revision, task.comment_thread_id, task.cancelled_by_type, task.cancelled_by_id, task.cancelled_by_name, task.issue_snapshot, task.workflow_step
+RETURNING task.id, task.agent_id, task.issue_id, task.status, task.priority, task.dispatched_at, task.started_at, task.completed_at, task.result, task.error, task.created_at, task.context, task.runtime_id, task.session_id, task.work_dir, task.trigger_comment_id, task.chat_session_id, task.autopilot_run_id, task.attempt, task.max_attempts, task.parent_task_id, task.failure_reason, task.trigger_summary, task.force_fresh_session, task.is_leader_task, task.wait_reason, task.initiator_user_id, task.handoff_note, task.prepare_lease_expires_at, task.squad_id, task.runtime_mcp_overlay, task.escalation_for_task_id, task.fire_at, task.originator_user_id, task.runtime_connected_apps, task.coalesced_comment_ids, task.delivered_comment_ids, task.chat_input_task_id, task.chat_finalize_deferred_at, task.originator_source, task.delegated_from_task_id, task.retry_of_task_id, task.rerun_of_task_id, task.rule_version_id, task.trigger_evidence_kind, task.trigger_evidence_ref_id, task.accountable_user_id, task.session_rollout_missing, task.retired_session_id, task.quick_actions_disabled, task.regenerate_quick_actions_for, task.branch_name, task.durable_work_dir, task.channel_context_revision, task.comment_thread_id, task.cancelled_by_type, task.cancelled_by_id, task.cancelled_by_name, task.issue_snapshot, task.workflow_step, task.mode, task.requirement_id
 `
 
 // Media completion may race with the 3s run batcher. Promote every original
@@ -3082,6 +3131,8 @@ func (q *Queries) PromoteChannelChatTasksIfMediaReady(ctx context.Context, chatS
 			&i.CancelledByName,
 			&i.IssueSnapshot,
 			&i.WorkflowStep,
+			&i.Mode,
+			&i.RequirementID,
 		); err != nil {
 			return nil, err
 		}
@@ -3105,6 +3156,7 @@ WITH latest_visible AS (
         FROM chat_message AS prior
         WHERE prior.chat_session_id = claimed_input.chat_session_id
           AND prior.id != claimed_input.id
+          AND prior.message_kind NOT IN ('channel_command', 'requirement_context')
           AND NOT (
             prior.role = 'user'
             AND EXISTS (
@@ -3145,7 +3197,7 @@ WITH latest_visible AS (
       -- moving it to dispatch time reverses that, and because the batch's two
       -- rows would then share one timestamp, their order falls to random UUIDs
       -- (MUL-5827).
-      AND claimed_input.message_kind <> 'onboarding_kickoff'
+      AND claimed_input.message_kind NOT IN ('onboarding_kickoff', 'requirement_context')
 )
 UPDATE chat_message AS claimed_input
 SET created_at = GREATEST(
@@ -3200,7 +3252,7 @@ WHERE queued_input.chat_session_id = $1
   -- Same exclusion, same reason as ReanchorClaimedDirectChatInput: the hidden
   -- kickoff has no visible position to fix, and moving it would put the
   -- product's context after the member's message inside one input batch.
-  AND queued_input.message_kind <> 'onboarding_kickoff'
+  AND queued_input.message_kind NOT IN ('onboarding_kickoff', 'requirement_context')
   AND queued_input.created_at <= $2::timestamptz
   AND EXISTS (
     SELECT 1
@@ -3306,7 +3358,7 @@ WHERE session.id = $2
     SELECT 1 FROM chat_message AS message
     WHERE message.chat_session_id = session.id
       AND message.role = 'user'
-      AND message.message_kind != 'channel_command'
+      AND message.message_kind NOT IN ('channel_command', 'requirement_context')
   )
 RETURNING id, workspace_id, agent_id, creator_id, title, session_id, work_dir, status, created_at, updated_at, unread_since, runtime_id, last_read_at, is_agent_intro, pinned_at, project_id, explicitly_created_at, title_edited_at
 `
@@ -3516,7 +3568,7 @@ const setChatTaskInputOwnerSelf = `-- name: SetChatTaskInputOwnerSelf :one
 UPDATE agent_task_queue
 SET chat_input_task_id = id
 WHERE id = $1
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step, mode, requirement_id
 `
 
 // Stamps a freshly-created direct-chat task as the owner of its own input batch
@@ -3590,6 +3642,8 @@ func (q *Queries) SetChatTaskInputOwnerSelf(ctx context.Context, id pgtype.UUID)
 		&i.CancelledByName,
 		&i.IssueSnapshot,
 		&i.WorkflowStep,
+		&i.Mode,
+		&i.RequirementID,
 	)
 	return i, err
 }

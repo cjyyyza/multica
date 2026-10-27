@@ -339,7 +339,7 @@ INSERT INTO agent_task_queue (
     coalesced_comment_ids, trigger_summary, force_fresh_session, is_leader_task, handoff_note,
     squad_id, context, originator_user_id, accountable_user_id, runtime_mcp_overlay, runtime_connected_apps,
     originator_source, delegated_from_task_id, rule_version_id, rerun_of_task_id, trigger_evidence_kind, trigger_evidence_ref_id,
-    workflow_step, id
+    workflow_step, id, mode, requirement_id
 )
 SELECT
     $1, $2, $3, 'queued', $4, sqlc.narg(trigger_comment_id),
@@ -366,8 +366,19 @@ SELECT
     sqlc.narg(trigger_evidence_ref_id),
     -- The issue's status as this task is queued: the workflow step it works on (MUL-7420).
     (SELECT i.status FROM issue i WHERE i.id = $3),
-    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
+    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()),
+    'execute',
+    (SELECT r.id FROM requirement r WHERE r.issue_id = $3)
 WHERE lock_task_owner_rows($1, $3, $2)
+  AND NOT EXISTS (
+      SELECT 1 FROM requirement r
+      LEFT JOIN issue terminal_issue ON terminal_issue.id = r.issue_id AND terminal_issue.workspace_id = r.workspace_id
+      WHERE r.issue_id = $3
+        AND (
+            r.cancelled_at IS NOT NULL
+            OR issue_effective_status(terminal_issue.workspace_id, terminal_issue.status) IN ('done', 'cancelled')
+        )
+  )
 RETURNING *;
 
 -- name: CreateDeferredChannelIssueTask :one
@@ -384,7 +395,7 @@ INSERT INTO agent_task_queue (
     squad_id, context, originator_user_id, accountable_user_id, runtime_mcp_overlay, runtime_connected_apps,
     originator_source, delegated_from_task_id, rule_version_id, rerun_of_task_id,
     trigger_evidence_kind, trigger_evidence_ref_id, fire_at,
-    workflow_step, id
+    workflow_step, id, mode, requirement_id
 )
 SELECT
     $1, $2, $3, 'deferred', $4, sqlc.narg(trigger_comment_id),
@@ -411,8 +422,19 @@ SELECT
     @fire_at,
     -- The issue's status as this task is queued: the workflow step it works on (MUL-7420).
     (SELECT i.status FROM issue i WHERE i.id = $3),
-    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
+    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()),
+    'execute',
+    (SELECT r.id FROM requirement r WHERE r.issue_id = $3)
 WHERE lock_task_owner_rows($1, $3, $2)
+  AND NOT EXISTS (
+      SELECT 1 FROM requirement r
+      LEFT JOIN issue terminal_issue ON terminal_issue.id = r.issue_id AND terminal_issue.workspace_id = r.workspace_id
+      WHERE r.issue_id = $3
+        AND (
+            r.cancelled_at IS NOT NULL
+            OR issue_effective_status(terminal_issue.workspace_id, terminal_issue.status) IN ('done', 'cancelled')
+        )
+  )
 RETURNING *;
 
 -- name: PromoteDeferredChannelIssueTask :one
@@ -507,7 +529,7 @@ INSERT INTO agent_task_queue (
     originator_source, delegated_from_task_id, rule_version_id,
     trigger_evidence_kind, trigger_evidence_ref_id, retry_of_task_id,
     chat_input_task_id, fire_at,
-    channel_context_revision, handoff_note, workflow_step, id
+    channel_context_revision, handoff_note, workflow_step, id, mode, requirement_id
 )
 SELECT
     p.agent_id, p.runtime_id, p.issue_id, p.chat_session_id, p.autopilot_run_id,
@@ -534,9 +556,29 @@ SELECT
     -- A retry continues its parent's work, so it keeps the parent's step (MUL-7420).
     p.workflow_step,
     -- Named new_task_id, not id: $1 above is the PARENT task's id.
-    COALESCE(sqlc.narg('new_task_id')::uuid, gen_random_uuid())
+    COALESCE(sqlc.narg('new_task_id')::uuid, gen_random_uuid()),
+    p.mode,
+    p.requirement_id
 FROM agent_task_queue p
 WHERE p.id = $1
+  AND p.mode IN ('execute', 'plan')
+  AND (p.mode <> 'plan' OR p.requirement_id IS NOT NULL)
+  AND NOT EXISTS (
+      SELECT 1 FROM requirement r
+      LEFT JOIN issue terminal_issue ON terminal_issue.id = r.issue_id AND terminal_issue.workspace_id = r.workspace_id
+      WHERE r.id = p.requirement_id
+        AND (
+            r.cancelled_at IS NOT NULL
+            OR issue_effective_status(terminal_issue.workspace_id, terminal_issue.status) IN ('done', 'cancelled')
+        )
+  )
+  AND (p.mode <> 'plan' OR EXISTS (
+      SELECT 1 FROM requirement r
+      WHERE r.id = p.requirement_id
+        AND r.chat_session_id = p.chat_session_id
+        AND r.issue_id IS NULL
+        AND r.cancelled_at IS NULL
+  ))
   AND lock_task_owner_rows(p.agent_id, p.issue_id, p.runtime_id)
 ON CONFLICT (issue_id, agent_id, (COALESCE(comment_thread_id, '00000000-0000-0000-0000-000000000000'::uuid))) WHERE status IN ('queued', 'dispatched')
        OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
@@ -563,20 +605,22 @@ INSERT INTO agent_task_queue (
     force_fresh_session, is_leader_task, squad_id,
     originator_user_id, accountable_user_id,
     runtime_mcp_overlay, runtime_connected_apps,
-    originator_source, rerun_of_task_id, id
+    originator_source, rerun_of_task_id, id, mode, requirement_id
 )
 SELECT
     p.agent_id, p.runtime_id, 'queued', p.priority, p.context,
     TRUE, p.is_leader_task, p.squad_id,
     sqlc.arg(actor_user_id), sqlc.arg(actor_user_id),
     sqlc.narg(runtime_mcp_overlay), sqlc.narg(runtime_connected_apps),
-    'direct_human', p.id, sqlc.arg(new_task_id)
+    'direct_human', p.id, sqlc.arg(new_task_id), p.mode, p.requirement_id
 FROM agent_task_queue p
 WHERE p.id = sqlc.arg(source_task_id)
   AND p.status = 'failed'
   AND p.issue_id IS NULL
   AND p.chat_session_id IS NULL
   AND p.autopilot_run_id IS NULL
+  AND p.mode = 'execute'
+  AND p.requirement_id IS NULL
   AND lock_task_owner_rows(p.agent_id, p.issue_id, p.runtime_id)
 RETURNING *;
 

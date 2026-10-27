@@ -3,9 +3,11 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/integrations/popo"
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
@@ -210,5 +212,70 @@ func TestPopoRegistrationCancelIgnoresLaterProgress(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("cancel must not create an installation, got %d", n)
+	}
+}
+
+func TestPopoRegistrationProgressTransactionFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		commit bool
+	}{
+		{name: "commit failure rolls back installation"},
+		{name: "committed response loss stays consistent", commit: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bridgeID, token := popoRegisterBridge(t, "WIN-QR-TX")
+			popoHeartbeat(t, token, popoIdleRobot("unrelated"))
+			agentID := createHandlerTestAgent(t, "popo-qr-tx", []byte(`{}`))
+			regID := popoBeginRegistration(t, agentID, bridgeID)
+			t.Cleanup(func() {
+				_, _ = testPool.Exec(context.Background(), `DELETE FROM channel_installation WHERE agent_id = $1`, agentID)
+			})
+			installs, err := popo.NewInstallService(testHandler.Queries, testPool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			failing, err := popo.NewRegistrationService(testHandler.Queries,
+				requirementCommitStarter{pool: testPool, commit: tc.commit, injectedErr: errors.New("injected registration commit result")}, installs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			previous := testHandler.PopoRegistration
+			testHandler.PopoRegistration = failing
+			t.Cleanup(func() { testHandler.PopoRegistration = previous })
+			robotID := "scan-tx-" + bridgeID[:8]
+			progress := map[string]any{"robot_id": robotID, "robot_name": "Scan TX"}
+			popoProgress(t, token, regID, progress, http.StatusInternalServerError)
+			testHandler.PopoRegistration = previous
+
+			got := popoGetRegistration(t, regID, http.StatusOK)
+			activeInstalls := func() int {
+				var n int
+				if err := testPool.QueryRow(context.Background(),
+					`SELECT count(*) FROM channel_installation WHERE agent_id = $1 AND channel_type = 'popo' AND status = 'active'`, agentID).Scan(&n); err != nil {
+					t.Fatal(err)
+				}
+				return n
+			}
+			if tc.commit {
+				instID, _ := got["installation_id"].(string)
+				if got["status"] != "success" || instID == "" || activeInstalls() != 1 {
+					t.Fatalf("committed response loss left inconsistent state: %+v, active=%d", got, activeInstalls())
+				}
+				replayed := popoProgress(t, token, regID, progress, http.StatusOK)
+				if replayed["status"] != "success" || replayed["installation_id"] != instID || activeInstalls() != 1 {
+					t.Fatalf("response-loss replay = %+v, active=%d", replayed, activeInstalls())
+				}
+				return
+			}
+			if got["status"] == "success" || activeInstalls() != 0 {
+				t.Fatalf("failed commit escaped installation: %+v, active=%d", got, activeInstalls())
+			}
+			recovered := popoProgress(t, token, regID, progress, http.StatusOK)
+			instID, _ := recovered["installation_id"].(string)
+			if recovered["status"] != "success" || instID == "" || activeInstalls() != 1 {
+				t.Fatalf("registration retry = %+v, active=%d", recovered, activeInstalls())
+			}
+		})
 	}
 }

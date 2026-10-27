@@ -84,6 +84,10 @@ const (
 	// operations (edit/checkout, add, submit, shelve) and Helix Swarm reviews
 	// via POST /p4/run and POST /p4/swarm.
 	DaemonCapabilityPerforceMutateV1 = "perforce-mutate-v1"
+	// DaemonCapabilityPlanModeV1 advertises durable mode handling, task-tool
+	// stripping, and provider-native Plan Mode enforcement. Servers must not
+	// deliver a plan task without it, regardless of the provider's capabilities.
+	DaemonCapabilityPlanModeV1 = "plan-mode-v1"
 
 	// AppCapabilityChatDraftRestoreV1 is advertised (X-Client-Capabilities) by
 	// app clients that understand the durable draft-restore recovery path:
@@ -284,6 +288,10 @@ const (
 	// the opening self-describes: chat renders the starter cards under this
 	// kind instead of quick-action chips (MUL-5765).
 	ChatMessageKindOnboardingOpening = "onboarding_opening"
+	// Requirement-owned source context is available to the task but hidden from members.
+	ChatMessageKindRequirementContext = "requirement_context"
+	// RequirementOpening is the visible, product-authored opening for a requirement chat.
+	ChatMessageKindRequirementOpening = "requirement_opening"
 )
 
 // ChatDonePayload is broadcast when an agent finishes responding to a chat

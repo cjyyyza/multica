@@ -143,7 +143,7 @@ func TestClaudeHandleControlRequestAutoApproves(t *testing.T) {
 		}),
 	}
 
-	b.handleControlRequest(msg, &written)
+	b.handleControlRequest(msg, &written, ExecOptions{})
 
 	var resp map[string]any
 	if err := json.Unmarshal(bytes.TrimSpace(written.Bytes()), &resp); err != nil {
@@ -191,7 +191,7 @@ func TestClaudeHandleControlRequestForcesBackgroundToolsForeground(t *testing.T)
 				}),
 			}
 
-			b.handleControlRequest(msg, &written)
+			b.handleControlRequest(msg, &written, ExecOptions{})
 
 			var resp map[string]any
 			if err := json.Unmarshal(bytes.TrimSpace(written.Bytes()), &resp); err != nil {
@@ -209,6 +209,84 @@ func TestClaudeHandleControlRequestForcesBackgroundToolsForeground(t *testing.T)
 			}
 			if updatedInput["command"] != "sleep 60" {
 				t.Fatalf("expected original command to be preserved, got %v", updatedInput["command"])
+			}
+		})
+	}
+}
+
+// TestClaudeHandleControlRequestPlanModeDeniesExternalTools pins the Plan Mode
+// gate. Plan tasks run read-only on a stripped MCP config, and this handler is
+// the only place the CLI's "may I use this tool?" is answered with no human
+// present — blanket approval would re-open exactly what the mode removed.
+// Unscoped file and shell tools must not bypass the provider-native plan mode.
+func TestClaudeHandleControlRequestPlanModeDeniesExternalTools(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		subtype      string
+		tool         string
+		planMode     bool
+		wantBehavior string
+		wantDenial   string
+	}{
+		{"plan denies mcp tool", "can_use_tool", "mcp__github__create_issue", true, "deny", "MCP"},
+		{"plan denies web fetch", "can_use_tool", "WebFetch", true, "deny", "network"},
+		{"plan denies web search", "can_use_tool", "WebSearch", true, "deny", "network"},
+		{"plan denies unscoped bash", "can_use_tool", "Bash", true, "deny", "Plan Mode"},
+		{"plan denies unscoped file write", "can_use_tool", "Write", true, "deny", "Plan Mode"},
+		{"plan denies edit", "can_use_tool", "Edit", true, "deny", "Plan Mode"},
+		{"plan denies leaving plan mode", "can_use_tool", "ExitPlanMode", true, "deny", "Plan Mode"},
+		{"execute still allows mcp tool", "can_use_tool", "mcp__github__create_issue", false, "allow", ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			b := &claudeBackend{cfg: Config{Logger: slog.Default()}}
+			var written bytes.Buffer
+			msg := claudeSDKMessage{
+				Type:      "control_request",
+				RequestID: "req-1",
+				Request: mustMarshal(t, claudeControlRequestPayload{
+					Subtype:  tc.subtype,
+					ToolName: tc.tool,
+					Input:    mustMarshal(t, map[string]any{"command": "multica requirement get req-1"}),
+				}),
+			}
+
+			opts := ExecOptions{}
+			if tc.planMode {
+				opts.PermissionMode = PermissionModePlan
+			}
+			b.handleControlRequest(msg, &written, opts)
+
+			var resp map[string]any
+			if err := json.Unmarshal(bytes.TrimSpace(written.Bytes()), &resp); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			respInner := resp["response"].(map[string]any)
+			if respInner["request_id"] != "req-1" {
+				t.Fatalf("expected request_id req-1, got %v", respInner["request_id"])
+			}
+			innerResp := respInner["response"].(map[string]any)
+			if innerResp["behavior"] != tc.wantBehavior {
+				t.Fatalf("behavior = %v, want %q", innerResp["behavior"], tc.wantBehavior)
+			}
+			if tc.wantDenial != "" {
+				message, _ := innerResp["message"].(string)
+				if !strings.Contains(message, tc.wantDenial) {
+					t.Fatalf("denial message %q does not mention %q", message, tc.wantDenial)
+				}
+				if _, ok := innerResp["updatedInput"]; ok {
+					t.Fatal("denied tool must not carry an updated input")
+				}
+			}
+			if tc.wantBehavior == "allow" {
+				if innerResp["updatedInput"] == nil {
+					t.Fatal("allowed tool must carry its input")
+				}
 			}
 		})
 	}
@@ -1319,5 +1397,54 @@ func TestBuildClaudeArgsManagedSkillSettingsWins(t *testing.T) {
 	}
 	if !strings.Contains(joined, "--max-turns 7") {
 		t.Fatalf("unrelated custom arg was dropped: %v", args)
+	}
+}
+
+func TestBuildClaudeArgsPlanModeIsNativeAndCannotBeOverridden(t *testing.T) {
+	t.Parallel()
+	args := buildClaudeArgs(ExecOptions{
+		PermissionMode: PermissionModePlan,
+		ExtraArgs:      []string{"--permission-mode", "bypassPermissions", "--settings", "/tmp/default.json"},
+		CustomArgs: []string{
+			"--dangerously-skip-permissions",
+			"--allowedTools", "Bash(*) Write(*)",
+			"--permission-prompt-tool", "unsafe",
+			"--settings=/tmp/agent.json",
+			"--max-turns", "7",
+		},
+		ClaudeSettingsPath: "/tmp/multica-claude-settings.json",
+	}, slog.Default())
+	joined := strings.Join(args, " ")
+	for _, forbidden := range []string{
+		"bypassPermissions", "--dangerously-skip-permissions", "--allowedTools",
+		"--permission-prompt-tool", "default.json", "agent.json",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("Plan Mode args contain %q: %v", forbidden, args)
+		}
+	}
+	if !strings.Contains(joined, "--permission-mode plan") {
+		t.Fatalf("native Claude plan permission missing: %v", args)
+	}
+	if !strings.Contains(joined, "--settings /tmp/multica-claude-settings.json") {
+		t.Fatalf("managed settings missing: %v", args)
+	}
+	if !strings.Contains(joined, "--max-turns 7") {
+		t.Fatalf("unrelated custom arg was dropped: %v", args)
+	}
+}
+
+func TestPlanModeSupportMatrix(t *testing.T) {
+	t.Parallel()
+	if !SupportsPlanMode("claude") {
+		t.Fatal("built-in Claude must support native Plan Mode")
+	}
+	for _, provider := range SupportedTypes {
+		if provider != "claude" && SupportsPlanMode(provider) {
+			t.Fatalf("provider %q must fail closed until it has a verified read-only implementation", provider)
+		}
+	}
+	if mode, ok := PlanPermissionMode("codex"); ok || mode != "" {
+		t.Fatalf("unsupported provider returned a plan permission: %q, %v", mode, ok)
 	}
 }

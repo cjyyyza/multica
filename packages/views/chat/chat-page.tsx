@@ -14,6 +14,7 @@ import { useIsCompact } from "@multica/ui/hooks/use-mobile";
 import { useRequiredWorkspaceSlug, useWorkspacePaths } from "@multica/core/paths";
 import { getCurrentSlug } from "@multica/core/platform";
 import { useChatStore } from "@multica/core/chat";
+import { useFeatureEnabled } from "@multica/core/config";
 import { chatQuickActionsPendingOptions } from "@multica/core/chat/queries";
 import { useRegenerateChatQuickActions } from "@multica/core/chat/mutations";
 import { useQuickActionsPendingTimeout } from "@multica/core/chat/use-quick-actions-pending-timeout";
@@ -36,6 +37,13 @@ import { NoAgentBanner } from "./components/no-agent-banner";
 import { ArchivedAgentBanner } from "./components/archived-agent-banner";
 import { AgentAccessRevokedBanner } from "./components/agent-access-revoked-banner";
 import { RuntimeRequiredBanner } from "./components/runtime-required-banner";
+import {
+  RequirementFlowPanel,
+  RequirementIntakeDialog,
+  RequirementIntakeTrigger,
+  useRequirementOpenIntent,
+  useRequirementSurface,
+} from "../requirements";
 
 /**
  * Chat tab — the first-class two-pane surface (thread list on the left,
@@ -57,6 +65,12 @@ import { RuntimeRequiredBanner } from "./components/runtime-required-banner";
  * style).
  */
 export function ChatPage() {
+  const requirementFlowEnabled = useFeatureEnabled("requirement_flow");
+  const content = <ChatPageContent requirementFlowEnabled={requirementFlowEnabled} />;
+  return requirementFlowEnabled ? <RequirementIntakeDialog>{content}</RequirementIntakeDialog> : content;
+}
+
+function ChatPageContent({ requirementFlowEnabled }: { requirementFlowEnabled: boolean }) {
   const { t } = useT("chat");
   const { pathname, searchParams, replace } = useNavigation();
   const workspaceSlug = useRequiredWorkspaceSlug();
@@ -81,7 +95,35 @@ export function ChatPage() {
   useQuickActionsFailureToast(c.activeSessionId ?? null);
   const regenerateQuickActions = useRegenerateChatQuickActions();
   const urlSession = searchParams.get("session") || null;
-  const urlAgent = searchParams.get("agent") || null;
+  const urlRequirement = urlSession ? null : searchParams.get("requirement") || null;
+  const urlAgent = urlRequirement ? null : searchParams.get("agent") || null;
+  const requirementSurface = useRequirementSurface({
+    wsId: c.wsId,
+    requirementId: urlRequirement ?? undefined,
+    chatSessionId: c.activeSessionId,
+    // The loaded session row carries the additive `requirement_id` projection:
+    // an ordinary Chat is definitely unbound (zero Requirement requests), and
+    // only an old backend's missing projection keeps the legacy probe.
+    // `undefined` from the lookup means no loaded row; normalize to null so it
+    // stays "no projection yet" rather than the omitted-payload legacy probe.
+    chatSession: c.currentSession ?? null,
+  });
+  const requirementOpen = useRequirementOpenIntent({
+    wsId: c.wsId,
+    requirementId: urlRequirement,
+    detail: requirementSurface.detail,
+    isActive: isCurrentChatRoute && getCurrentSlug() === workspaceSlug,
+    onOpened: (sessionId) => {
+      c.setActiveSession(sessionId);
+      const sessionPath = wsPaths.chatSession(sessionId);
+      replace(urlRequirement
+        ? `${sessionPath}&requirement=${encodeURIComponent(urlRequirement)}`
+        : sessionPath);
+    },
+  });
+  const canCompose = requirementSurface.canCompose && !requirementOpen.isPending;
+  const handleSend: typeof c.handleSend = (...args) =>
+    canCompose ? c.handleSend(...args) : Promise.resolve(false);
 
   // "Composing a brand-new chat" — the user hit ⊕ but hasn't sent yet, so no
   // session exists. At compact widths this decides list-vs-conversation; on desktop the
@@ -110,11 +152,15 @@ export function ChatPage() {
   // URL → store: deep link, refresh, notification click, back/forward.
   useEffect(() => {
     if (!isCurrentChatRoute || getCurrentSlug() !== workspaceSlug) return;
-    if (urlSession !== useChatStore.getState().activeSessionId) {
+    const live = useChatStore.getState().activeSessionId;
+    // The open-intent effect may already have landed a cached Requirement.
+    // Do not clear that session using this render's session-less URL.
+    if (urlRequirement && live === requirementSurface.detail?.chatSessionId) return;
+    if (urlSession !== live) {
       c.setActiveSession(urlSession);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reconcile URL/route changes, not store updates
-  }, [isCurrentChatRoute, workspaceSlug, urlSession]);
+  }, [isCurrentChatRoute, workspaceSlug, urlRequirement, urlSession]);
 
   // store → URL: thread selection, "new chat", and sessions created by sending.
   useEffect(() => {
@@ -146,6 +192,7 @@ export function ChatPage() {
 
   const handleSelect = (session: ChatSession) => {
     supersedeAgentIntent();
+    requirementOpen.supersede();
     c.handleSelectSession(session);
     setComposingNew(false);
   };
@@ -157,6 +204,7 @@ export function ChatPage() {
   // conversation full-screen. Archiving any other chat leaves the view put.
   const handleArchive = (session: ChatSession) => {
     supersedeAgentIntent();
+    requirementOpen.supersede();
     if (session.id === c.activeSessionId) {
       if (isCompact) {
         c.setActiveSession(null);
@@ -172,13 +220,14 @@ export function ChatPage() {
     // A manual ⊕ pick outranks a pending deep link; when called FROM the
     // intent effect the ref is already set to this param, so this is a no-op.
     supersedeAgentIntent();
+    requirementOpen.supersede();
     if (agent) c.handleStartNewChat(agent);
     else c.handleNewChat();
     setComposingNew(true);
   };
 
   const changeProjectContext = (projectId: string | null) => {
-    if (projectId === c.activeProjectId) return;
+    if (requirementSurface.projectLocked || projectId === c.activeProjectId) return;
     c.handleProjectChange(projectId);
     // Removing a project stays in the current conversation. Choosing a
     // project for an existing conversation starts a clean session, and a
@@ -229,10 +278,17 @@ export function ChatPage() {
   );
 
   const listHeader = (
-    <PageHeader>
-      <h1 className="flex-1 text-body font-semibold">{t(($) => $.page.title)}</h1>
-      {newChatButton}
-    </PageHeader>
+    <>
+      <PageHeader>
+        <h1 className="flex-1 text-body font-semibold">{t(($) => $.page.title)}</h1>
+        {newChatButton}
+      </PageHeader>
+      {requirementFlowEnabled && (
+        <div className="shrink-0 px-3 pb-2">
+          <RequirementIntakeTrigger />
+        </div>
+      )}
+    </>
   );
 
   const listBody = (
@@ -263,6 +319,14 @@ export function ChatPage() {
           onArchive={handleArchive}
         />
       )}
+      <RequirementFlowPanel
+        wsId={c.wsId}
+        surface={requirementSurface}
+        className="mx-3 mt-3 max-h-[45vh] overflow-y-auto"
+      />
+      {requirementOpen.error && (
+        <p role="alert" className="mx-3 text-caption text-destructive">{requirementOpen.error.message}</p>
+      )}
       {c.showSkeleton ? (
         <ChatMessageSkeleton />
       ) : c.hasMessages ? (
@@ -275,14 +339,15 @@ export function ChatPage() {
           hasOlderMessages={c.hasOlderMessages}
           isFetchingOlderMessages={c.isFetchingOlderMessages}
           onLoadOlderMessages={() => void c.fetchOlderMessages()}
-          onQuickAction={(action) => c.handleSend(action.prompt)}
+          onQuickAction={(action) => handleSend(action.prompt)}
           quickActionsDisabled={
             !!c.pendingTaskId ||
             c.isSessionArchived ||
             c.isAgentArchived ||
             c.isAgentAccessRevoked ||
             !c.isAgentRuntimeBound ||
-            c.noAgent
+            c.noAgent ||
+            !canCompose
           }
           onRegenerateQuickActions={(message) =>
             c.activeSessionId
@@ -322,19 +387,19 @@ export function ChatPage() {
         tasks={queuedTasks}
         headStatus={c.pendingTask?.status}
         onSendNow={c.handleSendQueuedTaskNow}
-        sendNowDisabled={c.isAgentAccessRevoked}
+        sendNowDisabled={c.isAgentAccessRevoked || !canCompose}
         onEdit={c.handleEditQueuedTask}
         onRemove={c.handleRemoveQueuedTask}
         onClear={c.handleClearQueuedTasks}
       />
 
       <ChatInput
-        onSend={c.handleSend}
+        onSend={handleSend}
         restoreDraftRequest={c.restoreDraftRequest}
         conversationStarterRequest={c.conversationStarterRequest}
         onConversationStarterApplied={c.handleConversationStarterApplied}
         onRestoreDraftApplied={c.handleRestoreDraftApplied}
-        uploadEnabled={c.uploadEnabled && !c.isAgentAccessRevoked}
+        uploadEnabled={c.uploadEnabled && !c.isAgentAccessRevoked && canCompose}
         onStop={c.handleStop}
         isRunning={!!c.pendingTaskId}
         allowSubmitWhileRunning={c.pendingTask?.supports_queue === true}
@@ -342,7 +407,8 @@ export function ChatPage() {
           c.isSessionArchived ||
           c.isAgentArchived ||
           c.isAgentAccessRevoked ||
-          !c.isAgentRuntimeBound
+          !c.isAgentRuntimeBound ||
+          !canCompose
         }
         noAgent={c.noAgent}
         agentArchived={c.isAgentArchived}
@@ -352,6 +418,7 @@ export function ChatPage() {
         projects={c.projects}
         projectId={c.activeProjectId}
         projectContextUnsupported={c.projectContextUnsupported}
+        projectLocked={requirementSurface.projectLocked}
         onProjectChange={changeProjectContext}
         isProjectUpdating={c.isProjectUpdating}
         focusRequest={c.focusInputRequest}
@@ -361,7 +428,7 @@ export function ChatPage() {
 
   // -- Compact: list / conversation toggle -----------------------------------
   if (isCompact) {
-    if (c.activeSessionId || composingNew) {
+    if (c.activeSessionId || composingNew || urlRequirement) {
       return (
         <div className="flex flex-1 flex-col min-h-0">
           <div className="flex h-12 shrink-0 items-center border-b px-2">
@@ -369,6 +436,7 @@ export function ChatPage() {
               variant="ghost"
               size="sm"
               onClick={() => {
+                requirementOpen.supersede();
                 c.setActiveSession(null);
                 setComposingNew(false);
               }}
@@ -394,7 +462,7 @@ export function ChatPage() {
   // there is a chat target — an open thread or a new chat whose agent was just
   // picked via ⊕. With nothing selected there is no agent, so we show a neutral
   // prompt instead of an orphaned compose box. -------------------------------
-  const hasTarget = !!c.activeSessionId || composingNew;
+  const hasTarget = !!c.activeSessionId || composingNew || !!urlRequirement;
   return (
     <ResizablePanelGroup
       orientation="horizontal"

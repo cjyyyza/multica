@@ -16,6 +16,7 @@ export interface PopoInstallation {
   /** Loopback dj01bot webhook base URL. Display only; the API never dials it.
    * New installs return `""`; kept so older desktop builds keep parsing. */
   webhook_url: string;
+  requirement_template_url?: string;
   installer_user_id: string;
   status: "active" | "revoked" | string;
   installed_at: string;
@@ -88,11 +89,22 @@ export interface PopoStatusBridge {
   unknown_deliveries: number;
 }
 
+export interface PopoRequirementSyncMetrics {
+  pending: number;
+  unknown: number;
+  needs_reconcile: number;
+  oldest_pending_seconds: number;
+  oldest_unknown_seconds: number;
+  oldest_needs_reconcile_seconds: number;
+}
+
 export interface PopoStatusResponse {
   configured: boolean;
   protocol_version: number;
   bridges: PopoStatusBridge[];
   runtime_online: boolean;
+  requirement_operations?: PopoRequirementSyncMetrics;
+  requirement_deliveries?: PopoRequirementSyncMetrics;
 }
 
 /** Pairing-code mint. `pairing_code` is returned once and must not be cached. */

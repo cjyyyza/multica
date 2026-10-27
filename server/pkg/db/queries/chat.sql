@@ -34,7 +34,7 @@ WHERE cs.id = $1
     EXISTS (
       SELECT 1 FROM chat_message AS public_message
       WHERE public_message.chat_session_id = cs.id
-        AND public_message.message_kind != 'channel_command'
+        AND public_message.message_kind NOT IN ('channel_command', 'requirement_context')
     )
   );
 
@@ -57,11 +57,21 @@ LEFT JOIN LATERAL (
   SELECT content, role, created_at, failure_reason, message_kind
     FROM chat_message m
    WHERE m.chat_session_id = cs.id
-     AND m.message_kind != 'channel_command'
+     AND m.message_kind NOT IN ('channel_command', 'requirement_context')
    ORDER BY m.created_at DESC
    LIMIT 1
 ) lm ON true
-WHERE cs.workspace_id = $1 AND cs.creator_id = $2 AND cs.status = 'active'
+WHERE cs.workspace_id = $1
+  AND (
+    cs.creator_id = $2
+    OR EXISTS (
+      SELECT 1 FROM requirement r
+      JOIN requirement_participant rp
+        ON rp.requirement_id = r.id AND rp.workspace_id = cs.workspace_id
+      WHERE r.chat_session_id = cs.id AND rp.user_id = $2
+    )
+  )
+  AND cs.status = 'active'
   AND (
     cs.explicitly_created_at IS NOT NULL
     OR
@@ -94,11 +104,20 @@ LEFT JOIN LATERAL (
   SELECT content, role, created_at, failure_reason, message_kind
     FROM chat_message m
    WHERE m.chat_session_id = cs.id
-     AND m.message_kind != 'channel_command'
+     AND m.message_kind NOT IN ('channel_command', 'requirement_context')
    ORDER BY m.created_at DESC
    LIMIT 1
 ) lm ON true
-WHERE cs.workspace_id = $1 AND cs.creator_id = $2
+WHERE cs.workspace_id = $1
+  AND (
+    cs.creator_id = $2
+    OR EXISTS (
+      SELECT 1 FROM requirement r
+      JOIN requirement_participant rp
+        ON rp.requirement_id = r.id AND rp.workspace_id = cs.workspace_id
+      WHERE r.chat_session_id = cs.id AND rp.user_id = $2
+    )
+  )
   AND (
     cs.explicitly_created_at IS NOT NULL
     OR
@@ -187,7 +206,7 @@ WHERE session.id = @id
     SELECT 1 FROM chat_message AS message
     WHERE message.chat_session_id = session.id
       AND message.role = 'user'
-      AND message.message_kind != 'channel_command'
+      AND message.message_kind NOT IN ('channel_command', 'requirement_context')
   )
 RETURNING *;
 
@@ -204,7 +223,7 @@ WHERE session.id = @id
     SELECT 1 FROM chat_message AS message
     WHERE message.chat_session_id = session.id
       AND message.role = 'user'
-      AND message.message_kind != 'channel_command'
+      AND message.message_kind NOT IN ('channel_command', 'requirement_context')
   )
 RETURNING *;
 
@@ -218,13 +237,13 @@ WHERE session.id = @id
     WHERE message.id = @message_id
       AND message.chat_session_id = session.id
       AND message.role = 'user'
-      AND message.message_kind != 'channel_command'
+      AND message.message_kind NOT IN ('channel_command', 'requirement_context')
   )
   AND NOT EXISTS (
     SELECT 1 FROM chat_message AS other_message
     WHERE other_message.chat_session_id = session.id
       AND other_message.role = 'user'
-      AND other_message.message_kind != 'channel_command'
+      AND other_message.message_kind NOT IN ('channel_command', 'requirement_context')
       AND other_message.id != @message_id
   )
 RETURNING *;
@@ -700,7 +719,7 @@ WHERE message.chat_session_id = @chat_session_id
   AND task.id = @task_id
   AND message.role = 'user'
   AND message.task_id IS NULL
-  AND message.message_kind != 'channel_command'
+  AND message.message_kind NOT IN ('channel_command', 'requirement_context')
   AND (
       task.channel_context_revision IS NULL
       OR message.channel_context_revision = task.channel_context_revision
@@ -733,7 +752,7 @@ WITH pending AS (
     WHERE chat_session_id = $1
       AND role = 'user'
       AND task_id IS NULL
-      AND message_kind != 'channel_command'
+      AND message_kind NOT IN ('channel_command', 'requirement_context')
 )
 SELECT pending.context_revision, generation.initiator_user_id
 FROM pending
@@ -836,7 +855,7 @@ WHERE task_id = $1
 -- claimed during the backoff and then becomes the visible claimed head.
 SELECT message.* FROM chat_message AS message
 WHERE message.chat_session_id = $1
-  AND message.message_kind != 'channel_command'
+  AND message.message_kind NOT IN ('channel_command', 'requirement_context')
   AND NOT (
     message.role = 'user'
     AND EXISTS (
@@ -923,7 +942,7 @@ SELECT message.*
 FROM chat_message AS message
 LEFT JOIN agent_task_queue AS owner ON owner.id = message.task_id
 WHERE message.chat_session_id = @chat_session_id
-  AND message.message_kind != 'channel_command'
+  AND message.message_kind NOT IN ('channel_command', 'requirement_context')
   AND (
       (
           message.role = 'user'
@@ -984,6 +1003,7 @@ WITH latest_visible AS (
         FROM chat_message AS prior
         WHERE prior.chat_session_id = claimed_input.chat_session_id
           AND prior.id != claimed_input.id
+          AND prior.message_kind NOT IN ('channel_command', 'requirement_context')
           AND NOT (
             prior.role = 'user'
             AND EXISTS (
@@ -1024,7 +1044,7 @@ WITH latest_visible AS (
       -- moving it to dispatch time reverses that, and because the batch's two
       -- rows would then share one timestamp, their order falls to random UUIDs
       -- (MUL-5827).
-      AND claimed_input.message_kind <> 'onboarding_kickoff'
+      AND claimed_input.message_kind NOT IN ('onboarding_kickoff', 'requirement_context')
 )
 UPDATE chat_message AS claimed_input
 SET created_at = GREATEST(
@@ -1053,7 +1073,7 @@ WHERE queued_input.chat_session_id = $1
   -- Same exclusion, same reason as ReanchorClaimedDirectChatInput: the hidden
   -- kickoff has no visible position to fix, and moving it would put the
   -- product's context after the member's message inside one input batch.
-  AND queued_input.message_kind <> 'onboarding_kickoff'
+  AND queued_input.message_kind NOT IN ('onboarding_kickoff', 'requirement_context')
   AND queued_input.created_at <= sqlc.arg('assistant_created_at')::timestamptz
   AND EXISTS (
     SELECT 1
@@ -1085,7 +1105,7 @@ WHERE queued_input.chat_session_id = $1
 -- name: ListChatMessagesPage :many
 SELECT message.* FROM chat_message AS message
 WHERE message.chat_session_id = $1
-  AND message.message_kind != 'channel_command'
+  AND message.message_kind NOT IN ('channel_command', 'requirement_context')
   AND NOT (
     message.role = 'user'
     AND EXISTS (
@@ -1136,7 +1156,7 @@ INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, chat_session_id,
     initiator_user_id, originator_user_id, accountable_user_id, force_fresh_session, runtime_mcp_overlay,
     runtime_connected_apps, originator_source, trigger_evidence_kind, trigger_evidence_ref_id,
-    fire_at, channel_context_revision, id
+    fire_at, channel_context_revision, id, mode, requirement_id
 )
 SELECT
     $1, $2, NULL,
@@ -1152,8 +1172,17 @@ SELECT
     sqlc.narg(trigger_evidence_ref_id),
     sqlc.narg('fire_at')::timestamptz,
     sqlc.narg('channel_context_revision')::bigint,
-    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
+    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()),
+    CASE WHEN EXISTS (
+        SELECT 1 FROM requirement r
+        WHERE r.chat_session_id = $4 AND r.issue_id IS NULL AND r.cancelled_at IS NULL
+    ) THEN 'plan' ELSE 'execute' END,
+    (SELECT r.id FROM requirement r WHERE r.chat_session_id = $4)
 WHERE lock_task_owner_rows($1, NULL, $2)
+  AND NOT EXISTS (
+      SELECT 1 FROM requirement r
+      WHERE r.chat_session_id = $4 AND (r.issue_id IS NOT NULL OR r.cancelled_at IS NOT NULL)
+  )
 RETURNING *;
 
 -- name: PromoteChannelChatTasksIfMediaReady :many
@@ -1383,6 +1412,7 @@ LEFT JOIN LATERAL (
     FROM chat_message AS input
     WHERE input.task_id = COALESCE(task.chat_input_task_id, task.id)
       AND input.role = 'user'
+      AND input.message_kind NOT IN ('channel_command', 'requirement_context')
     ORDER BY input.created_at ASC, input.id ASC
     LIMIT 1
 ) AS message ON TRUE
@@ -1466,7 +1496,15 @@ WHERE atq.chat_session_id IS NOT NULL
   -- turn and must not surface as "running" chat work (MUL-5149 refresh follow-up).
   AND atq.regenerate_quick_actions_for IS NULL
   AND cs.workspace_id = $1
-  AND cs.creator_id = $2
+  AND (
+    cs.creator_id = $2
+    OR EXISTS (
+      SELECT 1 FROM requirement r
+      JOIN requirement_participant rp
+        ON rp.requirement_id = r.id AND rp.workspace_id = cs.workspace_id
+      WHERE r.chat_session_id = cs.id AND rp.user_id = $2
+    )
+  )
 ORDER BY atq.created_at DESC;
 
 -- name: HasPendingChatTasksByCreator :one
@@ -1489,7 +1527,15 @@ SELECT EXISTS (
     -- never light the FAB "running" indicator (MUL-5149 refresh follow-up).
     AND atq.regenerate_quick_actions_for IS NULL
     AND cs.workspace_id = sqlc.arg(workspace_id)
-    AND cs.creator_id = sqlc.arg(creator_id)
+    AND (
+      cs.creator_id = sqlc.arg(creator_id)
+      OR EXISTS (
+        SELECT 1 FROM requirement r
+        JOIN requirement_participant rp
+          ON rp.requirement_id = r.id AND rp.workspace_id = cs.workspace_id
+        WHERE r.chat_session_id = cs.id AND rp.user_id = sqlc.arg(creator_id)
+      )
+    )
     AND cs.agent_id = ANY(sqlc.arg(agent_ids)::uuid[])
 ) AS has_pending;
 
@@ -1515,7 +1561,7 @@ SELECT EXISTS (
     SELECT 1 FROM chat_message
     WHERE chat_session_id = $1
       AND role = 'user'
-      AND message_kind != 'channel_command'
+      AND message_kind NOT IN ('channel_command', 'requirement_context')
 ) AS has_public_user_message;
 
 -- name: CreateChatDraftRestore :one

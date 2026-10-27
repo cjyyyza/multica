@@ -174,7 +174,9 @@ func requirePopoTSProbe(t *testing.T) (string, string) {
 func runPopoTSProbe(t *testing.T, envelope map[string]any, result any) {
 	t.Helper()
 	node, probe := requirePopoTSProbe(t)
-	envelope["temp_dir"] = t.TempDir()
+	if _, present := envelope["temp_dir"]; !present {
+		envelope["temp_dir"] = t.TempDir()
+	}
 	wire, err := json.Marshal(envelope)
 	if err != nil {
 		t.Fatal(err)

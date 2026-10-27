@@ -104,6 +104,16 @@ export interface ChatSession {
   /** True when the user has pinned this chat to the top of the list.
    *  Optional so older clients / non-list payloads stay valid. */
   pinned?: boolean;
+  /**
+   * The Requirement that owns this Chat, if any. Additive tri-state contract:
+   * current servers always emit the key — `null` means the Chat is definitely
+   * unbound, a string is the owning Requirement — while a missing key is the
+   * version signal for a server that predates the Requirement flow (or a
+   * client-side payload that lost the field). A Chat can be Requirement-bound
+   * on such a server, so clients must keep the legacy chat-scoped probe for
+   * `undefined` instead of treating it as unbound.
+   */
+  requirement_id?: string | null;
   /** Present for Chats created by an external Channel. Historical Chats keep
    *  their source even after a newer route generation becomes current. */
   channel_source?: ChatChannelSource;

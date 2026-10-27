@@ -149,7 +149,12 @@ func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, chatSessionToResponse(session))
+	response, err := h.chatSessionResponseWithRequirement(r.Context(), workspaceID, session)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load chat session requirement")
+		return
+	}
+	writeJSON(w, http.StatusCreated, response)
 }
 
 func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
@@ -175,6 +180,10 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to resolve agent access")
 		return
 	}
+	if err := h.addAccessibleRequirementAgents(r.Context(), parseUUID(workspaceID), parseUUID(userID), allowed); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve requirement chat access")
+		return
+	}
 
 	status := r.URL.Query().Get("status")
 
@@ -195,6 +204,7 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 			if _, ok := allowed[uuidToString(s.AgentID)]; !ok {
 				continue
 			}
+			hasUnread, unreadCount, pinned := chatPersonalProjection(uuidToString(s.CreatorID), userID, s.UnreadCount, s.PinnedAt.Valid)
 			resp = append(resp, ChatSessionResponse{
 				ID:          uuidToString(s.ID),
 				WorkspaceID: uuidToString(s.WorkspaceID),
@@ -203,10 +213,10 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 				ProjectID:   uuidToPtr(s.ProjectID),
 				Title:       s.Title,
 				Status:      s.Status,
-				HasUnread:   s.UnreadCount > 0,
-				UnreadCount: int(s.UnreadCount),
+				HasUnread:   hasUnread,
+				UnreadCount: unreadCount,
 				LastMessage: buildChatLastMessage(s.LastMessageAt, s.LastMessageContent, s.LastMessageRole, s.LastMessageFailureReason, s.LastMessageKind),
-				Pinned:      s.PinnedAt.Valid,
+				Pinned:      pinned,
 				CreatedAt:   timestampToString(s.CreatedAt),
 				UpdatedAt:   timestampToString(s.UpdatedAt),
 			})
@@ -225,6 +235,7 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 			if _, ok := allowed[uuidToString(s.AgentID)]; !ok {
 				continue
 			}
+			hasUnread, unreadCount, pinned := chatPersonalProjection(uuidToString(s.CreatorID), userID, s.UnreadCount, s.PinnedAt.Valid)
 			resp = append(resp, ChatSessionResponse{
 				ID:          uuidToString(s.ID),
 				WorkspaceID: uuidToString(s.WorkspaceID),
@@ -233,10 +244,10 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 				ProjectID:   uuidToPtr(s.ProjectID),
 				Title:       s.Title,
 				Status:      s.Status,
-				HasUnread:   s.UnreadCount > 0,
-				UnreadCount: int(s.UnreadCount),
+				HasUnread:   hasUnread,
+				UnreadCount: unreadCount,
 				LastMessage: buildChatLastMessage(s.LastMessageAt, s.LastMessageContent, s.LastMessageRole, s.LastMessageFailureReason, s.LastMessageKind),
-				Pinned:      s.PinnedAt.Valid,
+				Pinned:      pinned,
 				CreatedAt:   timestampToString(s.CreatedAt),
 				UpdatedAt:   timestampToString(s.UpdatedAt),
 			})
@@ -244,6 +255,10 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.hydrateChatSessionChannelMetadata(r.Context(), resp); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load chat channel metadata")
+		return
+	}
+	if err := h.hydrateChatSessionRequirementIDs(r.Context(), workspaceID, resp); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load chat session requirement")
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -267,21 +282,34 @@ func (h *Handler) loadChatSessionForUser(w http.ResponseWriter, r *http.Request,
 		return db.ChatSession{}, false
 	}
 	if uuidToString(session.CreatorID) != userID {
-		writeError(w, http.StatusForbidden, "not your chat session")
-		return db.ChatSession{}, false
+		_, participant, _, err := h.requirementChatParticipant(r.Context(), session.WorkspaceID, session.ID, parseUUID(userID))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load requirement chat access")
+			return db.ChatSession{}, false
+		}
+		if !participant {
+			writeError(w, http.StatusForbidden, "not your chat session")
+			return db.ChatSession{}, false
+		}
 	}
 	return session, true
 }
 
-// gateChatSessionForUser combines the session ownership check with the
-// private-agent access gate so a member who has lost access to the target
-// agent (role downgrade, ownership transfer, agent flipped to private)
-// cannot continue reading the chat transcript even though they remain the
-// session creator. Returns ok=false after writing the error response.
+// gateChatSessionForUser combines creator/participant access with the
+// private-agent view gate. A valid requirement participant keeps requirement
+// read access while action gates independently recheck invocation.
 func (h *Handler) gateChatSessionForUser(w http.ResponseWriter, r *http.Request, userID, workspaceID, sessionID string) (db.ChatSession, bool) {
 	session, ok := h.loadChatSessionForUser(w, r, userID, workspaceID, sessionID)
 	if !ok {
 		return db.ChatSession{}, false
+	}
+	_, participant, _, err := h.requirementChatParticipant(r.Context(), session.WorkspaceID, session.ID, parseUUID(userID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load requirement chat access")
+		return db.ChatSession{}, false
+	}
+	if participant {
+		return session, true
 	}
 	agent, err := h.Queries.GetAgent(r.Context(), session.AgentID)
 	if err != nil {
@@ -332,11 +360,16 @@ func (h *Handler) GetChatSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := chatSessionToResponse(session)
+	resp.HasUnread, resp.UnreadCount, resp.Pinned = chatPersonalProjection(uuidToString(session.CreatorID), userID, int32(resp.UnreadCount), resp.Pinned)
 	// hydrateChatSessionChannelMetadata mutates the slice element, so retain a
 	// concrete slice here rather than passing a temporary value to writeJSON.
 	responses := []ChatSessionResponse{resp}
 	if err := h.hydrateChatSessionChannelMetadata(r.Context(), responses); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load chat channel metadata")
+		return
+	}
+	if err := h.hydrateChatSessionRequirementIDs(r.Context(), workspaceID, responses); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load chat session requirement")
 		return
 	}
 	writeJSON(w, http.StatusOK, responses[0])
@@ -377,6 +410,9 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !requireChatCreator(w, session, userID) {
+		return
+	}
 	var (
 		updated db.ChatSession
 		err     error
@@ -423,6 +459,16 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 		defer tx.Rollback(r.Context())
 		qtx := h.Queries.WithTx(tx)
 
+		if _, requirementErr := qtx.GetRequirementByChatSession(r.Context(), db.GetRequirementByChatSessionParams{
+			WorkspaceID: session.WorkspaceID, ChatSessionID: session.ID,
+		}); requirementErr == nil {
+			writeError(w, http.StatusForbidden, "requirement chat project is immutable")
+			return
+		} else if !errors.Is(requirementErr, pgx.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, "failed to check requirement chat binding")
+			return
+		}
+
 		if projectID.Valid {
 			if _, lockErr := qtx.LockProjectForChatSessionCreate(r.Context(), db.LockProjectForChatSessionCreateParams{
 				ID:          projectID,
@@ -464,7 +510,12 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 	}
 	h.publishChat(protocol.EventChatSessionUpdated, workspaceID, "member", userID, resolvedSessionID, payload)
 
-	writeJSON(w, http.StatusOK, chatSessionToResponse(updated))
+	response, err := h.chatSessionResponseWithRequirement(r.Context(), workspaceID, updated)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load chat session requirement")
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 type SetChatSessionPinnedRequest struct {
@@ -494,6 +545,9 @@ func (h *Handler) SetChatSessionPinned(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !requireChatCreator(w, session, userID) {
+		return
+	}
 	updated, err := h.Queries.SetChatSessionPinned(r.Context(), db.SetChatSessionPinnedParams{
 		ID:     session.ID,
 		Pinned: req.Pinned,
@@ -512,7 +566,12 @@ func (h *Handler) SetChatSessionPinned(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:     timestampToString(updated.UpdatedAt),
 	})
 
-	writeJSON(w, http.StatusOK, chatSessionToResponse(updated))
+	response, err := h.chatSessionResponseWithRequirement(r.Context(), workspaceID, updated)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load chat session requirement")
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 type SetChatSessionArchivedRequest struct {
@@ -560,6 +619,9 @@ func (h *Handler) SetChatSessionArchived(w http.ResponseWriter, r *http.Request)
 
 	session, ok := h.gateChatSessionForUser(w, r, userID, workspaceID, sessionID)
 	if !ok {
+		return
+	}
+	if !requireChatCreator(w, session, userID) {
 		return
 	}
 
@@ -672,7 +734,12 @@ func (h *Handler) SetChatSessionArchived(w http.ResponseWriter, r *http.Request)
 		UpdatedAt:     timestampToString(updated.UpdatedAt),
 	})
 
-	writeJSON(w, http.StatusOK, chatSessionToResponse(updated))
+	response, err := h.chatSessionResponseWithRequirement(r.Context(), workspaceID, updated)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load chat session requirement")
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // DeleteChatSession hard-deletes a chat session owned by the caller. The
@@ -690,6 +757,9 @@ func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 
 	session, ok := h.loadChatSessionForUser(w, r, userID, workspaceID, sessionID)
 	if !ok {
+		return
+	}
+	if !requireChatCreator(w, session, userID) {
 		return
 	}
 
@@ -712,6 +782,16 @@ func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to lock chat session")
+		return
+	}
+
+	if _, err := qtx.GetRequirementByChatSession(r.Context(), db.GetRequirementByChatSessionParams{
+		WorkspaceID: session.WorkspaceID, ChatSessionID: session.ID,
+	}); err == nil {
+		writeErrorCode(w, http.StatusConflict, "requirement_chat_cancel_required", "requirement chat is managed by its requirement; use the requirement cancel action instead of hard delete")
+		return
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "failed to check requirement chat binding")
 		return
 	}
 
@@ -874,12 +954,28 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	writeAllowed, err := h.requirementChatWriteAllowed(r.Context(), session.WorkspaceID, session.ID, parseUUID(userID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to validate requirement chat access")
+		return
+	}
+	if !writeAllowed {
+		writeError(w, http.StatusForbidden, "you do not have permission to clarify this requirement")
+		return
+	}
 	// Archived sessions are read-only: refuse to enqueue new agent work for
 	// them (see SetChatSessionArchived). The frontend disables the composer
 	// for status='archived' and only offers unarchive/delete there. Legacy
 	// soft-archived rows from before the feature are covered by the same check.
 	if session.Status != "active" {
 		writeError(w, http.StatusBadRequest, "chat session is archived")
+		return
+	}
+	if err := h.TaskService.CheckRequirementChatExecution(r.Context(), session); err != nil {
+		if writeRequirementChatExecutionError(w, err) {
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to validate requirement chat")
 		return
 	}
 
@@ -954,6 +1050,9 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 	// resolved above for the invoke gate.
 	sent, err := h.TaskService.SendDirectChatMessage(r.Context(), session, agent, parseUUID(userID), req.Content, attachmentIDs, actorType, parseUUID(actorID))
 	if err != nil {
+		if writeRequirementChatExecutionError(w, err) {
+			return
+		}
 		switch {
 		case errors.Is(err, service.ErrChatSessionArchived):
 			writeError(w, http.StatusConflict, "chat session is archived")
@@ -1125,8 +1224,24 @@ func (h *Handler) RegenerateChatQuickActions(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
+	writeAllowed, err := h.requirementChatWriteAllowed(r.Context(), session.WorkspaceID, session.ID, parseUUID(userID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to validate requirement chat access")
+		return
+	}
+	if !writeAllowed {
+		writeError(w, http.StatusForbidden, "you do not have permission to clarify this requirement")
+		return
+	}
 	if session.Status != "active" {
 		writeError(w, http.StatusBadRequest, "chat session is archived")
+		return
+	}
+	if err := h.TaskService.CheckRequirementChatExecution(r.Context(), session); err != nil {
+		if writeRequirementChatExecutionError(w, err) {
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to validate requirement chat")
 		return
 	}
 	agent, err := h.Queries.GetAgent(r.Context(), session.AgentID)
@@ -1161,6 +1276,9 @@ func (h *Handler) RegenerateChatQuickActions(w http.ResponseWriter, r *http.Requ
 
 	messageID, targetTask, err := h.TaskService.RegenerateChatQuickActions(r.Context(), session, expectedMessageID)
 	if err != nil {
+		if writeRequirementChatExecutionError(w, err) {
+			return
+		}
 		switch {
 		case errors.Is(err, service.ErrChatQuickActionsStale):
 			// The turn the client was refreshing is no longer the latest — its
@@ -1353,6 +1471,9 @@ func (h *Handler) MarkChatSessionRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !requireChatCreator(w, session, userID) {
+		return
+	}
 	if err := h.Queries.MarkChatSessionRead(r.Context(), session.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to mark session read")
 		return
@@ -1403,6 +1524,9 @@ func (h *Handler) ListChatDraftRestores(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if !requireChatCreator(w, session, userID) {
+		return
+	}
 	rows, err := h.Queries.ListChatDraftRestoresBySession(r.Context(), session.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list draft restores")
@@ -1469,6 +1593,9 @@ func (h *Handler) ConsumeChatDraftRestore(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if !requireChatCreator(w, session, userID) {
+		return
+	}
 	if _, err := h.Queries.DeleteChatDraftRestore(r.Context(), db.DeleteChatDraftRestoreParams{
 		ID:            restoreUUID,
 		ChatSessionID: session.ID,
@@ -1522,6 +1649,10 @@ func (h *Handler) ListPendingChatTasks(w http.ResponseWriter, r *http.Request) {
 	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, actorType, actorID, member.Role)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "failed to resolve agent access")
+		return
+	}
+	if err := h.addAccessibleRequirementAgents(r.Context(), parseUUID(workspaceID), parseUUID(userID), allowed); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve requirement chat access")
 		return
 	}
 
@@ -1592,6 +1723,10 @@ func (h *Handler) HasPendingChatTasks(w http.ResponseWriter, r *http.Request) {
 	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, actorType, actorID, member.Role)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "failed to resolve agent access")
+		return
+	}
+	if err := h.addAccessibleRequirementAgents(r.Context(), parseUUID(workspaceID), parseUUID(userID), allowed); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve requirement chat access")
 		return
 	}
 
@@ -1690,6 +1825,15 @@ func (h *Handler) PrioritizeQueuedChatTask(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	writeAllowed, err := h.requirementChatWriteAllowed(r.Context(), session.WorkspaceID, session.ID, parseUUID(userID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to validate requirement chat access")
+		return
+	}
+	if !writeAllowed {
+		writeError(w, http.StatusForbidden, "you do not have permission to manage this requirement task")
+		return
+	}
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start prioritize transaction")
@@ -1760,6 +1904,15 @@ func (h *Handler) ClearQueuedChatTasks(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionId")
 	session, ok := h.gatePublicChatSessionForUser(w, r, userID, workspaceID, sessionID)
 	if !ok {
+		return
+	}
+	writeAllowed, err := h.requirementChatWriteAllowed(r.Context(), session.WorkspaceID, session.ID, parseUUID(userID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to validate requirement chat access")
+		return
+	}
+	if !writeAllowed {
+		writeError(w, http.StatusForbidden, "you do not have permission to manage this requirement task")
 		return
 	}
 	if err := h.TaskService.CancelQueuedChatTasks(r.Context(), session.ID, session.AgentID); err != nil {
@@ -1846,8 +1999,6 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if task.ChatSessionID.Valid {
-		// Chat privacy: only the member who opened the conversation may
-		// cancel its task, even though the workspace is shared.
 		cs, err := h.Queries.GetChatSessionInWorkspace(r.Context(), db.GetChatSessionInWorkspaceParams{
 			ID:          task.ChatSessionID,
 			WorkspaceID: wsUUID,
@@ -1857,8 +2008,15 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if uuidToString(cs.CreatorID) != userID {
-			writeError(w, http.StatusForbidden, "not your task")
-			return
+			found, participant, roles, accessErr := h.requirementChatParticipant(r.Context(), cs.WorkspaceID, cs.ID, parseUUID(userID))
+			if accessErr != nil {
+				writeError(w, http.StatusInternalServerError, "failed to validate requirement chat access")
+				return
+			}
+			if !found || !participant || (!roles["requester"] && !roles["approver"]) {
+				writeError(w, http.StatusForbidden, "not your task")
+				return
+			}
 		}
 	} else {
 		// Issue / autopilot / quick_create tasks are all visible on the
@@ -1935,6 +2093,14 @@ type ChatSessionResponse struct {
 	// Pinned marks a chat the user has stuck to the top of the list. Populated
 	// by list endpoints and by the pin/unpin + single-session responses.
 	Pinned bool `json:"pinned"`
+	// RequirementID is the requirement that owns this chat, if any. Current
+	// servers always serialize the field — null when the chat has no
+	// requirement — and never omit it: absence of the key is the version
+	// signal that tells a client it is talking to a server older than the
+	// requirement flow, where a chat may still be requirement-bound without
+	// this projection. Clients must treat null as "definitely unbound" and a
+	// missing key as "unknown, probe the legacy endpoint".
+	RequirementID *string `json:"requirement_id"`
 	// ChannelSource is present only for Chats created from an external channel.
 	// IsCurrentChannelRoute distinguishes the active route generation from an
 	// older Chat that remains readable and writable in Multica.
@@ -1978,6 +2144,52 @@ func (h *Handler) hydrateChatSessionChannelMetadata(ctx context.Context, session
 		sessions[i].IsCurrentChannelRoute = &current
 	}
 	return nil
+}
+
+// hydrateChatSessionRequirementIDs attaches the additive requirement_id
+// projection to already-built session responses in one batched query.
+// requirement.chat_session_id is unique, so this is the authoritative
+// chat-session -> requirement mapping. Sessions with no row keep a nil pointer,
+// which serializes as an explicit JSON null (the field is not omitempty) — that
+// null is what lets a client stop probing for a requirement on ordinary chats.
+func (h *Handler) hydrateChatSessionRequirementIDs(ctx context.Context, workspaceID string, sessions []ChatSessionResponse) error {
+	if len(sessions) == 0 {
+		return nil
+	}
+	sessionIDs := make([]pgtype.UUID, 0, len(sessions))
+	for _, session := range sessions {
+		sessionIDs = append(sessionIDs, parseUUID(session.ID))
+	}
+	rows, err := h.Queries.ListRequirementIDsByChatSessions(ctx, db.ListRequirementIDsByChatSessionsParams{
+		WorkspaceID:    parseUUID(workspaceID),
+		ChatSessionIds: sessionIDs,
+	})
+	if err != nil {
+		return err
+	}
+	bySession := make(map[string]pgtype.UUID, len(rows))
+	for _, row := range rows {
+		bySession[uuidToString(row.ChatSessionID)] = row.ID
+	}
+	for i := range sessions {
+		requirementID, ok := bySession[sessions[i].ID]
+		if !ok {
+			continue
+		}
+		sessions[i].RequirementID = uuidToPtr(requirementID)
+	}
+	return nil
+}
+
+// chatSessionResponseWithRequirement projects one session and attaches the
+// additive requirement_id projection. Single-session endpoints must use this
+// instead of chatSessionToResponse so their response never omits the field.
+func (h *Handler) chatSessionResponseWithRequirement(ctx context.Context, workspaceID string, session db.ChatSession) (ChatSessionResponse, error) {
+	responses := []ChatSessionResponse{chatSessionToResponse(session)}
+	if err := h.hydrateChatSessionRequirementIDs(ctx, workspaceID, responses); err != nil {
+		return ChatSessionResponse{}, err
+	}
+	return responses[0], nil
 }
 
 // ChatLastMessage is a preview of a session's most recent message, used to
@@ -2073,7 +2285,7 @@ func chatMessageToResponse(m db.ChatMessage, attachments []AttachmentResponse) C
 func visibleChatMessages(messages []db.ChatMessage) []db.ChatMessage {
 	visible := make([]db.ChatMessage, 0, len(messages))
 	for _, message := range messages {
-		if message.MessageKind == protocol.ChatMessageKindOnboardingKickoff {
+		if message.MessageKind == protocol.ChatMessageKindOnboardingKickoff || message.MessageKind == protocol.ChatMessageKindRequirementContext {
 			continue
 		}
 		visible = append(visible, message)
@@ -2111,6 +2323,8 @@ func normalizeMessageKind(kind string) string {
 		return protocol.ChatMessageKindOnboardingKickoff
 	case protocol.ChatMessageKindOnboardingOpening:
 		return protocol.ChatMessageKindOnboardingOpening
+	case protocol.ChatMessageKindRequirementOpening:
+		return protocol.ChatMessageKindRequirementOpening
 	default:
 		return protocol.ChatMessageKindMessage
 	}

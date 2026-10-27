@@ -1555,6 +1555,11 @@ export const IssueSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   revision: z.number().int().positive().optional(),
+  origin_type: z.string().nullable().optional().catch(undefined),
+  origin_id: z.string().nullable().optional().catch(undefined),
+  // Additive Requirement pointer. Missing means either an older backend or a
+  // hydration failure, so the client may probe origin_id; null means unbound.
+  requirement_id: z.string().nullable().optional().catch(undefined),
   // Optional for compatibility with older self-hosted backends; a current
   // backend emits null until its historical backfill reaches the issue.
   last_activity_at: z.string().nullable().optional(),
@@ -2250,6 +2255,12 @@ export const ChatSessionSchema: z.ZodType<ChatSession> = z.object({
   unread_count: z.number().optional(),
   last_message: ChatLastMessageSchema.nullable().optional().catch(undefined),
   pinned: z.boolean().optional(),
+  // Additive Requirement link. Current servers always emit it, so `null`
+  // ("definitely unbound") is distinct from a missing key ("server predates
+  // the projection — probe the legacy endpoint"). A malformed value degrades
+  // to the missing-key behavior instead of dropping the whole Chat: the probe
+  // is safe either way, while dropping the row would hide a conversation.
+  requirement_id: z.string().nullable().optional().catch(undefined),
   channel_source: ChatChannelSourceSchema.optional().catch(undefined),
   is_current_channel_route: z.boolean().optional().catch(undefined),
   created_at: z.string().default(""),
@@ -2264,6 +2275,7 @@ export const EMPTY_CHAT_SESSION: ChatSession = {
   title: "",
   status: "active",
   has_unread: false,
+  requirement_id: null,
   created_at: "",
   updated_at: "",
 };
@@ -3601,6 +3613,7 @@ export const PopoInstallationSchema = z.object({
   robot_name: z.string().default(""),
   bridge_id: z.string().default(""),
   webhook_url: z.string().default(""),
+  requirement_template_url: z.string().default(""),
   installer_user_id: z.string().default(""),
   status: z.string().default("revoked"),
   installed_at: z.string().default(""),
@@ -3687,11 +3700,31 @@ export const PopoStatusBridgeSchema = z.object({
   unknown_deliveries: z.number().default(0),
 }).loose();
 
+export const PopoRequirementSyncMetricsSchema = z.object({
+  pending: z.number().default(0),
+  unknown: z.number().default(0),
+  needs_reconcile: z.number().default(0),
+  oldest_pending_seconds: z.number().default(0),
+  oldest_unknown_seconds: z.number().default(0),
+  oldest_needs_reconcile_seconds: z.number().default(0),
+}).loose();
+
+const EMPTY_REQUIREMENT_SYNC_METRICS = {
+  pending: 0,
+  unknown: 0,
+  needs_reconcile: 0,
+  oldest_pending_seconds: 0,
+  oldest_unknown_seconds: 0,
+  oldest_needs_reconcile_seconds: 0,
+};
+
 export const PopoStatusResponseSchema = z.object({
   configured: z.boolean().default(false),
   protocol_version: z.number().default(1),
   bridges: z.array(PopoStatusBridgeSchema).default([]),
   runtime_online: z.boolean().default(false),
+  requirement_operations: PopoRequirementSyncMetricsSchema.default(EMPTY_REQUIREMENT_SYNC_METRICS),
+  requirement_deliveries: PopoRequirementSyncMetricsSchema.default(EMPTY_REQUIREMENT_SYNC_METRICS),
 }).loose();
 
 export const EMPTY_POPO_STATUS_RESPONSE: PopoStatusResponse = {

@@ -24,6 +24,7 @@ type Attachment struct {
 	DownloadURL string `json:"download_url,omitempty"`
 	LocalID     string `json:"local_id,omitempty"`
 	LocalURL    string `json:"local_url,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
 }
 
 type Comment struct {
@@ -61,15 +62,18 @@ type Snapshot struct {
 }
 
 type OperationPayload struct {
-	Source         Source        `json:"source"`
-	ExpectedDigest string        `json:"expected_digest,omitempty"`
-	Revision       int64         `json:"revision,omitempty"`
-	StatusName     string        `json:"status_name,omitempty"`
-	Summary        string        `json:"summary,omitempty"`
-	IssueURL       string        `json:"issue_url,omitempty"`
-	Channel        *ChannelScope `json:"channel,omitempty"`
-	AutoImport     bool          `json:"auto_import,omitempty"`
-	ProjectID      string        `json:"project_id,omitempty"`
+	Source            Source        `json:"source"`
+	ExpectedDigest    string        `json:"expected_digest,omitempty"`
+	Revision          int64         `json:"revision,omitempty"`
+	StatusName        string        `json:"status_name,omitempty"`
+	Summary           string        `json:"summary,omitempty"`
+	IssueURL          string        `json:"issue_url,omitempty"`
+	Channel           *ChannelScope `json:"channel,omitempty"`
+	AutoImport        bool          `json:"auto_import,omitempty"`
+	ProjectID         string        `json:"project_id,omitempty"`
+	TargetOperationID string        `json:"target_operation_id,omitempty"`
+	Draft             *DraftInput   `json:"draft,omitempty"`
+	DraftOperationID  string        `json:"draft_operation_id,omitempty"`
 }
 
 // ChannelScope binds a review to the authenticated member's originating chat.
@@ -80,20 +84,25 @@ type ChannelScope struct {
 }
 
 type Operation struct {
-	ID         string           `json:"id"`
-	Kind       string           `json:"kind"`
-	State      string           `json:"state"`
-	LeaseToken string           `json:"lease_token,omitempty"`
-	Payload    OperationPayload `json:"payload"`
-	Snapshot   *Snapshot        `json:"snapshot"`
-	Error      string           `json:"error"`
+	ID                string           `json:"id"`
+	Kind              string           `json:"kind"`
+	State             string           `json:"state"`
+	LeaseToken        string           `json:"lease_token,omitempty"`
+	Payload           OperationPayload `json:"payload"`
+	Snapshot          *Snapshot        `json:"snapshot"`
+	Error             string           `json:"error"`
+	RequirementID     string           `json:"requirement_id,omitempty"`
+	TargetOperationID string           `json:"target_operation_id,omitempty"`
+	RequestHash       string           `json:"request_hash,omitempty"`
+	WriteBlocked      bool             `json:"write_blocked,omitempty"`
 }
 
 type Completion struct {
-	LeaseToken string    `json:"lease_token"`
-	State      string    `json:"state"`
-	Snapshot   *Snapshot `json:"snapshot"`
-	Error      string    `json:"error"`
+	LeaseToken  string    `json:"lease_token"`
+	State       string    `json:"state"`
+	Snapshot    *Snapshot `json:"snapshot"`
+	Error       string    `json:"error"`
+	TargetState string    `json:"target_state,omitempty"`
 }
 
 var issuePath = regexp.MustCompile(`/(?:issues|issue)/(\d+)(?:/|$)`)

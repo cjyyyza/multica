@@ -1,0 +1,119 @@
+{
+  "card": {
+    "title": "Requirement",
+    "source": "Source",
+    "source_preview": "Source preview",
+    "participants": "Participants",
+    "run": "Latest run",
+    "run_completed_not_done": "Run completed; the requirement is not done yet."
+  },
+  "states": {
+    "intake_pending": "Intake pending",
+    "clarifying": "Clarifying",
+    "awaiting_approval": "Awaiting approval",
+    "executing": "Executing",
+    "blocked": "Blocked",
+    "in_review": "In review",
+    "done": "Done",
+    "cancelled": "Cancelled",
+    "unknown": "Unknown"
+  },
+  "participants": {
+    "edit": "Edit participants",
+    "stale": "Participants changed. Review the latest revision before saving.",
+    "remove": "Remove",
+    "roles": {
+      "requester": "requester",
+      "approver": "approver",
+      "viewer": "viewer"
+    },
+    "add_member": "Add member",
+    "approver_required": "Keep at least one approver.",
+    "cancel": "Cancel",
+    "save": "Save participants"
+  },
+  "candidate": {
+    "project": "Project",
+    "agent": "Execution agent",
+    "goal": "Goal",
+    "non_goals": "Non-goals",
+    "scope": "Scope",
+    "constraints": "Constraints",
+    "acceptance_criteria": "Acceptance criteria",
+    "no_project": "No project",
+    "unknown_project": "Unknown project ({{id}})",
+    "unknown_agent": "Unknown agent ({{id}})",
+    "empty": "None",
+    "attachments": "Attachments",
+    "file": "File",
+    "unknown_attachment": "Unknown attachment ({{id}})",
+    "attachments_unavailable": "Some selected attachments are not present in the source preview. Approval is unavailable."
+  },
+  "approval": {
+    "title": "Approve requirement",
+    "candidate_revision": "Candidate v{{revision}}",
+    "review": "Review and approve",
+    "confirm_title": "Approve and create Issue",
+    "consequence": "Creates one Issue and starts the agent. Review later changes in that Issue; start a new chat for an independent request.",
+    "stale": "The candidate or revision changed. Review the latest candidate before approving.",
+    "review_latest": "Review latest candidate",
+    "cancel": "Cancel",
+    "confirm": "Create Issue and start agent"
+  },
+  "review": {
+    "title": "Review",
+    "accept": "Accept",
+    "reject": "Request changes",
+    "cancel": "Cancel requirement",
+    "close": "Close",
+    "reject_reason": "Reason",
+    "reject_placeholder": "Describe what needs to change...",
+    "reject_required": "Enter a reason.",
+    "reject_confirm": "Request changes",
+    "cancel_title": "Cancel this requirement?",
+    "cancel_consequence": "Stops execution and keeps the existing Chat and Issue links.",
+    "cancel_confirm": "Cancel requirement",
+    "accept_title": "Accept and publish to Yixiezuo",
+    "accept_consequence": "Marks the Issue done and publishes this summary, its Issue link, and the selected source status.",
+    "result_summary": "Delivery summary and links",
+    "result_placeholder": "Delivered changes, validation results, and artifact links...",
+    "source_status": "Yixiezuo status",
+    "keep_source_status": "Keep current status",
+    "accept_stale": "The Issue changed. Close this dialog and review the latest version.",
+    "accept_confirm": "Accept and publish"
+  },
+  "sync": {
+    "title": "Sync status",
+    "operations": "Operations",
+    "deliveries": "Deliveries",
+    "reconcile": "Read back",
+    "reconcile_operation": "Read back operation",
+    "reconcile_delivery": "Reconcile delivery",
+    "no_auto_retry": "Unknown is never retried automatically.",
+    "request_hash": "request_hash"
+  },
+  "panel": {
+    "load_failed": "Could not load the requirement.",
+    "closed": "This requirement Chat is read-only.",
+    "open_issue": "Open Issue"
+  },
+  "intake": {
+    "title": "New requirement",
+    "source_url": "Source URL",
+    "preview": "Preview source",
+    "previewing": "Loading source preview...",
+    "agent": "Agent",
+    "project": "Project",
+    "no_project": "No project",
+    "create": "Create requirement",
+    "creating": "Creating..."
+  },
+  "intake_settings": {
+    "template": "POPO requirement template",
+    "consequence": "With a template, ideas sent to this robot create 易协作 drafts marked Pending clarification, using its project, type and required form defaults. Clarify and approve in Multica Chat. Clear the URL to disable.",
+    "save": "Save",
+    "saving": "Saving...",
+    "saved": "Saved",
+    "save_failed": "Could not save the requirement entry."
+  }
+}

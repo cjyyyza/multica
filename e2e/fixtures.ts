@@ -127,6 +127,17 @@ export class TestApiClient {
     this.workspaceSlug = slug;
   }
 
+  async createWorkspace(name: string, slug: string): Promise<TestWorkspace> {
+    const res = await this.authedFetch("/api/workspaces", {
+      method: "POST", body: JSON.stringify({ name, slug }),
+    });
+    if (!res.ok) throw new Error(`create workspace failed: ${res.status} ${await res.text()}`);
+    const created = await res.json() as TestWorkspace;
+    this.workspaceId = created.id;
+    this.workspaceSlug = created.slug;
+    return created;
+  }
+
   async ensureWorkspace(name = "E2E Workspace", slug = "e2e-workspace") {
     const workspaces = await this.getWorkspaces();
     const workspace = workspaces.find((item) => item.slug === slug) ?? workspaces[0];
@@ -344,6 +355,35 @@ export class TestApiClient {
       throw new Error(`create comment failed: ${res.status} ${await res.text()}`);
     }
     return (await res.json()) as { id: string };
+  }
+
+  /** Seeds the authenticated test member's POPO identity without exercising account binding. */
+  async seedPopoBinding(installationId: string, channelUserId: string): Promise<string> {
+    if (!this.workspaceId || !this.email) throw new Error("Select an authenticated E2E workspace before binding POPO");
+    const client = new pg.Client(DATABASE_URL);
+    await client.connect();
+    try {
+      const result = await client.query(
+        `INSERT INTO channel_user_binding(workspace_id,multica_user_id,installation_id,channel_type,channel_user_id)
+         SELECT installation.workspace_id,member.user_id,installation.id,'popo',$3
+         FROM channel_installation installation
+         JOIN member ON member.workspace_id=installation.workspace_id
+         JOIN "user" actor ON actor.id=member.user_id AND actor.email=$4
+         WHERE installation.id=$1 AND installation.workspace_id=$2 AND installation.channel_type='popo'
+         ON CONFLICT (installation_id,channel_user_id) DO NOTHING RETURNING id`,
+        [installationId, this.workspaceId, channelUserId, this.email],
+      );
+      if (result.rowCount === 1) return result.rows[0].id;
+      const existing = await client.query(
+        `SELECT binding.id FROM channel_user_binding binding JOIN "user" actor ON actor.id=binding.multica_user_id
+         WHERE binding.installation_id=$1 AND binding.workspace_id=$2 AND binding.channel_user_id=$3 AND actor.email=$4`,
+        [installationId, this.workspaceId, channelUserId, this.email],
+      );
+      if (existing.rowCount !== 1) throw new Error("The E2E POPO identity belongs to another member or installation");
+      return existing.rows[0].id;
+    } finally {
+      await client.end();
+    }
   }
 
   /** Adds an existing user to this client's workspace and returns the member id. */

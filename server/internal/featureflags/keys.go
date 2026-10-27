@@ -41,6 +41,12 @@ const (
 	// makes those endpoints answer 404, so clients stop syncing and search
 	// through the server again without a client release.
 	LocalSearchIndex = "local_search_index"
+	// RequirementFlow gates new requirement intake, open and candidate writes.
+	// Existing records, idempotent replays and Plan Mode safety policies stay on.
+	RequirementFlow = "requirement_flow"
+	// PMMCPWrite gates only Requirement-originated external writes. Readback,
+	// preview, import, and ordinary manually-owned operations remain available.
+	PMMCPWrite = "pmmcp_write"
 	// agentBuilderCompat is no longer a release flag. Keep publishing the key
 	// as enabled so installed desktop clients that still gate the AI creation
 	// entry on this config decision receive the permanently enabled behavior.
@@ -63,6 +69,7 @@ var frontendPublicFlags = []string{
 	ComposioMCPApps,
 	PluginsV1,
 	ProjectWorkflowsV1,
+	RequirementFlow,
 }
 
 func BillingWorkspaceSubscriptionsEnabled(ctx context.Context, flags *featureflag.Service) bool {
@@ -98,4 +105,12 @@ func EvaluateFrontendPublicFlags(ctx context.Context, flags *featureflag.Service
 
 func ProjectWorkflowsV1Enabled(ctx context.Context, flags *featureflag.Service) bool {
 	return flags.IsEnabled(ctx, ProjectWorkflowsV1, false)
+}
+
+func RequirementFlowEnabled(ctx context.Context, flags *featureflag.Service) bool {
+	return flags.IsEnabled(ctx, RequirementFlow, false)
+}
+
+func PMMCPWriteEnabled(ctx context.Context, flags *featureflag.Service) bool {
+	return flags.IsEnabled(ctx, PMMCPWrite, false)
 }

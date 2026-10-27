@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/integrations/popo"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func wirePopo(t *testing.T) {
@@ -31,16 +33,18 @@ func wirePopo(t *testing.T) {
 	if rerr != nil {
 		t.Fatalf("NewRegistrationService: %v", rerr)
 	}
-	prevInstall, prevBridge, prevBind, prevReg := testHandler.PopoInstall, testHandler.PopoBridge, testHandler.PopoBindingTokens, testHandler.PopoRegistration
+	prevInstall, prevBridge, prevBind, prevReg, prevWorker := testHandler.PopoInstall, testHandler.PopoBridge, testHandler.PopoBindingTokens, testHandler.PopoRegistration, testHandler.PopoRequirementOutbox
 	testHandler.PopoInstall = install
 	testHandler.PopoBridge = bridge
 	testHandler.PopoBindingTokens = binding
 	testHandler.PopoRegistration = reg
+	testHandler.PopoRequirementOutbox = popo.NewRequirementOutboxWorker(testHandler.Queries, testPool, "http://localhost:3000", slog.Default())
 	t.Cleanup(func() {
 		testHandler.PopoInstall = prevInstall
 		testHandler.PopoBridge = prevBridge
 		testHandler.PopoBindingTokens = prevBind
 		testHandler.PopoRegistration = prevReg
+		testHandler.PopoRequirementOutbox = prevWorker
 	})
 }
 
@@ -79,7 +83,8 @@ func popoRegisterBridge(t *testing.T, hostname string) (bridgeID, token string) 
 		"protocol_version": 1,
 		"pairing_code":     pairing.PairingCode,
 		"hostname":         hostname,
-		"capabilities":     []string{"inbound", "send"},
+		// This is the actual dj01bot v1 capability set; attempt recovery is not negotiated.
+		"capabilities": []string{"inbound", "send"},
 	})
 	var registered struct {
 		BridgeID    string `json:"bridge_id"`
@@ -89,6 +94,15 @@ func popoRegisterBridge(t *testing.T, hostname string) (bridgeID, token string) 
 	testutil.Call(t, testHandler.RegisterPopoBridge, regReq).Want(http.StatusOK).JSON(&registered)
 	if registered.Token == "" || registered.BridgeID == "" || registered.WorkspaceID != testWorkspaceID {
 		t.Fatalf("register = %+v", registered)
+	}
+	bridge, err := testHandler.Queries.GetPopoBridgeInWorkspace(context.Background(), db.GetPopoBridgeInWorkspaceParams{
+		ID: util.MustParseUUID(registered.BridgeID), WorkspaceID: util.MustParseUUID(testWorkspaceID),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if popo.BridgeSupportsReceiptAttempt(bridge) {
+		t.Fatal("dj01bot v1 registration unexpectedly enabled receipt attempts")
 	}
 	popoCleanupBridge(t, registered.BridgeID)
 	return registered.BridgeID, registered.Token
@@ -126,7 +140,10 @@ func TestPopoRejectsInboundFromAnotherRobotsBridge(t *testing.T) {
 		"addressed_to_bot": true, "text": "/issue Must not be created",
 	}
 	req := popoBearer(testutil.JSONRequest(http.MethodPost, "/api/popo/bridge/inbound", body), siblingToken)
-	testutil.Call(t, testHandler.IngestPopoBridgeInbound, req).Want(http.StatusNotFound)
+	response := testutil.Call(t, testHandler.IngestPopoBridgeInbound, req).Want(http.StatusConflict).Map()
+	if response["accepted"] != false || response["code"] != "ROUTE_CONFLICT" {
+		t.Fatalf("foreign robot route response = %+v", response)
+	}
 	if count := dbfx.Count(t, "SELECT count(*) FROM popo_inbound_event WHERE bridge_id=$1", siblingID); count != 0 {
 		t.Fatalf("foreign robot inbound was persisted: %d", count)
 	}
@@ -275,7 +292,10 @@ func TestPopoInboundDuplicateAndWorkspaceIsolation(t *testing.T) {
 		"addressed_to_bot": true,
 		"text":             "hello",
 	}), token)
-	testutil.Call(t, testHandler.IngestPopoBridgeInbound, spoof).Want(http.StatusNotFound)
+	spoofResponse := testutil.Call(t, testHandler.IngestPopoBridgeInbound, spoof).Want(http.StatusConflict).Map()
+	if spoofResponse["accepted"] != false || spoofResponse["code"] != "ROUTE_CONFLICT" {
+		t.Fatalf("spoofed robot route response = %+v", spoofResponse)
+	}
 
 	unaddressed := popoBearer(testutil.JSONRequest(http.MethodPost, "/api/popo/bridge/inbound", map[string]any{
 		"protocol_version": 1,
@@ -310,7 +330,8 @@ func TestPopoInboundDuplicateAndWorkspaceIsolation(t *testing.T) {
 	if testHandler.ChannelRouter != nil {
 		_ = testHandler.ChannelRouter.Drain(context.Background())
 	}
-	if n := dbfx.Count(t, `SELECT count(*) FROM channel_inbound_message_dedup WHERE installation_id = $1 AND message_id = $2`, installRow.ID, "group-1:evt-group-at"); n != 1 {
+	executionID, _ := json.Marshal([3]string{bridgeID, robotID, "evt-group-at"})
+	if n := dbfx.Count(t, `SELECT count(*) FROM channel_inbound_message_dedup WHERE installation_id = $1 AND message_id = $2`, installRow.ID, string(executionID)); n != 1 {
 		t.Fatalf("engine Handle did not run for addressed group, dedup rows=%d", n)
 	}
 }
@@ -418,6 +439,76 @@ func TestPopoCommandLeaseAndReceipt(t *testing.T) {
 	afterUnknown := testutil.Call(t, testHandler.ListPopoBridgeCommands, popoBearer(httptest.NewRequest(http.MethodGet, "/api/popo/bridge/commands?wait_ms=0", nil), token)).Want(http.StatusOK).Map()
 	if cmds, _ := afterUnknown["commands"].([]any); len(cmds) != 0 {
 		t.Fatalf("unknown receipt must not be auto-resent: %+v", afterUnknown)
+	}
+}
+
+func TestPopoTerminalReceiptsAndAuthorizeWireContract(t *testing.T) {
+	for _, status := range []string{"cancelled", "expired", "superseded"} {
+		t.Run(status, func(t *testing.T) {
+			bridgeID, token := popoRegisterBridge(t, "WIN-TERMINAL-"+status)
+			robotID := "terminal-bot-" + bridgeID[:8]
+			popoHeartbeat(t, token, popoIdleRobot(robotID))
+			agentID := createHandlerTestAgent(t, "popo-terminal-"+status, []byte(`{}`))
+			installReq := withURLParam(newRequest(http.MethodPost, "/api/workspaces/"+testWorkspaceID+"/popo/install?agent_id="+agentID, map[string]string{
+				"bridge_id": bridgeID,
+				"robot_id":  robotID,
+			}), "id", testWorkspaceID)
+			var installRow struct {
+				ID string `json:"id"`
+			}
+			testutil.Call(t, testHandler.RegisterPopoBot, installReq).Want(http.StatusOK).JSON(&installRow)
+			if err := testHandler.PopoBridge.Enqueue(context.Background(), popo.OutboundItem{
+				WorkspaceID: util.MustParseUUID(testWorkspaceID), InstallationID: util.MustParseUUID(installRow.ID),
+				BridgeID: util.MustParseUUID(bridgeID), ChatID: "alice@corp.netease.com", ChatType: "p2p",
+				RobotID: robotID, Content: "terminal " + status,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var listed struct {
+				Commands []struct {
+					ID         string `json:"id"`
+					DeliveryID string `json:"delivery_id"`
+				} `json:"commands"`
+			}
+			testutil.Call(t, testHandler.ListPopoBridgeCommands,
+				popoBearer(httptest.NewRequest(http.MethodGet, "/api/popo/bridge/commands?wait_ms=0", nil), token)).
+				Want(http.StatusOK).JSON(&listed)
+			if len(listed.Commands) != 1 {
+				t.Fatalf("commands = %+v", listed)
+			}
+			commandID := listed.Commands[0].ID
+			if status == "cancelled" {
+				if err := testHandler.PopoInstall.Revoke(context.Background(), util.MustParseUUID(installRow.ID)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			authorize := popoBearer(newRequest(http.MethodPost, "/api/popo/bridge/commands/"+commandID+"/authorize", nil), token)
+			authorize = withURLParams(authorize, "id", commandID)
+			allowed := testutil.Call(t, testHandler.AuthorizePopoBridgeCommand, authorize).Want(http.StatusOK).Map()["allowed"]
+			if allowed != (status != "cancelled") {
+				t.Fatalf("authorize allowed = %v for %s", allowed, status)
+			}
+			ack := func() *http.Request {
+				req := popoBearer(newRequest(http.MethodPost, "/api/popo/bridge/commands/"+commandID+"/receipt",
+					map[string]string{"status": status, "error": status + " on dj01bot"}), token)
+				return withURLParams(req, "id", commandID)
+			}
+			testutil.Call(t, testHandler.AckPopoBridgeCommand, ack()).Want(http.StatusOK)
+			testutil.Call(t, testHandler.AckPopoBridgeCommand, ack()).Want(http.StatusOK)
+			command, err := testHandler.Queries.GetPopoBridgeCommandByDeliveryID(context.Background(), util.MustParseUUID(listed.Commands[0].DeliveryID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if command.Status != status {
+				t.Fatalf("persisted status = %s, want %s", command.Status, status)
+			}
+			dbfx.Exec(t, `UPDATE popo_bridge_command SET lease_expires_at = now() - interval '1 second' WHERE id = $1`, commandID)
+			after := testutil.Call(t, testHandler.ListPopoBridgeCommands,
+				popoBearer(httptest.NewRequest(http.MethodGet, "/api/popo/bridge/commands?wait_ms=0", nil), token)).Want(http.StatusOK).Map()
+			if commands, _ := after["commands"].([]any); len(commands) != 0 {
+				t.Fatalf("%s receipt was auto-resent: %+v", status, after)
+			}
+		})
 	}
 }
 

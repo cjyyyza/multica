@@ -47,7 +47,7 @@ func (s *IssueService) UpdateContent(ctx context.Context, issue db.Issue, patch 
 		params.Description = pgtype.Text{String: *patch.Description, Valid: true}
 	}
 
-	updated, err := s.Queries.UpdateIssue(ctx, params)
+	updated, err := UpdateIssueWithRequirementGate(ctx, s.Queries, params)
 	if patch.ExpectedRevision != nil && errors.Is(err, pgx.ErrNoRows) {
 		return db.Issue{}, ErrIssueRevisionConflict
 	}

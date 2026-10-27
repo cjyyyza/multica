@@ -99,6 +99,9 @@ type Task struct {
 	AgentID              string                 `json:"agent_id"`
 	RuntimeID            string                 `json:"runtime_id"`
 	IssueID              string                 `json:"issue_id"`
+	Mode                 string                 `json:"mode,omitempty"`
+	RequirementID        string                 `json:"requirement_id,omitempty"`
+	PlanPermission       string                 `json:"plan_permission,omitempty"`
 	WorkspaceID          string                 `json:"workspace_id"`
 	WorkspaceSlug        string                 `json:"workspace_slug,omitempty"`
 	IssueIdentifier      string                 `json:"issue_identifier,omitempty"`

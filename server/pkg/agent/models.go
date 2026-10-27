@@ -1786,10 +1786,12 @@ func discoverKimiProviderThinking(ctx context.Context, runtimeCmd Command) (map[
 }
 
 type kimiProviderModel struct {
-	SupportEfforts      []string `json:"supportEfforts"`
-	SupportEffortsSnake []string `json:"support_efforts"`
-	DefaultEffort       string   `json:"defaultEffort"`
-	DefaultEffortSnake  string   `json:"default_effort"`
+	SupportEfforts        []string `json:"supportEfforts"`
+	SupportEffortsSnake   []string `json:"support_efforts"`
+	DefaultEffort         string   `json:"defaultEffort"`
+	DefaultEffortSnake    string   `json:"default_effort"`
+	AdaptiveThinking      bool     `json:"adaptiveThinking"`
+	AdaptiveThinkingSnake bool     `json:"adaptive_thinking"`
 }
 
 func parseKimiProviderThinking(raw []byte) (map[string]*ModelThinking, error) {
@@ -1827,6 +1829,16 @@ func parseKimiProviderThinking(raw []byte) (map[string]*ModelThinking, error) {
 			})
 		}
 		if len(levels) == 0 {
+			if !model.AdaptiveThinking && !model.AdaptiveThinkingSnake {
+				continue
+			}
+			result[modelID] = &ModelThinking{
+				SupportedLevels: []ThinkingLevel{
+					{Value: "off", Label: kimiThinkingLabel("off")},
+					{Value: "on", Label: kimiThinkingLabel("on")},
+				},
+				DefaultLevel: "on",
+			}
 			continue
 		}
 

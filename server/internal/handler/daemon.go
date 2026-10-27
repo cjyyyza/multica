@@ -39,6 +39,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/redact"
 	"github.com/multica-ai/multica/server/pkg/skillbundle"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
+	"github.com/multica-ai/multica/server/pkg/taskpolicy"
 )
 
 // claimPollHintMinDelay bounds a future mismatch between the hint query and
@@ -2522,6 +2523,17 @@ func claimResponseAgentIdentityMatches(resp AgentTaskResponse) bool {
 func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQueue, runtime db.AgentRuntime, runtimeID, runtimeWorkspaceID string) (resp AgentTaskResponse, deliveredCommentIDs []pgtype.UUID, issueSnapshot []byte, agentSkillCount, builtinSkillCount int, failure *claimBuildFailure) {
 	// Build response with fresh agent data (name + skills + custom_env + custom_args).
 	resp = taskToResponse(*task, runtimeWorkspaceID)
+	mode, modeFailure := h.validateTaskModeForClaim(r, task, runtime)
+	if modeFailure != nil {
+		return resp, nil, nil, 0, 0, modeFailure
+	}
+	planTask := mode == taskpolicy.ModePlan
+	if planTask {
+		resp.PlanPermission = taskpolicy.PlanPermissionClaude
+		resp.PluginHookTools = nil
+		resp.RemoteMCPConnections = nil
+		resp.ConnectedApps = nil
+	}
 	if err := (&service.IssueWakeupService{Tasks: h.TaskService}).CheckClaim(r.Context(), *task); err != nil {
 		if !errors.Is(err, service.ErrWakeupForbidden) {
 			return resp, nil, nil, 0, 0, h.rejectClaimSourceLoad(r.Context(), task, err, "wakeup", resp.WakeupID)
@@ -2545,7 +2557,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	// Agent-trigger plugin hooks, as tools. A failure here degrades to no
 	// tools rather than failing the claim: a plugin that cannot be listed must
 	// not stop an agent from working on the issue.
-	if h.PluginService != nil && h.pluginsV1Enabled(r.Context()) {
+	if !planTask && h.PluginService != nil && h.pluginsV1Enabled(r.Context()) {
 		if tools, toolErr := h.PluginService.AgentHookTools(r.Context(), parseUUID(runtimeWorkspaceID)); toolErr != nil {
 			slog.Warn("plugins: could not list agent hook tools", "workspace_id", runtimeWorkspaceID, "error", toolErr)
 		} else {
@@ -2566,7 +2578,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	// comment input. Comment tasks replace this with the ids actually embedded
 	// in the capability-aware response built below.
 	deliveredCommentIDs = []pgtype.UUID{}
-	composioMCPEnabled := h.composioMCPAppsEnabled(r.Context())
+	composioMCPEnabled := !planTask && h.composioMCPAppsEnabled(r.Context())
 	if composioMCPEnabled {
 		resp.ConnectedApps = parseRuntimeConnectedAppsForClaim(task.RuntimeConnectedApps, task.ID)
 	}
@@ -2657,7 +2669,9 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		}
 	}
 	var mcpConfig json.RawMessage
-	if agent.McpConfig != nil {
+	if planTask {
+		mcpConfig = json.RawMessage(`{"mcpServers":{}}`)
+	} else if agent.McpConfig != nil {
 		mcpConfig = json.RawMessage(agent.McpConfig)
 	}
 	// Fold in the workspace MCP servers this agent has been explicitly
@@ -2667,19 +2681,21 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	// lands on the agent's next task with nothing to restart. Errors —
 	// including a failed read — leave the agent config untouched: a broken
 	// shared entry must never take away servers the agent runs with today.
-	if bound, err := h.Queries.ListEnabledAgentMcpServers(r.Context(), agent.ID); err != nil {
-		slog.Warn("daemon claim: load agent mcp servers failed; using agent mcp_config",
-			"task_id", uuidToString(task.ID), "agent_id", uuidToString(agent.ID), "error", err)
-	} else if len(bound) > 0 {
-		bindings := make([]WorkspaceMcpBinding, 0, len(bound))
-		for _, server := range bound {
-			bindings = append(bindings, WorkspaceMcpBinding{Name: server.Name, Config: json.RawMessage(server.Config)})
-		}
-		if resolved, err := ResolveAgentMcpConfig(bindings, mcpConfig); err != nil {
-			slog.Warn("daemon claim: resolve agent mcp servers failed; falling back to agent mcp_config",
+	if !planTask {
+		if bound, err := h.Queries.ListEnabledAgentMcpServers(r.Context(), agent.ID); err != nil {
+			slog.Warn("daemon claim: load agent mcp servers failed; using agent mcp_config",
 				"task_id", uuidToString(task.ID), "agent_id", uuidToString(agent.ID), "error", err)
-		} else {
-			mcpConfig = resolved
+		} else if len(bound) > 0 {
+			bindings := make([]WorkspaceMcpBinding, 0, len(bound))
+			for _, server := range bound {
+				bindings = append(bindings, WorkspaceMcpBinding{Name: server.Name, Config: json.RawMessage(server.Config)})
+			}
+			if resolved, err := ResolveAgentMcpConfig(bindings, mcpConfig); err != nil {
+				slog.Warn("daemon claim: resolve agent mcp servers failed; falling back to agent mcp_config",
+					"task_id", uuidToString(task.ID), "agent_id", uuidToString(agent.ID), "error", err)
+			} else {
+				mcpConfig = resolved
+			}
 		}
 	}
 	// Layer the per-task overlay (set at enqueue from the initiator
@@ -2715,6 +2731,9 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		ServiceTier:           agent.ServiceTier.String,
 		RuntimeConfig:         runtimeConfig,
 		DisabledRuntimeSkills: disabledRuntimeSkillsFor(agent.DisabledRuntimeSkills, runtimeID, runtime.Provider),
+	}
+	if planTask {
+		resp.Agent.CustomArgs = nil
 	}
 	// System agents carry a product-owned instruction layer that ships with
 	// this binary instead of being copied into their row at creation. That

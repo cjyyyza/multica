@@ -127,3 +127,31 @@ func TestRuntimeSkillPoliciesYieldToWorkspaceSkills(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPrepareClaudeSkillSettingsPlanModeDisablesHooksAndDefaultsPlan(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	path, err := prepareClaudeSkillSettings(root, nil, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path == "" {
+		t.Fatal("Plan Mode requires a managed settings file")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		DisableAllHooks bool `json:"disableAllHooks"`
+		Permissions     struct {
+			DefaultMode string `json:"defaultMode"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.DisableAllHooks || got.Permissions.DefaultMode != "plan" {
+		t.Fatalf("unsafe Plan Mode settings: %s", data)
+	}
+}

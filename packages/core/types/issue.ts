@@ -223,6 +223,15 @@ export interface Issue {
   updated_at: string;
   /** Monotonic server revision; absent when connected to an older backend. */
   revision?: number;
+  origin_type?: string | null;
+  origin_id?: string | null;
+  /**
+   * Requirement this issue was approved from (additive). Absent when the
+   * backend cannot resolve it (older backend or hydration failure); `null`
+   * means a resolved response with no binding. The detail surface queries by
+   * this id instead of routing through the source chat session when present.
+   */
+  requirement_id?: string | null;
   /**
    * Null until the server's historical activity backfill reaches this row.
    * This RFC3339 timestamp may include sub-second precision while legacy

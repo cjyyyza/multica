@@ -81,8 +81,10 @@ func TestPMSyncCreatesOnceAndPreservesHumanDescription(t *testing.T) {
 	if dbfx.Count(t, `SELECT count(*) FROM yixiezuo_import WHERE workspace_id=$1 AND external_id=$2`, testWorkspaceID, item.Source.ID) != 1 {
 		t.Fatal("duplicate import")
 	}
-	if dbfx.Count(t, `SELECT count(*) FROM yixiezuo_operation WHERE workspace_id=$1`, testWorkspaceID) != 0 {
-		t.Fatal("PM queued a source operation")
+	if count := dbfx.Count(t, `SELECT count(*) FROM yixiezuo_operation WHERE workspace_id=$1`, testWorkspaceID); count != 0 {
+		var requestKey, requirementID, kind, issueID, externalID string
+		dbfx.QueryRow(t, `SELECT coalesce(request_key, ''), coalesce(requirement_id::text, ''), kind, coalesce(issue_id::text, ''), coalesce(payload->'source'->>'id', '') FROM yixiezuo_operation WHERE workspace_id=$1 ORDER BY created_at DESC LIMIT 1`, testWorkspaceID).Scan(&requestKey, &requirementID, &kind, &issueID, &externalID)
+		t.Fatalf("PM queued a source operation: count=%d latest request_key=%q requirement_id=%q kind=%s issue_id=%s external_id=%s", count, requestKey, requirementID, kind, issueID, externalID)
 	}
 }
 

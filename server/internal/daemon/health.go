@@ -130,6 +130,7 @@ type activeRepoCheckoutTask struct {
 	AgentID     string
 	AgentName   string
 	WorkDir     string
+	Mode        string
 }
 
 // registerActiveRepoCheckoutTask binds checkout identity to the active task.

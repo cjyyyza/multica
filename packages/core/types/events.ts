@@ -14,6 +14,8 @@ export type WSEventType =
   | "issue:updated"
   | "issue_attachments:changed"
   | "issue:deleted"
+  | "requirement:created"
+  | "requirement:updated"
   | "comment:created"
   | "comment:updated"
   | "comment:deleted"
@@ -127,6 +129,13 @@ export interface IssueUpdatedPayload {
 
 export interface IssueDeletedPayload {
   issue_id: string;
+}
+
+export interface RequirementEventPayload {
+  workspaceId: string;
+  requirementId: string;
+  revision: number;
+  chatSessionId?: string;
 }
 
 export interface IssueLabelsChangedPayload {
@@ -584,6 +593,8 @@ export interface WSEventPayloadMap {
   "issue:created": IssueCreatedPayload;
   "issue:updated": IssueUpdatedPayload;
   "issue:deleted": IssueDeletedPayload;
+  "requirement:created": RequirementEventPayload;
+  "requirement:updated": RequirementEventPayload;
   "issue_attachments:changed": IssueAttachmentsChangedPayload;
   "issue_labels:changed": IssueLabelsChangedPayload;
   "issue_properties:changed": IssuePropertiesChangedPayload;

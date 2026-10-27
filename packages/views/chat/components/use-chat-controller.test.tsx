@@ -159,6 +159,7 @@ vi.mock("@multica/core/realtime", () => ({
 }));
 vi.mock("@multica/core/logger", () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+  noopLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 vi.mock("../../i18n", () => ({ useT: () => ({ t: () => "x" }) }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -1230,5 +1231,40 @@ describe("useChatController revoked invoke permission", () => {
     expect(sent).toBe(false);
     expect(vi.mocked(api.sendChatMessage)).not.toHaveBeenCalled();
     expect(h.createSessionMutate).not.toHaveBeenCalled();
+  });
+});
+
+describe("useChatController dangling session self-heal", () => {
+  function renderWith(activeSessionId: string, sessions: ChatSession[]) {
+    h.store.activeSessionId = activeSessionId;
+    h.store.selectedAgentId = null;
+    h.store.selectedProjectId = null;
+    h.sessions = sessions;
+    h.agents = [agentA];
+    h.projects = [];
+    h.pendingTask = null;
+    renderHook(() => useChatController());
+  }
+
+  beforeEach(() => {
+    h.store.setActiveSession.mockClear();
+    // Earlier suites stub getQueryData for pending-task lookups; the self-heal
+    // checks the in-flight-pending-task exemption, so start from "none".
+    h.queryClient.getQueryData.mockReset();
+  });
+
+  it("clears a dangling session missing from the settled list", () => {
+    renderWith("gone-session", [sA]);
+
+    expect(h.store.setActiveSession).toHaveBeenCalledWith(null);
+  });
+
+  it("keeps a just-created session with an in-flight pending task", () => {
+    // The row is not in the list yet (list still refetching), but the send
+    // response already seeded its pending task.
+    h.queryClient.getQueryData.mockReturnValue({ task_id: "task-1" });
+    renderWith("new-session", [sA]);
+
+    expect(h.store.setActiveSession).not.toHaveBeenCalledWith(null);
   });
 });

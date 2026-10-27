@@ -1271,6 +1271,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		popoOutbound := popo.NewOutbound(queries, popoBridge, slog.Default()).WithDelivery(store, appURLFromEnv())
 		popoOutbound.Register(bus)
 		h.PopoOutbound = popoOutbound
+		h.PopoRequirementOutbox = popo.NewRequirementOutboxWorker(queries, pool, appURLFromEnv(), slog.Default())
 		popo.RegisterPopo(channelRegistry, popo.ChannelDeps{
 			Queue:  popoBridge,
 			Lookup: queries,
@@ -1623,7 +1624,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// the browsers above; the other four composio endpoints stay session-gated.
 	r.Get("/api/integrations/composio/callback", h.ComposioCallback)
 
-	// Daemon API routes (require daemon token or valid user token)
+	// Daemon API routes (require daemon token or valid user token). Task tokens
+	// (mat_) never reach this group: DaemonAuth has no mat_ branch, so the
+	// plan/execute route policy in pkg/taskpolicy does not apply here and must
+	// not declare these routes.
 	r.Route("/api/daemon", func(r chi.Router) {
 		r.Use(middleware.DaemonAuth(queries, patCache, daemonTokenCache, cloudPATVerifier))
 
@@ -1706,7 +1710,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// signed-in user's session and the installation header. Keeping it outside
 	// /v1 prevents the Public API from accepting session cookies.
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.Auth(queries, patCache, cloudPATVerifier, cfSigner))
+		r.Use(middleware.Auth(queries, patCache, cloudPATVerifier, cfSigner, r))
 		r.Route(pluginBridgePrefix, func(r chi.Router) {
 			registerPluginActionRoutes(r, h)
 			// ui / manual only. `event` is dispatched by the host off the event
@@ -1716,7 +1720,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	})
 
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.Auth(queries, patCache, cloudPATVerifier, cfSigner))
+		r.Use(middleware.Auth(queries, patCache, cloudPATVerifier, cfSigner, r))
 		r.Use(middleware.RefreshCloudFrontCookies(cfSigner))
 
 		// Plugin Action API. Called by the HOST PAGE on the signed-in user's
@@ -1786,7 +1790,21 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// for the same reason as GitHub installations; connect /
 					// disconnect are admin-gated in the group below.
 					r.Get("/vcs/connections", h.ListVCSConnections)
+					r.With(handler.RequireHumanActor).Post("/requirements", h.CreateRequirement)
+					r.Get("/requirements", h.GetRequirementByChat)
+					r.Get("/requirements/{requirementId}", h.GetRequirementByID)
+					r.With(handler.RequireHumanActor).Post("/requirements/{requirementId}/participants", h.UpdateRequirementParticipants)
+					r.With(handler.RequireHumanActor).Post("/requirements/{requirementId}/open", h.OpenRequirement)
+					r.With(handler.RequireHumanActor).Post("/requirements/{requirementId}/approve", h.ApproveRequirement)
+					r.With(handler.RequireHumanActor).Post("/requirements/{requirementId}/accept", h.AcceptRequirement)
+					r.With(handler.RequireHumanActor).Post("/requirements/{requirementId}/reject", h.RejectRequirement)
+					r.With(handler.RequireHumanActor).Post("/requirements/{requirementId}/cancel", h.CancelRequirement)
+					r.With(handler.RequireHumanActor).Post("/requirements/{requirementId}/reconcile", h.ReconcileRequirement)
+					r.Post("/requirements/{requirementId}/block", h.BlockRequirement)
+					r.Post("/requirements/{requirementId}/candidates", h.SubmitRequirementCandidate)
 					r.Post("/yixiezuo/preview", h.PreviewYixiezuoIssue)
+					r.Post("/yixiezuo/drafts", h.CreateRequirementDraft)
+					r.Post("/yixiezuo/drafts/{operationId}/reconcile", h.ReconcileRequirementDraft)
 					r.Post("/yixiezuo/bridge/claim", h.ClaimYixiezuoOperation)
 					r.Get("/yixiezuo/operations/{operationId}", h.GetYixiezuoOperation)
 					r.Post("/yixiezuo/operations/{operationId}/complete", h.CompleteYixiezuoOperation)
@@ -1975,6 +1993,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/popo/status", h.GetPopoStatus)
 					r.Post("/popo/install", h.RegisterPopoBot)
 					r.Delete("/popo/installations/{installationId}", h.RevokePopoInstallation)
+					r.Patch("/popo/installations/{installationId}/requirement-intake", h.SetPopoRequirementIntake)
 					r.Post("/popo/registrations", h.CreatePopoRegistration)
 					r.Get("/popo/registrations/{registrationId}", h.GetPopoRegistration)
 					r.Delete("/popo/registrations/{registrationId}", h.CancelPopoRegistration)

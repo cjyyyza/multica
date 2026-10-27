@@ -1979,6 +1979,20 @@ func (h *Handler) triggerTasksForComment(ctx context.Context, issue db.Issue, co
 		OriginatorUserID:        originatorUserID,
 	})
 	triggers = filterSuppressedCommentAgentTriggers(triggers, suppressAgentIDs)
+	recoveryOwner, owned, err := service.RequirementCommentRecoveryOwner(ctx, h.Queries, issue, comment)
+	if err != nil {
+		slog.Warn("requirement comment recovery ownership check failed", "comment_id", uuidToString(comment.ID), "error", err)
+		return nil, false
+	}
+	if owned {
+		ownedTriggers := triggers[:0]
+		for _, trigger := range triggers {
+			if trigger.Agent.ID != recoveryOwner {
+				ownedTriggers = append(ownedTriggers, trigger)
+			}
+		}
+		triggers = ownedTriggers
+	}
 	h.noteBlockedRuntimeTargets(ctx, issue, targets)
 	triggers, steered := h.steerCommentAgentTriggers(ctx, issue, comment, actorType, triggers, steerTaskIDs)
 	enqueued := h.enqueueCommentAgentTriggers(ctx, issue, comment.ID, triggers)

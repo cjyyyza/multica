@@ -1,14 +1,18 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/featureflags"
 	"github.com/multica-ai/multica/server/internal/integrations/yixiezuo"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/featureflag"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"net/http"
 )
@@ -41,13 +45,23 @@ func decodeYixiezuoBody(w http.ResponseWriter, r *http.Request, target any) bool
 }
 
 func operationResponse(row db.YixiezuoOperation, claim bool) yixiezuo.Operation {
+	response := operationResponseWithFlags(context.Background(), row, claim, nil)
+	response.WriteBlocked = false
+	return response
+}
+
+func operationResponseWithFlags(ctx context.Context, row db.YixiezuoOperation, claim bool, flags *featureflag.Service) yixiezuo.Operation {
 	var payload yixiezuo.OperationPayload
 	var snapshot *yixiezuo.Snapshot
 	_ = json.Unmarshal(row.Payload, &payload)
 	if row.State == "succeeded" || row.State == "conflict" {
 		_ = json.Unmarshal(row.Result, &snapshot)
 	}
-	resp := yixiezuo.Operation{ID: uuidToString(row.ID), Kind: row.Kind, State: row.State, Payload: payload, Snapshot: snapshot, Error: row.Error}
+	resp := yixiezuo.Operation{
+		ID: uuidToString(row.ID), Kind: row.Kind, State: row.State, Payload: payload, Snapshot: snapshot, Error: row.Error,
+		RequirementID: uuidToString(row.RequirementID), TargetOperationID: uuidToString(row.TargetOperationID), RequestHash: row.RequestHash.String,
+		WriteBlocked: (row.Kind == "draft" || (row.RequirementID.Valid && row.Kind == "publish")) && !featureflags.PMMCPWriteEnabled(ctx, flags),
+	}
 	if claim {
 		resp.LeaseToken = uuidToString(row.LeaseToken)
 	}
@@ -90,6 +104,11 @@ func (h *Handler) GetYixiezuoOperation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "operation not found")
 		return
 	}
+	if settled, settleErr := h.settleCompletedRequirementDraft(r.Context(), row); settleErr == nil {
+		row = settled
+	} else {
+		row.Error = "The source draft is saved; its Multica handoff is pending: " + settleErr.Error()
+	}
 	writeJSON(w, http.StatusOK, operationResponse(row, false))
 }
 
@@ -102,7 +121,13 @@ func (h *Handler) ClaimYixiezuoOperation(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to check operation expiry")
 		return
 	}
-	row, err := h.Queries.ClaimYixiezuoOperation(r.Context(), db.ClaimYixiezuoOperationParams{WorkspaceID: ws, RequestedBy: member.UserID})
+	if err := h.recoverRequirementDrafts(r.Context(), ws, member.UserID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to recover draft handoffs")
+		return
+	}
+	row, err := h.Queries.ClaimYixiezuoOperation(r.Context(), db.ClaimYixiezuoOperationParams{
+		WorkspaceID: ws, RequestedBy: member.UserID, AllowRequirementWrite: featureflags.PMMCPWriteEnabled(r.Context(), h.FeatureFlags),
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusOK, map[string]any{"operation": nil})
 		return
@@ -111,7 +136,44 @@ func (h *Handler) ClaimYixiezuoOperation(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to claim operation")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"operation": operationResponse(row, true)})
+	blocked := (row.Kind == "draft" || (row.RequirementID.Valid && row.Kind == "publish")) && !featureflags.PMMCPWriteEnabled(r.Context(), h.FeatureFlags)
+	response := operationResponseWithFlags(r.Context(), row, true, h.FeatureFlags)
+	if blocked || response.WriteBlocked {
+		if err := h.Queries.ReleaseYixiezuoOperation(r.Context(), db.ReleaseYixiezuoOperationParams{
+			WorkspaceID: ws, RequestedBy: member.UserID, ID: row.ID,
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to release blocked requirement write")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"operation": nil})
+		return
+	}
+	if row.Kind == "draft" {
+		var payload yixiezuo.OperationPayload
+		if json.Unmarshal(row.Payload, &payload) != nil || payload.Draft == nil {
+			writeError(w, http.StatusInternalServerError, "invalid draft operation")
+			return
+		}
+		agentID, parseErr := util.ParseUUID(payload.Draft.AgentID)
+		validationErr := parseErr
+		if validationErr == nil {
+			validationErr = h.requirementService().ValidateDraftAgent(r.Context(), service.RequirementActor{WorkspaceID: ws, UserID: member.UserID}, agentID)
+		}
+		if validationErr == nil {
+			validationErr = h.validateDraftChannel(r.Context(), ws, member.UserID, agentID, payload)
+		}
+		if validationErr != nil {
+			row, err = h.Queries.CompleteYixiezuoOperation(r.Context(), db.CompleteYixiezuoOperationParams{WorkspaceID: ws, RequestedBy: member.UserID, ID: row.ID, LeaseToken: row.LeaseToken, State: "failed", Result: []byte("null"), Error: validationErr.Error()})
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to fence unavailable draft route")
+				return
+			}
+			h.notifyRequirementDraftOutcome(r.Context(), row)
+			writeJSON(w, http.StatusOK, map[string]any{"operation": nil})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"operation": response})
 }
 
 func (h *Handler) CompleteYixiezuoOperation(w http.ResponseWriter, r *http.Request) {
@@ -144,10 +206,20 @@ func (h *Handler) CompleteYixiezuoOperation(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusConflict, "stale operation lease")
 		return
 	}
+	if row.Kind == "reconcile" {
+		h.completeYixiezuoReconcileOperation(w, r, row, req, member)
+		return
+	}
 	// Receipt retries never repeat the remote mutation or change its outcome.
 	if row.State != "running" {
 		if row.State == req.State {
 			h.settleYixiezuoAutoImport(r.Context(), row)
+			settled, err := h.settleCompletedRequirementDraft(r.Context(), row)
+			if err != nil {
+				writeSourceError(w, err)
+				return
+			}
+			row = settled
 			writeJSON(w, http.StatusOK, operationResponse(row, false))
 			return
 		}
@@ -164,8 +236,18 @@ func (h *Handler) CompleteYixiezuoOperation(w http.ResponseWriter, r *http.Reque
 			writeError(w, http.StatusBadRequest, "source snapshot is required")
 			return
 		}
-		if err := req.Snapshot.Validate(payload.Source); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+		var snapshotErr error
+		if row.Kind == "draft" {
+			if payload.Draft == nil || req.State != "succeeded" {
+				writeError(w, http.StatusBadRequest, "draft completion requires a successful new source readback")
+				return
+			}
+			snapshotErr = yixiezuo.ValidateDraftSnapshot(uuidToString(row.ID), *payload.Draft, *req.Snapshot)
+		} else {
+			snapshotErr = req.Snapshot.Validate(payload.Source)
+		}
+		if snapshotErr != nil {
+			writeError(w, http.StatusBadRequest, snapshotErr.Error())
 			return
 		}
 		req.Snapshot.Digest = req.Snapshot.Fingerprint()
@@ -178,6 +260,12 @@ func (h *Handler) CompleteYixiezuoOperation(w http.ResponseWriter, r *http.Reque
 	}
 	defer tx.Rollback(r.Context())
 	q := h.Queries.WithTx(tx)
+	if req.State == "succeeded" {
+		if err := resolveRequirementDraftInTx(r.Context(), q, row, payload, req.Snapshot); err != nil {
+			writeSourceError(w, err)
+			return
+		}
+	}
 	var refreshed *db.Issue
 	updated, err := q.CompleteYixiezuoOperation(r.Context(), db.CompleteYixiezuoOperationParams{WorkspaceID: ws, RequestedBy: member.UserID, ID: id, LeaseToken: lease, State: req.State, Result: result, Error: req.Error})
 	if err != nil {
@@ -229,6 +317,11 @@ func (h *Handler) CompleteYixiezuoOperation(w http.ResponseWriter, r *http.Reque
 		h.publishYixiezuoProperties(*refreshed, member.UserID)
 	}
 	h.settleYixiezuoAutoImport(r.Context(), updated)
+	updated, err = h.settleCompletedRequirementDraft(r.Context(), updated)
+	if err != nil {
+		writeSourceError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, operationResponse(updated, false))
 }
 

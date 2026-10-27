@@ -133,6 +133,33 @@ func TestParseKimiProviderThinking(t *testing.T) {
 	}
 }
 
+func TestParseKimiProviderAdaptiveThinking(t *testing.T) {
+	t.Parallel()
+	raw := []byte(`{
+  "models": {
+    "LH/kimi-1021-preview": {
+      "capabilities": ["tool_use", "thinking"],
+      "adaptiveThinking": true
+    }
+  }
+}`)
+
+	got, err := parseKimiProviderThinking(raw)
+	if err != nil {
+		t.Fatalf("parseKimiProviderThinking: %v", err)
+	}
+	thinking := got["LH/kimi-1021-preview"]
+	if thinking == nil {
+		t.Fatal("adaptive-thinking model has no thinking catalog")
+	}
+	if thinking.DefaultLevel != "on" {
+		t.Errorf("default = %q, want on", thinking.DefaultLevel)
+	}
+	if values := thinkingValues(thinking); !reflect.DeepEqual(values, []string{"off", "on"}) {
+		t.Errorf("levels = %v, want [off on]", values)
+	}
+}
+
 func TestFindACPConfigOptionRequiresExactID(t *testing.T) {
 	t.Parallel()
 	raw := []byte(`{

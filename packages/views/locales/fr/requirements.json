@@ -1,0 +1,119 @@
+{
+  "card": {
+    "title": "Exigence",
+    "source": "Source",
+    "source_preview": "Aperçu de la source",
+    "participants": "Participants",
+    "run": "Dernière exécution",
+    "run_completed_not_done": "L’exécution est terminée, mais l’exigence n’est pas encore terminée."
+  },
+  "states": {
+    "intake_pending": "En attente de démarrage",
+    "clarifying": "Clarification en cours",
+    "awaiting_approval": "En attente d’approbation",
+    "executing": "En cours d’exécution",
+    "blocked": "Bloquée",
+    "in_review": "En revue",
+    "done": "Terminée",
+    "cancelled": "Annulée",
+    "unknown": "Inconnu"
+  },
+  "participants": {
+    "edit": "Modifier les participants",
+    "stale": "Les participants ont changé. Vérifiez la dernière révision avant d’enregistrer.",
+    "remove": "Retirer",
+    "roles": {
+      "requester": "requester",
+      "approver": "approver",
+      "viewer": "viewer"
+    },
+    "add_member": "Ajouter un membre",
+    "approver_required": "Conservez au moins un approver.",
+    "cancel": "Annuler",
+    "save": "Enregistrer les participants"
+  },
+  "candidate": {
+    "project": "Projet",
+    "agent": "Agent d’exécution",
+    "goal": "Objectif",
+    "non_goals": "Non-objectifs",
+    "scope": "Périmètre",
+    "constraints": "Contraintes",
+    "acceptance_criteria": "Critères d’acceptation",
+    "no_project": "Aucun projet",
+    "unknown_project": "Projet inconnu ({{id}})",
+    "unknown_agent": "Agent inconnu ({{id}})",
+    "empty": "Aucun",
+    "attachments": "Pièces jointes",
+    "file": "Fichier",
+    "unknown_attachment": "Pièce jointe inconnue ({{id}})",
+    "attachments_unavailable": "Certaines pièces jointes sélectionnées sont absentes de l’aperçu de la source. L’approbation est indisponible."
+  },
+  "approval": {
+    "title": "Approuver l’exigence",
+    "candidate_revision": "Candidat v{{revision}}",
+    "review": "Examiner et approuver",
+    "confirm_title": "Approuver et créer la tâche",
+    "consequence": "Crée une tâche et démarre l’agent. Confirmez les modifications dans cette tâche ; ouvrez une nouvelle discussion pour une demande indépendante.",
+    "stale": "Le candidat ou la révision a changé. Examinez le dernier candidat avant d’approuver.",
+    "review_latest": "Examiner le dernier candidat",
+    "cancel": "Annuler",
+    "confirm": "Créer la tâche et démarrer l’agent"
+  },
+  "review": {
+    "title": "Revue",
+    "accept": "Accepter",
+    "reject": "Demander des modifications",
+    "cancel": "Annuler l’exigence",
+    "close": "Fermer",
+    "reject_reason": "Motif",
+    "reject_placeholder": "Décrivez les modifications nécessaires...",
+    "reject_required": "Saisissez un motif.",
+    "reject_confirm": "Demander des modifications",
+    "cancel_title": "Annuler cette exigence ?",
+    "cancel_consequence": "Arrête l’exécution tout en conservant les liens existants vers le Chat et la tâche.",
+    "cancel_confirm": "Annuler l’exigence",
+    "accept_title": "Valider et publier dans Yixiezuo",
+    "accept_consequence": "Marque la tâche comme terminée et publie ce résumé, son lien et le statut source sélectionné.",
+    "result_summary": "Résumé et liens des livrables",
+    "result_placeholder": "Modifications livrées, résultats de validation et liens des livrables...",
+    "source_status": "Statut Yixiezuo",
+    "keep_source_status": "Conserver le statut actuel",
+    "accept_stale": "La tâche a changé. Fermez cette fenêtre et examinez la dernière version.",
+    "accept_confirm": "Valider et publier"
+  },
+  "sync": {
+    "title": "État de synchronisation",
+    "operations": "Opérations",
+    "deliveries": "Livraisons",
+    "reconcile": "Relire",
+    "reconcile_operation": "Relire l’opération",
+    "reconcile_delivery": "Rapprocher la livraison",
+    "no_auto_retry": "Un résultat inconnu n’est jamais renvoyé automatiquement.",
+    "request_hash": "request_hash"
+  },
+  "panel": {
+    "load_failed": "Impossible de charger l’exigence.",
+    "closed": "Ce Chat d’exigence est en lecture seule.",
+    "open_issue": "Ouvrir la tâche"
+  },
+  "intake": {
+    "title": "Nouvelle exigence",
+    "source_url": "URL de la source",
+    "preview": "Aperçu de la source",
+    "previewing": "Chargement de l’aperçu...",
+    "agent": "Agent",
+    "project": "Projet",
+    "no_project": "Aucun projet",
+    "create": "Créer l’exigence",
+    "creating": "Création..."
+  },
+  "intake_settings": {
+    "template": "Modèle de demande POPO",
+    "consequence": "Avec un modèle, les idées envoyées à ce robot créent des brouillons 易协作 à clarifier, avec son projet, son type et les valeurs obligatoires du formulaire. Clarifiez et approuvez dans Multica Chat. Effacez l’URL pour désactiver.",
+    "save": "Enregistrer",
+    "saving": "Enregistrement...",
+    "saved": "Enregistré",
+    "save_failed": "Impossible d’enregistrer cette entrée."
+  }
+}

@@ -238,7 +238,12 @@ func (s *RegistrationService) ApplyProgress(ctx context.Context, bridge db.PopoB
 		next.Status = RegistrationStatusError
 		next.ErrorReason = progress.ErrorReason
 	case progress.RobotID != "":
-		inst, err := s.installs.RegisterFromScan(ctx, RegisterParams{
+		// The savepoint isolates install errors without an independent durable commit.
+		installTx, err := tx.Begin(ctx)
+		if err != nil {
+			return ProgressResult{}, fmt.Errorf("begin install savepoint: %w", err)
+		}
+		inst, installErr := s.installs.registerFromScanInTx(ctx, installTx, RegisterParams{
 			WorkspaceID: row.WorkspaceID,
 			AgentID:     row.AgentID,
 			InitiatorID: row.InitiatorID,
@@ -246,9 +251,12 @@ func (s *RegistrationService) ApplyProgress(ctx context.Context, bridge db.PopoB
 			RobotID:     progress.RobotID,
 			RobotName:   progress.RobotName,
 		})
-		if err != nil {
+		if installErr != nil {
+			if rollbackErr := installTx.Rollback(ctx); rollbackErr != nil {
+				return ProgressResult{}, errors.Join(installErr, rollbackErr)
+			}
 			next.Status = RegistrationStatusError
-			next.ErrorReason = registrationErrorReason(err)
+			next.ErrorReason = registrationErrorReason(installErr)
 			updated, uerr := qtx.UpdatePopoRegistration(ctx, updateFrom(next))
 			if uerr != nil {
 				return ProgressResult{}, uerr
@@ -256,7 +264,10 @@ func (s *RegistrationService) ApplyProgress(ctx context.Context, bridge db.PopoB
 			if err := tx.Commit(ctx); err != nil {
 				return ProgressResult{}, err
 			}
-			return ProgressResult{Registration: updated}, err
+			return ProgressResult{Registration: updated}, installErr
+		}
+		if err := installTx.Commit(ctx); err != nil {
+			return ProgressResult{}, fmt.Errorf("commit install savepoint: %w", err)
 		}
 		next.Status = RegistrationStatusSuccess
 		next.RobotID = strings.TrimSpace(progress.RobotID)

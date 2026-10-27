@@ -477,6 +477,24 @@ deleted_channel_inbound_writes AS (
 deleted_popo_outbound_queue AS (
     DELETE FROM popo_outbound_queue WHERE workspace_id = $1
 ),
+deleted_popo_v2_identity_conflict AS (
+    DELETE FROM popo_v2_identity_conflict WHERE workspace_id = $1
+),
+deleted_popo_v2_receipt_component AS (
+    DELETE FROM popo_v2_receipt_component WHERE workspace_id = $1
+),
+deleted_popo_v2_receipt AS (
+    DELETE FROM popo_v2_receipt WHERE workspace_id = $1
+),
+deleted_popo_v2_lease AS (
+    DELETE FROM popo_v2_lease WHERE workspace_id = $1
+),
+deleted_popo_v2_delivery AS (
+    DELETE FROM popo_v2_delivery WHERE workspace_id = $1
+),
+deleted_popo_v2_command AS (
+    DELETE FROM popo_v2_command WHERE workspace_id = $1
+),
 deleted_popo_inbound_event AS (
     DELETE FROM popo_inbound_event WHERE workspace_id = $1
 ),
@@ -550,6 +568,27 @@ deleted_lark_user_bindings AS (
 ),
 deleted_lark_binding_tokens AS (
     DELETE FROM lark_binding_token WHERE workspace_id = $1
+),
+deleted_requirement_outbox AS (
+    DELETE FROM requirement_outbox WHERE workspace_id = $1
+),
+deleted_requirement_actions AS (
+    DELETE FROM requirement_action WHERE workspace_id = $1
+),
+deleted_requirement_events AS (
+    DELETE FROM requirement_event WHERE workspace_id = $1
+),
+deleted_requirement_wakeups AS (
+    DELETE FROM requirement_wakeup WHERE workspace_id = $1
+),
+deleted_requirement_approvals AS (
+    DELETE FROM requirement_approval WHERE workspace_id = $1
+),
+deleted_requirement_candidates AS (
+    DELETE FROM requirement_candidate WHERE workspace_id = $1
+),
+deleted_requirement_participants AS (
+    DELETE FROM requirement_participant WHERE workspace_id = $1
 )
 -- Keep the two-system cleanup ledger until object storage has been settled.
 -- Moving every row out of pending also prevents a concurrent media bind from
@@ -600,6 +639,9 @@ WITH deleted_wakeup_receipts AS (
 ),
 deleted_child_events AS (
  DELETE FROM issue_child_event WHERE workspace_id=$1
+),
+deleted_requirements AS (
+    DELETE FROM requirement WHERE requirement.workspace_id = $1
 ),
 deleted_issues AS (
     DELETE FROM issue WHERE issue.workspace_id = $1

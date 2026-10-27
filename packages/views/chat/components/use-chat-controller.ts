@@ -5,6 +5,7 @@ import {
   useInfiniteQuery,
   useQuery,
   useQueryClient,
+  type QueryClient,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -156,6 +157,21 @@ export function hasInFlightPendingTask(
   return Boolean(pending?.task_id);
 }
 
+/**
+ * True when an `activeSessionId` that the loaded session list does not contain
+ * must NOT be treated as dangling yet: the session was just created and the
+ * list has not refetched (it has an in-flight pending task). Requirement
+ * participant Chats no longer need an exemption — the server's session list
+ * includes Requirement participants. Shared by the chat tab's controller and
+ * the floating ChatWindow so both surfaces heal identically.
+ */
+export function shouldKeepUnlistedChatSession(
+  qc: QueryClient,
+  sessionId: string,
+): boolean {
+  return hasInFlightPendingTask(qc, sessionId);
+}
+
 export function seedAcceptedPendingTask(
   qc: ReturnType<typeof useQueryClient>,
   sessionId: string,
@@ -220,9 +236,10 @@ export function useChatController(opts?: { isActive?: boolean }) {
   const { data: members = [], isSuccess: membersLoaded } = useQuery(
     memberListOptions(wsId),
   );
-  const { data: sessions = [], isSuccess: sessionsLoaded } = useQuery(
-    chatSessionsOptions(wsId),
-  );
+  const {
+    data: sessions = [],
+    isSuccess: sessionsLoaded,
+  } = useQuery(chatSessionsOptions(wsId));
   const { data: projects = [], isSuccess: projectsLoaded } = useQuery(
     projectListOptions(wsId),
   );
@@ -481,10 +498,17 @@ export function useChatController(opts?: { isActive?: boolean }) {
     if (getCurrentWsId() !== wsId) return;
     if (!activeSessionId || !sessionsLoaded) return;
     if (sessions.some((s) => s.id === activeSessionId)) return;
-    if (hasInFlightPendingTask(qc, activeSessionId)) return;
+    if (shouldKeepUnlistedChatSession(qc, activeSessionId)) return;
     uiLogger.info("clearing dangling activeSessionId", { sessionId: activeSessionId });
     setActiveSession(null);
-  }, [wsId, activeSessionId, sessionsLoaded, sessions, qc, setActiveSession]);
+  }, [
+    wsId,
+    activeSessionId,
+    sessionsLoaded,
+    sessions,
+    qc,
+    setActiveSession,
+  ]);
 
   // Upload transport moved into the coordinated-upload engine inside ChatInput
   // (MUL-5181 L2); surfaces only forward whether the affordance exists.

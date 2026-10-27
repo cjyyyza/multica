@@ -29,9 +29,10 @@ func cleanRuntimeSkillKey(key string) (string, bool) {
 	return filepath.ToSlash(cleaned), true
 }
 
-func prepareClaudeSkillSettings(envRoot string, disabled []RuntimeSkillRefForEnv, workspaceSkills []SkillContextForEnv) (string, error) {
+func prepareClaudeSkillSettings(envRoot string, disabled []RuntimeSkillRefForEnv, workspaceSkills []SkillContextForEnv, planMode ...bool) (string, error) {
 	path := filepath.Join(envRoot, claudeRuntimeSkillSettingsFile)
-	if len(disabled) == 0 {
+	plan := len(planMode) > 0 && planMode[0]
+	if len(disabled) == 0 && !plan {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return "", err
 		}
@@ -71,17 +72,20 @@ func prepareClaudeSkillSettings(envRoot string, disabled []RuntimeSkillRefForEnv
 		addDeny("Skill(" + invocationName + ")")
 		addDeny("Skill(" + invocationName + " *)")
 	}
-	if len(overrides) == 0 && len(deny) == 0 {
+	if len(overrides) == 0 && len(deny) == 0 && !plan {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return "", err
 		}
 		return "", nil
 	}
+	permissions := map[string]any{"deny": deny}
 	payload := map[string]any{
 		"skillOverrides": overrides,
-		"permissions": map[string]any{
-			"deny": deny,
-		},
+		"permissions":    permissions,
+	}
+	if plan {
+		payload["disableAllHooks"] = true
+		permissions["defaultMode"] = "plan"
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS idx_popo_v2_command_id;

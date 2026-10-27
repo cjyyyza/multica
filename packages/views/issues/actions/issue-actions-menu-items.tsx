@@ -111,6 +111,7 @@ export function IssueActionsMenuItems({
 }: IssueActionsMenuItemsProps) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
+  const lifecycleActionsDisabled = issue.origin_type === "requirement_chat";
   // Only the statuses the issue's workflow allows; entering a step that hands
   // the issue off confirms first, as in the status picker. (MUL-7420)
   const { options: statusOptions, workflow } = useIssueStatusOptions(wsId, issue.project_id, issue.status);
@@ -198,7 +199,7 @@ export function IssueActionsMenuItems({
       <P.Separator />
 
       {/* Status */}
-      <P.Sub>
+      {!lifecycleActionsDisabled && <P.Sub>
         <P.SubTrigger>
           <StatusIcon
             status={issue.status}
@@ -232,7 +233,7 @@ export function IssueActionsMenuItems({
             </P.Item>
           ))}
         </P.SubContent>
-      </P.Sub>
+      </P.Sub>}
 
       {/* Priority */}
       <P.Sub>
@@ -380,7 +381,7 @@ export function IssueActionsMenuItems({
             {t(($) => $.actions.add_sub_issue)}
           </P.Item>
           {/* Marking a duplicate cancels the issue. (MUL-7420) */}
-          {workflowAllowsStatus(workflow, "cancelled") && (
+          {!lifecycleActionsDisabled && workflowAllowsStatus(workflow, "cancelled") && (
             <P.Item onClick={openMarkDuplicate}>
               <CircleEqual className="h-3.5 w-3.5" />
               {t(($) => $.actions.mark_duplicate)}
@@ -401,13 +402,13 @@ export function IssueActionsMenuItems({
 
       <P.Separator />
 
-      <P.Item
+      {!lifecycleActionsDisabled && <P.Item
         variant="destructive"
         onClick={() => openDeleteConfirm({ onDeletedFallbackPath })}
       >
         <Trash2 className="h-3.5 w-3.5" />
         {t(($) => $.actions.delete_issue)}
-      </P.Item>
+      </P.Item>}
     </>
   );
 }

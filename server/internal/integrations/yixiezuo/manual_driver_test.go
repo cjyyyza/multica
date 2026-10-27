@@ -24,7 +24,7 @@ func manualFixture(t *testing.T) (*ExecDriver, *[]map[string]any) {
 		case "get_issue_journals":
 			payload = map[string]any{"list": []any{map[string]any{"id": 1, "author": map[string]any{"name": "QA"}, "notes": notes}}, "has_more": false}
 		case "get_issue_attachments":
-			payload = map[string]any{"list": []any{map[string]any{"id": 90, "filename": "error.log"}}}
+			payload = map[string]any{"list": []any{map[string]any{"id": 90, "filename": "error.log", "content_type": "text/plain"}}}
 		case "getIssueFieldOptions":
 			payload = map[string]any{"core_fields": map[string]any{"status_id": map[string]any{"options": []any{map[string]any{"id": 47, "name": "待开始"}, map[string]any{"id": 8, "name": "交付测试"}}}}}
 		case "update_issue":
@@ -50,6 +50,9 @@ func TestManualSnapshotIncludesInlineImagesAndComments(t *testing.T) {
 	}
 	if len(snapshot.Attachments) != 2 || snapshot.Attachments[1].ID != "91" {
 		t.Fatalf("inline screenshot lost: %+v", snapshot.Attachments)
+	}
+	if snapshot.Attachments[0].ContentType != "text/plain" {
+		t.Fatalf("source attachment content type lost: %+v", snapshot.Attachments[0])
 	}
 	if snapshot.LockVersion == nil || *snapshot.LockVersion != 1 || len(snapshot.Statuses) != 2 {
 		t.Fatalf("edit contract: %+v", snapshot)
@@ -136,5 +139,73 @@ func TestStagedAttachmentDoesNotChangeSourceFingerprint(t *testing.T) {
 	}
 	if !strings.Contains(s.Markdown(), "https://multica.test/api/file/1") {
 		t.Fatal("inline image still requires source login")
+	}
+}
+
+func TestManualReconcileReadbackOutcomesUseOnlyReadTools(t *testing.T) {
+	source, _ := ParseSource("https://dj01.pm.netease.com/issues/12")
+	t.Run("applied", func(t *testing.T) {
+		d, writes := manualFixture(t)
+		snapshot, err := d.ReadSnapshot(context.Background(), source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		publish := Operation{ID: "op", Kind: "publish", Payload: OperationPayload{Source: source, ExpectedDigest: snapshot.Digest}}
+		if result := d.Execute(context.Background(), publish); result.State != "succeeded" {
+			t.Fatalf("publish setup: %+v", result)
+		}
+		reconcile := Operation{ID: "reconcile", Kind: "reconcile", Payload: OperationPayload{
+			Source: source, ExpectedDigest: snapshot.Digest, TargetOperationID: "op",
+		}}
+		result := d.Execute(context.Background(), reconcile)
+		if result.State != "succeeded" || result.TargetState != "succeeded" || len(*writes) != 1 {
+			t.Fatalf("applied reconcile: %+v writes=%v", result, *writes)
+		}
+	})
+	t.Run("not applied", func(t *testing.T) {
+		d, writes := manualFixture(t)
+		snapshot, err := d.ReadSnapshot(context.Background(), source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reconcile := Operation{ID: "reconcile", Kind: "reconcile", Payload: OperationPayload{
+			Source: source, ExpectedDigest: snapshot.Digest, TargetOperationID: "op",
+		}}
+		result := d.Execute(context.Background(), reconcile)
+		if result.State != "succeeded" || result.TargetState != "failed" || len(*writes) != 0 {
+			t.Fatalf("not-applied reconcile: %+v writes=%v", result, *writes)
+		}
+	})
+	t.Run("indeterminate", func(t *testing.T) {
+		d, writes := manualFixture(t)
+		reconcile := Operation{ID: "reconcile", Kind: "reconcile", Payload: OperationPayload{
+			Source: source, ExpectedDigest: "different", TargetOperationID: "op",
+		}}
+		result := d.Execute(context.Background(), reconcile)
+		if result.State != "unknown" || result.TargetState != "needs_reconcile" || len(*writes) != 0 {
+			t.Fatalf("indeterminate reconcile: %+v writes=%v", result, *writes)
+		}
+	})
+}
+
+func TestManualReconcileMarkerWithMismatchedStatusStaysUnknown(t *testing.T) {
+	d, writes := manualFixture(t)
+	source, _ := ParseSource("https://dj01.pm.netease.com/issues/12")
+	snapshot, err := d.ReadSnapshot(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publish := Operation{ID: "op", Kind: "publish", Payload: OperationPayload{
+		Source: source, ExpectedDigest: snapshot.Digest, StatusName: "待开始",
+	}}
+	if result := d.Execute(context.Background(), publish); result.State != "succeeded" {
+		t.Fatalf("publish setup: %+v", result)
+	}
+	reconcile := Operation{ID: "reconcile", Kind: "reconcile", Payload: OperationPayload{
+		Source: source, ExpectedDigest: snapshot.Digest, StatusName: "开发中", TargetOperationID: "op",
+	}}
+	result := d.Execute(context.Background(), reconcile)
+	if result.State != "unknown" || result.TargetState != "needs_reconcile" || len(*writes) != 1 {
+		t.Fatalf("status-mismatched reconcile: %+v writes=%v", result, *writes)
 	}
 }

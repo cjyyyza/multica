@@ -25,15 +25,18 @@ RETURNING *;
 
 -- name: InsertPopoBridge :one
 INSERT INTO popo_bridge (
-    workspace_id, token_hash, hostname, status
+    workspace_id, token_hash, hostname, status, capabilities_json
 ) VALUES (
-    $1, $2, $3, 'active'
+    $1, $2, $3, 'active', sqlc.arg('capabilities_json')::jsonb
 )
 RETURNING *;
 
 -- name: GetPopoBridgeByTokenHash :one
 SELECT * FROM popo_bridge
 WHERE token_hash = $1;
+
+-- name: GetPopoBridgeByID :one
+SELECT * FROM popo_bridge WHERE id = $1;
 
 -- name: GetPopoBridgeInWorkspace :one
 SELECT * FROM popo_bridge
@@ -57,8 +60,19 @@ RETURNING *;
 -- name: HeartbeatPopoBridge :one
 UPDATE popo_bridge
 SET last_heartbeat_at = now(),
-    robots_json = $2
-WHERE id = $1
+    robots_json = sqlc.arg('robots_json')::jsonb,
+    supported_protocol_versions = sqlc.arg('supported_protocol_versions')::jsonb,
+    selected_protocol_version = sqlc.arg('selected_protocol_version'),
+    protocol_health_json = sqlc.arg('protocol_health_json')::jsonb
+WHERE id = sqlc.arg('id')
+  AND status = 'active'
+RETURNING *;
+
+-- name: UpdatePopoBridgeProtocolSelection :one
+UPDATE popo_bridge
+SET supported_protocol_versions = sqlc.arg('supported_protocol_versions')::jsonb,
+    selected_protocol_version = sqlc.arg('selected_protocol_version')
+WHERE id = sqlc.arg('id')
   AND status = 'active'
 RETURNING *;
 
@@ -76,7 +90,11 @@ SELECT * FROM popo_bridge_command WHERE delivery_id = $1;
 
 -- name: CancelRevokedPopoBridgeCommands :exec
 UPDATE popo_bridge_command AS cmd
-SET status = 'cancelled', lease_expires_at = NULL, updated_at = now()
+SET status = 'cancelled',
+    not_sent = CASE WHEN cmd.requirement_id IS NOT NULL THEN true ELSE cmd.not_sent END,
+    evidence_finalized = CASE WHEN cmd.requirement_id IS NOT NULL THEN true ELSE cmd.evidence_finalized END,
+    lease_expires_at = NULL,
+    updated_at = now()
 WHERE cmd.bridge_id = $1 AND cmd.status IN ('pending', 'leased')
   AND (NOT EXISTS (SELECT 1 FROM popo_bridge b WHERE b.id = cmd.bridge_id AND b.status = 'active')
     OR (cmd.type = 'send' AND NOT EXISTS (
@@ -86,16 +104,25 @@ WHERE cmd.bridge_id = $1 AND cmd.status IN ('pending', 'leased')
         AND ci.config->>'bridge_id' = cmd.bridge_id::text)));
 
 -- name: CancelPopoInstallationCommands :exec
-UPDATE popo_bridge_command SET status = 'cancelled', lease_expires_at = NULL, updated_at = now()
+UPDATE popo_bridge_command
+SET status = 'cancelled',
+    not_sent = CASE WHEN requirement_id IS NOT NULL THEN true ELSE not_sent END,
+    evidence_finalized = CASE WHEN requirement_id IS NOT NULL THEN true ELSE evidence_finalized END,
+    lease_expires_at = NULL,
+    updated_at = now()
 WHERE installation_id = $1 AND status IN ('pending', 'leased');
 
 -- name: ReclaimExpiredPopoBridgeCommandLeases :exec
+-- Requirement command leases that expired after dispatch are an unknown
+-- outcome and are handled by ExpireRequirementPopoCommandLeases; they must
+-- never return to pending. Ordinary commands keep the v1 reclaim behavior.
 UPDATE popo_bridge_command
 SET status = 'pending',
     lease_expires_at = NULL,
     updated_at = now()
 WHERE bridge_id = $1
   AND status = 'leased'
+  AND requirement_id IS NULL
   AND lease_expires_at IS NOT NULL
   AND lease_expires_at < now();
 
@@ -105,6 +132,7 @@ WITH picked AS (
     FROM popo_bridge_command AS cmd
     WHERE cmd.bridge_id = sqlc.arg('lease_bridge_id')
       AND cmd.status = 'pending'
+      AND (cmd.expires_at IS NULL OR cmd.expires_at > now())
       AND EXISTS (SELECT 1 FROM popo_bridge b WHERE b.id = cmd.bridge_id AND b.status = 'active')
       AND (cmd.type <> 'send' OR EXISTS (
         SELECT 1 FROM channel_installation ci
@@ -117,6 +145,8 @@ WITH picked AS (
 )
 UPDATE popo_bridge_command AS c
 SET status = 'leased',
+    lease_id = gen_random_uuid(),
+    dispatched_at = COALESCE(c.dispatched_at, now()),
     lease_expires_at = CASE WHEN c.type = 'register_qr'
       THEN sqlc.arg('registration_lease_expires_at')::timestamptz
       ELSE sqlc.arg('lease_expires_at')::timestamptz END,
@@ -138,6 +168,7 @@ WITH renewed AS (
     lease_expires_at = now() + interval '60 seconds', updated_at = now()
   WHERE cmd.id = $1 AND cmd.bridge_id = $2 AND cmd.status IN ('pending', 'leased')
     AND cmd.type = 'send'
+    AND (cmd.expires_at IS NULL OR cmd.expires_at > now())
     AND EXISTS (SELECT 1 FROM popo_bridge b WHERE b.id = cmd.bridge_id AND b.status = 'active')
     AND EXISTS (SELECT 1 FROM channel_installation ci
       WHERE ci.id = cmd.installation_id AND ci.status = 'active'
@@ -178,7 +209,7 @@ GROUP BY bridge_id, status;
 
 -- name: CountPendingPopoMediaStagingByBridge :many
 -- Inbound backlog is pending media uploads. Engine Handle is synchronous on
--- the inbound HTTP request, and popo_inbound_event has no processed column.
+-- the inbound HTTP request; transport dedupe evidence is tracked separately.
 SELECT bridge_id, count(*)::bigint AS n
 FROM popo_media_staging
 WHERE workspace_id = $1
@@ -204,15 +235,60 @@ SELECT EXISTS (
 
 -- name: InsertPopoInboundEvent :one
 INSERT INTO popo_inbound_event (
-    workspace_id, bridge_id, installation_id, event_id, robot_id, accepted, duplicate
+    workspace_id, bridge_id, installation_id, event_id, robot_id,
+    accepted, duplicate, payload_hash, payload_evidence
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7
+    $1, $2, $3, $4, $5, $6, $7,
+    sqlc.narg('payload_hash')::text,
+    sqlc.narg('payload_evidence')::jsonb
 )
 RETURNING *;
 
--- name: GetPopoInboundEvent :one
+-- name: GetPopoInboundEventByIdentity :one
 SELECT * FROM popo_inbound_event
-WHERE installation_id = $1 AND event_id = $2;
+WHERE bridge_id = sqlc.arg('bridge_id')
+  AND robot_id = sqlc.arg('robot_id')
+  AND event_id = sqlc.arg('event_id')
+  AND dedupe_enabled;
+
+-- name: GetLegacyPopoExecutionFence :one
+SELECT installation_id, message_id
+FROM channel_inbound_message_dedup
+WHERE installation_id = sqlc.arg('installation_id')
+  AND right(message_id, length(sqlc.arg('event_id')::text) + 1) = ':' || sqlc.arg('event_id')::text
+  AND (processed_at IS NOT NULL OR received_at >= now() - INTERVAL '60 seconds')
+LIMIT 1;
+
+-- name: ClaimPopoInboundExecution :one
+UPDATE popo_inbound_event
+SET execution_received_at = now(),
+    execution_claim_token = sqlc.arg('claim_token')::uuid
+WHERE bridge_id = sqlc.arg('bridge_id')
+  AND robot_id = sqlc.arg('robot_id')
+  AND event_id = sqlc.arg('event_id')
+  AND dedupe_enabled
+  AND execution_processed_at IS NULL
+  AND (execution_claim_token IS NULL OR execution_received_at < now() - INTERVAL '60 seconds')
+RETURNING execution_claim_token;
+
+-- name: MarkPopoInboundExecutionProcessed :execrows
+UPDATE popo_inbound_event
+SET execution_processed_at = now()
+WHERE bridge_id = sqlc.arg('bridge_id')
+  AND robot_id = sqlc.arg('robot_id')
+  AND event_id = sqlc.arg('event_id')
+  AND execution_claim_token = sqlc.arg('claim_token')
+  AND execution_processed_at IS NULL;
+
+-- name: ReleasePopoInboundExecution :execrows
+UPDATE popo_inbound_event
+SET execution_claim_token = NULL,
+    execution_received_at = NULL
+WHERE bridge_id = sqlc.arg('bridge_id')
+  AND robot_id = sqlc.arg('robot_id')
+  AND event_id = sqlc.arg('event_id')
+  AND execution_claim_token = sqlc.arg('claim_token')
+  AND execution_processed_at IS NULL;
 
 -- name: InsertPopoMediaStaging :one
 INSERT INTO popo_media_staging (
@@ -423,3 +499,9 @@ WHERE NOT EXISTS (
   WHERE cmd.delivery_id = md5(sources.installation_id::text || ':' || sources.source_key)::uuid
 )
 ORDER BY sources.occurred_at, sources.source_key LIMIT $1;
+
+-- name: SetPopoRequirementTemplate :one
+UPDATE channel_installation
+SET config = jsonb_set(config, '{requirement_template_url}', to_jsonb(@template_url::text)), updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id AND channel_type = 'popo' AND status = 'active'
+RETURNING *;

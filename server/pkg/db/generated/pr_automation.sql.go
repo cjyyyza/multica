@@ -158,6 +158,7 @@ WHERE i.id = $1
   AND i.workspace_id = $2
   AND i.status = $4::text
   AND i.status <> $3::text
+  AND NOT EXISTS (SELECT 1 FROM requirement r WHERE r.issue_id = i.id)
   AND EXISTS (
       SELECT 1 FROM issue_pull_request ipr WHERE ipr.issue_id = i.id
       UNION ALL

@@ -40,6 +40,7 @@ type outboundQueries interface {
 	GetChannelInboundWriteByComment(ctx context.Context, commentID pgtype.UUID) (db.ChannelInboundWrite, error)
 	GetAgentTask(ctx context.Context, id pgtype.UUID) (db.AgentTaskQueue, error)
 	GetIssue(ctx context.Context, id pgtype.UUID) (db.Issue, error)
+	GetRequirementByIssue(ctx context.Context, arg db.GetRequirementByIssueParams) (db.Requirement, error)
 	GetWorkspace(ctx context.Context, id pgtype.UUID) (db.Workspace, error)
 	ListAttachmentsByChatMessage(ctx context.Context, arg db.ListAttachmentsByChatMessageParams) ([]db.Attachment, error)
 	ListAttachmentsByComment(ctx context.Context, arg db.ListAttachmentsByCommentParams) ([]db.Attachment, error)
@@ -119,7 +120,10 @@ func (o *Outbound) enqueueChatDone(ctx context.Context, e events.Event) {
 	if parsed, err := util.ParseUUID(info.BridgeID); err == nil {
 		bridgeID = parsed
 	}
-	task, _ := o.q.GetAgentTask(ctx, taskID)
+	task, err := o.q.GetAgentTask(ctx, taskID)
+	if err != nil || task.RequirementID.Valid {
+		return
+	}
 	chatType := strings.TrimSpace(delivery.ChatType)
 	if chatType == "" {
 		chatType = string(channel.ChatTypeP2P)

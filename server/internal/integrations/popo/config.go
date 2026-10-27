@@ -54,12 +54,14 @@ const (
 	CommandTypeRegisterQR         = "register_qr"
 	CommandTypeCancelRegistration = "cancel_registration"
 
-	CommandStatusPending   = "pending"
-	CommandStatusLeased    = "leased"
-	CommandStatusDelivered = "delivered"
-	CommandStatusFailed    = "failed"
-	CommandStatusUnknown   = "unknown"
-	CommandStatusCancelled = "cancelled"
+	CommandStatusPending    = "pending"
+	CommandStatusLeased     = "leased"
+	CommandStatusDelivered  = "delivered"
+	CommandStatusFailed     = "failed"
+	CommandStatusUnknown    = "unknown"
+	CommandStatusCancelled  = "cancelled"
+	CommandStatusExpired    = "expired"
+	CommandStatusSuperseded = "superseded"
 
 	RegistrationTTL                 = 10 * time.Minute
 	RegistrationPollIntervalSeconds = 2
@@ -87,9 +89,10 @@ const (
 // app_id is the dj01bot robot id (websocketRobots[].id, or "default").
 // bridge_id is the Windows bridge that owns the robot connection.
 type installConfig struct {
-	AppID     string `json:"app_id"`
-	RobotName string `json:"robot_name,omitempty"`
-	BridgeID  string `json:"bridge_id,omitempty"`
+	AppID                  string `json:"app_id"`
+	RobotName              string `json:"robot_name,omitempty"`
+	BridgeID               string `json:"bridge_id,omitempty"`
+	RequirementTemplateURL string `json:"requirement_template_url,omitempty"`
 	// Legacy fields from the unpublished loopback-gateway install. Kept so
 	// DecodePublicConfig can still render old rows; new installs omit them.
 	WebhookURL            string `json:"webhook_url,omitempty"`
@@ -98,10 +101,11 @@ type installConfig struct {
 
 // PublicConfig is the non-secret subset of an installation config.
 type PublicConfig struct {
-	RobotID    string
-	RobotName  string
-	BridgeID   string
-	WebhookURL string
+	RobotID                string
+	RobotName              string
+	BridgeID               string
+	WebhookURL             string
+	RequirementTemplateURL string
 }
 
 // DecodePublicConfig extracts display-safe fields. A decode miss yields a
@@ -110,10 +114,11 @@ func DecodePublicConfig(raw json.RawMessage) PublicConfig {
 	var cfg installConfig
 	_ = json.Unmarshal(raw, &cfg)
 	return PublicConfig{
-		RobotID:    cfg.AppID,
-		RobotName:  cfg.RobotName,
-		BridgeID:   strings.TrimSpace(cfg.BridgeID),
-		WebhookURL: strings.TrimSpace(cfg.WebhookURL),
+		RobotID:                cfg.AppID,
+		RobotName:              cfg.RobotName,
+		BridgeID:               strings.TrimSpace(cfg.BridgeID),
+		WebhookURL:             strings.TrimSpace(cfg.WebhookURL),
+		RequirementTemplateURL: strings.TrimSpace(cfg.RequirementTemplateURL),
 	}
 }
 

@@ -479,7 +479,12 @@ func (q *Queries) CreateIssueWithOrigin(ctx context.Context, arg CreateIssueWith
 
 const deleteIssue = `-- name: DeleteIssue :exec
 WITH target AS (
-    SELECT issue.id FROM issue WHERE issue.id = $1 AND issue.workspace_id = $2
+    SELECT issue.id FROM issue
+    WHERE issue.id = $1 AND issue.workspace_id = $2
+      AND NOT EXISTS (
+          SELECT 1 FROM requirement r
+          WHERE r.issue_id = issue.id AND r.cancelled_at IS NULL
+      )
 ),
 cleared_wakeup_receipts AS (
  DELETE FROM issue_wakeup_receipt WHERE wakeup_id IN (SELECT id FROM issue_wakeup WHERE issue_id IN (SELECT target.id FROM target))
@@ -1786,6 +1791,47 @@ func (q *Queries) ListOpenIssues(ctx context.Context, arg ListOpenIssuesParams) 
 	return items, nil
 }
 
+const listRequirementIDsForIssues = `-- name: ListRequirementIDsForIssues :many
+SELECT issue_id, id AS requirement_id
+FROM requirement
+WHERE workspace_id = $1
+  AND issue_id = ANY($2::uuid[])
+`
+
+type ListRequirementIDsForIssuesParams struct {
+	WorkspaceID pgtype.UUID   `json:"workspace_id"`
+	IssueIds    []pgtype.UUID `json:"issue_ids"`
+}
+
+type ListRequirementIDsForIssuesRow struct {
+	IssueID       pgtype.UUID `json:"issue_id"`
+	RequirementID pgtype.UUID `json:"requirement_id"`
+}
+
+// Additive requirement_id for issue responses. A requirement approval binds at
+// most one issue, so clients open the Requirement directly from the issue
+// instead of routing through its source chat session. One indexed read per
+// page; an issue with no requirement row simply has no result row.
+func (q *Queries) ListRequirementIDsForIssues(ctx context.Context, arg ListRequirementIDsForIssuesParams) ([]ListRequirementIDsForIssuesRow, error) {
+	rows, err := q.db.Query(ctx, listRequirementIDsForIssues, arg.WorkspaceID, arg.IssueIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRequirementIDsForIssuesRow{}
+	for rows.Next() {
+		var i ListRequirementIDsForIssuesRow
+		if err := rows.Scan(&i.IssueID, &i.RequirementID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockIssueDuplicateKey = `-- name: LockIssueDuplicateKey :exec
 SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 `
@@ -2191,9 +2237,22 @@ WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', 
     WHERE i.id = $1
       AND ($2::bigint IS NULL OR i.revision = $2::bigint)
     FOR UPDATE
+), candidate_gated AS (
+    -- Requirement status policy is defined once in migration 9083
+    -- (requirement_issue_status_allowed); see
+    -- docs/requirement-status-gate-inventory.md for the rule matrix.
+    -- Generic edits pass no action and therefore cannot change the status of a
+    -- requirement-bound issue; dedicated callers set requirement_action to the
+    -- explicit action they perform.
+    SELECT candidate.id, candidate.workspace_id, candidate.title, candidate.description, candidate.status, candidate.priority, candidate.assignee_type, candidate.assignee_id, candidate.creator_type, candidate.creator_id, candidate.parent_issue_id, candidate.acceptance_criteria, candidate.context_refs, candidate.position, candidate.due_date, candidate.created_at, candidate.updated_at, candidate.number, candidate.project_id, candidate.origin_type, candidate.origin_id, candidate.first_executed_at, candidate.start_date, candidate.metadata, candidate.stage, candidate.properties, candidate.revision, candidate.last_activity_at, candidate.triage_state, candidate.duplicate_of_issue_id, candidate.next_title, candidate.next_description, candidate.next_status, candidate.next_priority, candidate.next_assignee_type, candidate.next_assignee_id, candidate.next_position, candidate.next_start_date, candidate.next_due_date, candidate.next_parent_issue_id, candidate.next_project_id, candidate.next_stage, candidate.next_duplicate_of_issue_id,
+        requirement_issue_status_allowed(
+            candidate.workspace_id, candidate.id, candidate.status, candidate.next_status,
+            COALESCE($17::text, '')
+        ) AS requirement_status_allowed
+    FROM candidate
 ), changed AS (
     SELECT
-        candidate.id, candidate.workspace_id, candidate.title, candidate.description, candidate.status, candidate.priority, candidate.assignee_type, candidate.assignee_id, candidate.creator_type, candidate.creator_id, candidate.parent_issue_id, candidate.acceptance_criteria, candidate.context_refs, candidate.position, candidate.due_date, candidate.created_at, candidate.updated_at, candidate.number, candidate.project_id, candidate.origin_type, candidate.origin_id, candidate.first_executed_at, candidate.start_date, candidate.metadata, candidate.stage, candidate.properties, candidate.revision, candidate.last_activity_at, candidate.triage_state, candidate.duplicate_of_issue_id, candidate.next_title, candidate.next_description, candidate.next_status, candidate.next_priority, candidate.next_assignee_type, candidate.next_assignee_id, candidate.next_position, candidate.next_start_date, candidate.next_due_date, candidate.next_parent_issue_id, candidate.next_project_id, candidate.next_stage, candidate.next_duplicate_of_issue_id,
+        candidate_gated.id, candidate_gated.workspace_id, candidate_gated.title, candidate_gated.description, candidate_gated.status, candidate_gated.priority, candidate_gated.assignee_type, candidate_gated.assignee_id, candidate_gated.creator_type, candidate_gated.creator_id, candidate_gated.parent_issue_id, candidate_gated.acceptance_criteria, candidate_gated.context_refs, candidate_gated.position, candidate_gated.due_date, candidate_gated.created_at, candidate_gated.updated_at, candidate_gated.number, candidate_gated.project_id, candidate_gated.origin_type, candidate_gated.origin_id, candidate_gated.first_executed_at, candidate_gated.start_date, candidate_gated.metadata, candidate_gated.stage, candidate_gated.properties, candidate_gated.revision, candidate_gated.last_activity_at, candidate_gated.triage_state, candidate_gated.duplicate_of_issue_id, candidate_gated.next_title, candidate_gated.next_description, candidate_gated.next_status, candidate_gated.next_priority, candidate_gated.next_assignee_type, candidate_gated.next_assignee_id, candidate_gated.next_position, candidate_gated.next_start_date, candidate_gated.next_due_date, candidate_gated.next_parent_issue_id, candidate_gated.next_project_id, candidate_gated.next_stage, candidate_gated.next_duplicate_of_issue_id, candidate_gated.requirement_status_allowed,
         ROW(
             title, description, status, priority, assignee_type, assignee_id,
             position, start_date, due_date, parent_issue_id, project_id, stage,
@@ -2214,7 +2273,7 @@ WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', 
             next_parent_issue_id, next_project_id, next_stage,
             next_duplicate_of_issue_id
         ) AS did_activity
-    FROM candidate
+    FROM candidate_gated
 )
 UPDATE issue AS i SET
     title = changed.next_title,
@@ -2242,6 +2301,7 @@ WHERE i.id = changed.id
   -- Under READ COMMITTED, concurrent statements may both populate candidate
   -- from the same snapshot; EvalPlanQual re-evaluates this target-row predicate
   -- after waiting for the first writer, leaving the stale writer with 0 rows.
+  AND changed.requirement_status_allowed
   AND ($2::bigint IS NULL OR i.revision = $2::bigint)
 RETURNING i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id
 `
@@ -2263,6 +2323,7 @@ type UpdateIssueParams struct {
 	ProjectID          pgtype.UUID   `json:"project_id"`
 	Stage              pgtype.Int4   `json:"stage"`
 	DuplicateOfIssueID pgtype.UUID   `json:"duplicate_of_issue_id"`
+	RequirementAction  pgtype.Text   `json:"requirement_action"`
 }
 
 func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue, error) {
@@ -2283,6 +2344,7 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 		arg.ProjectID,
 		arg.Stage,
 		arg.DuplicateOfIssueID,
+		arg.RequirementAction,
 	)
 	var i Issue
 	err := row.Scan(
@@ -2321,7 +2383,20 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 }
 
 const updateIssueStatus = `-- name: UpdateIssueStatus :one
-WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', COALESCE($4::uuid::text, ''), true))
+WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', COALESCE($4::uuid::text, ''), true)), candidate AS MATERIALIZED (
+    -- Same shared policy as UpdateIssue (migration 9083), so the two main
+    -- status write paths cannot drift apart. The empty action forbids a status
+    -- change on a requirement-bound issue unless a dedicated caller supplies
+    -- the explicit action it performs.
+    SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id,
+        requirement_issue_status_allowed(
+            i.workspace_id, i.id, i.status, $2,
+            COALESCE($5::text, '')
+        ) AS requirement_status_allowed
+    FROM issue AS i
+    WHERE i.id = $1 AND i.workspace_id = $3
+    FOR UPDATE
+)
 UPDATE issue AS i SET
     status = $2,
     -- Same rule as UpdateIssue: a mark only survives cancelled -> cancelled.
@@ -2340,16 +2415,17 @@ UPDATE issue AS i SET
         ELSE i.last_activity_at
     END,
     updated_at = now()
-FROM wakeup_source
-WHERE i.id = $1 AND i.workspace_id = $3
+FROM candidate CROSS JOIN wakeup_source
+WHERE i.id = candidate.id AND candidate.requirement_status_allowed
 RETURNING i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id
 `
 
 type UpdateIssueStatusParams struct {
-	ID           pgtype.UUID `json:"id"`
-	Status       string      `json:"status"`
-	WorkspaceID  pgtype.UUID `json:"workspace_id"`
-	SourceTaskID pgtype.UUID `json:"source_task_id"`
+	ID                pgtype.UUID `json:"id"`
+	Status            string      `json:"status"`
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	SourceTaskID      pgtype.UUID `json:"source_task_id"`
+	RequirementAction pgtype.Text `json:"requirement_action"`
 }
 
 // Workspace_id in the WHERE clause is a SQL-layer tenant guard; see DeleteIssue.
@@ -2363,6 +2439,7 @@ func (q *Queries) UpdateIssueStatus(ctx context.Context, arg UpdateIssueStatusPa
 		arg.Status,
 		arg.WorkspaceID,
 		arg.SourceTaskID,
+		arg.RequirementAction,
 	)
 	var i Issue
 	err := row.Scan(

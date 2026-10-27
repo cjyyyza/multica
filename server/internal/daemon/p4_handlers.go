@@ -71,6 +71,9 @@ func (d *Daemon) authorizeP4Call(w http.ResponseWriter, r *http.Request, workspa
 		d.writeRepoCheckoutAuthError(w, authResult)
 		return activeRepoCheckoutTask{}, "", false
 	}
+	if !allowActiveTaskExternalTools(w, activeTask) {
+		return activeRepoCheckoutTask{}, "", false
+	}
 	if workspaceID == "" {
 		http.Error(w, "workspace_id is required", http.StatusBadRequest)
 		return activeRepoCheckoutTask{}, "", false
@@ -230,6 +233,9 @@ func writeP4Rejection(w http.ResponseWriter, rej p4Rejection) {
 }
 
 func (d *Daemon) serveWorkspaceP4Run(w http.ResponseWriter, r *http.Request, activeTask activeRepoCheckoutTask, binding *p4TaskBinding, req p4MutateRequest) {
+	if !allowActiveTaskExternalTools(w, activeTask) {
+		return
+	}
 	if req.WorkspaceID != "" && req.WorkspaceID != activeTask.WorkspaceID {
 		http.Error(w, "p4 task context does not match the active task", http.StatusForbidden)
 		return

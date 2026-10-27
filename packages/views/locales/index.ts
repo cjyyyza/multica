@@ -124,6 +124,11 @@ import frUsage from "./fr/usage.json";
 import frUi from "./fr/ui.json";
 import frSquads from "./fr/squads.json";
 import frBilling from "./fr/billing.json";
+import enRequirements from "./en/requirements.json";
+import zhHansRequirements from "./zh-Hans/requirements.json";
+import koRequirements from "./ko/requirements.json";
+import jaRequirements from "./ja/requirements.json";
+import frRequirements from "./fr/requirements.json";
 
 // Single source of truth for the resource bundle. Both apps (web layout +
 // desktop App.tsx) import from here so adding a locale or namespace happens
@@ -155,6 +160,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     ui: enUi,
     squads: enSquads,
     billing: enBilling,
+    requirements: enRequirements,
   },
   "zh-Hans": {
     common: zhHansCommon,
@@ -182,6 +188,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     ui: zhHansUi,
     squads: zhHansSquads,
     billing: zhHansBilling,
+    requirements: zhHansRequirements,
   },
   ko: {
     common: koCommon,
@@ -209,6 +216,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     ui: koUi,
     squads: koSquads,
     billing: koBilling,
+    requirements: koRequirements,
   },
   ja: {
     common: jaCommon,
@@ -236,6 +244,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     ui: jaUi,
     squads: jaSquads,
     billing: jaBilling,
+    requirements: jaRequirements,
   },
   fr: {
     common: frCommon,
@@ -263,5 +272,6 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     ui: frUi,
     squads: frSquads,
     billing: frBilling,
+    requirements: frRequirements,
   },
 };

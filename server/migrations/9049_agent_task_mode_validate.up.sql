@@ -1,0 +1,1 @@
+ALTER TABLE agent_task_queue VALIDATE CONSTRAINT agent_task_queue_mode_check;

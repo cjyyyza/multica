@@ -1,10 +1,17 @@
 // @vitest-environment jsdom
 
-import { StrictMode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import type { Agent } from "@multica/core/types";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { Agent, ChatSession } from "@multica/core/types";
+import { ApiError } from "@multica/core/api";
+import { configStore } from "@multica/core/config";
+import {
+  RequirementDetailSchema,
+  type RequirementDetail,
+  type RequirementOpenResponse,
+} from "@multica/core/requirements";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../locales/en/common.json";
 import enChat from "../locales/en/chat.json";
@@ -21,11 +28,15 @@ const TEST_RESOURCES = { en: { common: enCommon, chat: enChat } };
 // interactive: selecting a thread is the user action that must supersede a
 // pending `?agent=` intent.
 vi.mock("./components/chat-message-list", () => ({
-  ChatMessageList: () => <div>chat-message-list</div>,
+  ChatMessageList: ({ quickActionsDisabled }: { quickActionsDisabled?: boolean }) => (
+    <div data-quick-actions-disabled={quickActionsDisabled ? "true" : "false"}>chat-message-list</div>
+  ),
   ChatMessageSkeleton: () => <div>chat-message-skeleton</div>,
 }));
 vi.mock("./components/chat-input", () => ({
-  ChatInput: () => <div>chat-input</div>,
+  ChatInput: ({ disabled, projectLocked }: { disabled?: boolean; projectLocked?: boolean }) => (
+    <div data-disabled={disabled ? "true" : "false"} data-project-locked={projectLocked ? "true" : "false"}>chat-input</div>
+  ),
 }));
 vi.mock("./components/chat-thread-list", () => ({
   ChatThreadList: ({
@@ -84,13 +95,76 @@ vi.mock("@multica/ui/hooks/use-mobile", () => ({
 }));
 vi.mock("@multica/core/paths", () => ({
   useRequiredWorkspaceSlug: () => "acme",
-  useWorkspacePaths: () => ({ chat: () => "/acme/chat" }),
+  useWorkspacePaths: () => ({
+    chat: () => "/acme/chat",
+    chatSession: (id: string) => `/acme/chat?session=${id}`,
+  }),
 }));
 const platformWorkspace = vi.hoisted(() => ({ slug: "acme" }));
 vi.mock("@multica/core/platform", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/platform")>()),
   getCurrentSlug: () => platformWorkspace.slug,
 }));
+
+const requirementSurfaceRef = vi.hoisted(() => ({
+  current: {
+    detail: null as import("@multica/core/requirements").RequirementDetail | null,
+    error: null as Error | null,
+    isLoading: false,
+    canCompose: true,
+    projectLocked: false,
+  },
+}));
+const requirementSurfaceArgsRef = vi.hoisted(() => ({
+  current: null as null | {
+    wsId?: string;
+    requirementId?: string | null;
+    chatSessionId?: string | null;
+    chatSession?: ChatSession | null;
+  },
+}));
+// Fake controller session-list state: ChatPage forwards the loaded row as the
+// Requirement surface's `chatSession` hint, so the hook can follow its additive
+// `requirement_id` without any participant probe.
+const controllerSessionRef = vi.hoisted(() => ({
+  current: {
+    currentSession: null as ChatSession | null,
+  },
+}));
+const openRequirementMutationRef = vi.hoisted(() => ({
+  current: {
+    mutateAsync: vi.fn(),
+    error: null as Error | null,
+    isPending: false,
+  },
+}));
+const hasMessagesRef = vi.hoisted(() => ({ current: false }));
+vi.mock("@multica/core/requirements", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@multica/core/requirements")>()),
+  useOpenRequirement: () => openRequirementMutationRef.current,
+}));
+vi.mock("../requirements", async () => {
+  const openIntentActual = await vi.importActual<
+    typeof import("../requirements/use-requirement-open-intent")
+  >("../requirements/use-requirement-open-intent");
+  const surfaceActual = await vi.importActual<
+    typeof import("../requirements/use-requirement-surface")
+  >("../requirements/use-requirement-surface");
+  return {
+    RequirementFlowPanel: () => <div>requirement-flow-panel</div>,
+    RequirementIntakeDialog: ({ children }: { children?: ReactNode }) => <>{children}</>,
+    RequirementIntakeTrigger: () => <button type="button">New requirement</button>,
+    // Record what ChatPage forwards; the surface itself is steered through
+    // requirementSurfaceRef.
+    useRequirementSurface: (
+      args: Parameters<typeof surfaceActual.useRequirementSurface>[0],
+    ) => {
+      requirementSurfaceArgsRef.current = args;
+      return requirementSurfaceRef.current;
+    },
+    useRequirementOpenIntent: openIntentActual.useRequirementOpenIntent,
+  };
+});
 
 // The store mock is REACTIVE like real Zustand: setActiveSession replaces the
 // snapshot and notifies subscribers, and the controller mock subscribes via
@@ -129,6 +203,10 @@ vi.mock("@multica/core/chat", () => ({
   ),
 }));
 
+const mockHandleSelectSession = vi.hoisted(() =>
+  vi.fn((session: { id: string }) => mockSetActiveSession(session.id)),
+);
+
 vi.mock("./components/use-chat-controller", async () => {
   const { useSyncExternalStore } = await import("react");
   return {
@@ -144,7 +222,7 @@ vi.mock("./components/use-chat-controller", async () => {
         () => storeRef.current,
       ).activeSessionId,
       selectedAgentId: null,
-      currentSession: null,
+      currentSession: controllerSessionRef.current.currentSession,
       isSessionArchived: false,
       isAgentArchived: false,
       isAgentRuntimeBound: true,
@@ -155,7 +233,7 @@ vi.mock("./components/use-chat-controller", async () => {
       pendingTask: null,
       pendingTaskId: null,
       showSkeleton: false,
-      hasMessages: false,
+      hasMessages: hasMessagesRef.current,
       firstItemIndex: 0,
       hasOlderMessages: false,
       isFetchingOlderMessages: false,
@@ -168,7 +246,7 @@ vi.mock("./components/use-chat-controller", async () => {
       handleUploadFile: vi.fn(),
       handleNewChat: vi.fn(),
       handleStartNewChat: mockStartNewChat,
-      handleSelectSession: vi.fn(),
+      handleSelectSession: mockHandleSelectSession,
       advanceSelectionAfterArchive: vi.fn(),
       archiveSession: vi.fn(),
       setActiveSession: mockSetActiveSession,
@@ -205,6 +283,22 @@ const agent: Agent = {
 };
 
 const NO_ACCESS_MSG = "You don't have access to chat with this agent.";
+
+function makeChatSession(overrides: Partial<ChatSession> = {}): ChatSession {
+  return {
+    id: "chat-1",
+    workspace_id: "ws-1",
+    agent_id: "agent-1",
+    creator_id: "user-1",
+    title: "Chat",
+    status: "active",
+    has_unread: false,
+    requirement_id: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
 
 function renderPage(search: string, { strict = false } = {}) {
   const replace = vi.fn();
@@ -253,12 +347,46 @@ function renderPage(search: string, { strict = false } = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  configStore.getState().setFeatureFlags({});
   storeRef.current = { activeSessionId: null };
   storeListeners.clear();
   availableAgentsRef.current = [agent];
   agentsSettledRef.current = true;
   platformWorkspace.slug = "acme";
   layout.width = DESKTOP;
+  requirementSurfaceRef.current = {
+    detail: null,
+    error: null,
+    isLoading: false,
+    canCompose: true,
+    projectLocked: false,
+  };
+  requirementSurfaceArgsRef.current = null;
+  controllerSessionRef.current = {
+    currentSession: null,
+  };
+  openRequirementMutationRef.current = {
+    mutateAsync: vi.fn(),
+    error: null as Error | null,
+    isPending: false,
+  };
+  hasMessagesRef.current = false;
+});
+
+describe("ChatPage Requirement intake entry", () => {
+  it.each([FOLD_INNER, DESKTOP])("offers first-time intake at width %s when enabled", (width) => {
+    layout.width = width;
+    configStore.getState().setFeatureFlags({ requirement_flow: true });
+    renderPage("");
+
+    expect(screen.getByRole("button", { name: "New requirement" })).toBeInTheDocument();
+    expect(screen.queryByTestId("requirement-flow-panel")).not.toBeInTheDocument();
+  });
+
+  it("hides intake while Requirement flow is disabled", () => {
+    renderPage("");
+    expect(screen.queryByRole("button", { name: "New requirement" })).not.toBeInTheDocument();
+  });
 });
 
 describe("ChatPage URL synchronization", () => {
@@ -434,7 +562,7 @@ describe("ChatPage ?agent= deep link", () => {
     rerender();
     expect(mockStartNewChat).not.toHaveBeenCalled();
     expect(mockToastError).not.toHaveBeenCalled();
-    expect(replace).not.toHaveBeenCalled();
+    expect(replace).toHaveBeenLastCalledWith("/acme/chat?session=session-9");
   });
 
   it("opens the compose pane under StrictMode with a persisted previous session", () => {
@@ -494,5 +622,202 @@ describe("ChatPage responsive layout", () => {
       screen.getByRole("button", { name: "select-thread" }),
     ).toBeInTheDocument();
     expect(screen.getByText("chat-input")).toBeInTheDocument();
+  });
+});
+
+describe("ChatPage Requirement flow", () => {
+  function makeRequirement(overrides: Partial<RequirementDetail> = {}): RequirementDetail {
+    return RequirementDetailSchema.parse({
+      id: "req-1",
+      workspaceId: "ws-1",
+      requesterId: "user-1",
+      revision: 4,
+      state: "clarifying",
+      intakeState: "clarifying",
+      permissions: { canOpen: true },
+      ...overrides,
+    });
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((done) => { resolve = done; });
+    return { promise, resolve };
+  }
+
+  it("waits for detail and opens once under StrictMode before selecting the session", async () => {
+    const response = deferred<RequirementOpenResponse>();
+    openRequirementMutationRef.current.mutateAsync = vi.fn().mockReturnValue(response.promise);
+    requirementSurfaceRef.current = {
+      detail: null,
+      error: null,
+      isLoading: true,
+      canCompose: false,
+      projectLocked: false,
+    };
+    const { replace, rerender } = renderPage("requirement=req-1", { strict: true });
+    expect(openRequirementMutationRef.current.mutateAsync).not.toHaveBeenCalled();
+
+    requirementSurfaceRef.current = {
+      detail: makeRequirement(),
+      error: null,
+      isLoading: false,
+      canCompose: false,
+      projectLocked: true,
+    };
+    rerender();
+    await waitFor(() => expect(openRequirementMutationRef.current.mutateAsync).toHaveBeenCalledTimes(1));
+    expect(openRequirementMutationRef.current.mutateAsync).toHaveBeenCalledWith({
+      expectedRevision: 4,
+      idempotencyKey: expect.any(String),
+    });
+    expect(replace).not.toHaveBeenCalledWith("/acme/chat?session=chat-1");
+
+    response.resolve({
+      requirement: makeRequirement({ chatSessionId: "chat-1" }),
+      session: { id: "chat-1" } as RequirementOpenResponse["session"],
+    });
+    await waitFor(() => expect(storeRef.current.activeSessionId).toBe("chat-1"));
+    expect(replace).toHaveBeenCalledWith("/acme/chat?session=chat-1&requirement=req-1");
+    expect(openRequirementMutationRef.current.mutateAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it("lands a cached Requirement deep link when another chat was active", async () => {
+    storeRef.current = { activeSessionId: "session-8" };
+    requirementSurfaceRef.current = {
+      detail: makeRequirement({ chatSessionId: "chat-1" }),
+      error: null,
+      isLoading: false,
+      canCompose: true,
+      projectLocked: true,
+    };
+    const { replace, rerender } = renderPage("requirement=req-1", { strict: true });
+
+    await waitFor(() => expect(storeRef.current.activeSessionId).toBe("chat-1"));
+    expect(replace).toHaveBeenCalledWith("/acme/chat?session=chat-1&requirement=req-1");
+    expect(openRequirementMutationRef.current.mutateAsync).not.toHaveBeenCalled();
+
+    replace.mockClear();
+    rerender({ search: "session=chat-1&requirement=req-1" });
+    expect(storeRef.current.activeSessionId).toBe("chat-1");
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("does not let a slow open overwrite an explicit thread selection", async () => {
+    const response = deferred<RequirementOpenResponse>();
+    openRequirementMutationRef.current.mutateAsync = vi.fn().mockReturnValue(response.promise);
+    requirementSurfaceRef.current = {
+      detail: makeRequirement(),
+      error: null,
+      isLoading: false,
+      canCompose: false,
+      projectLocked: true,
+    };
+    const { replace } = renderPage("requirement=req-1");
+    await waitFor(() => expect(openRequirementMutationRef.current.mutateAsync).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "select-thread" }));
+    expect(storeRef.current.activeSessionId).toBe("session-9");
+    response.resolve({
+      requirement: makeRequirement({ chatSessionId: "chat-1" }),
+      session: { id: "chat-1" } as RequirementOpenResponse["session"],
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(storeRef.current.activeSessionId).toBe("session-9");
+    expect(replace).toHaveBeenLastCalledWith("/acme/chat?session=session-9");
+    expect(replace).not.toHaveBeenCalledWith("/acme/chat?session=chat-1");
+  });
+
+  it.each([
+    { issueId: "issue-1", state: "done" as const },
+    { state: "cancelled" as const, cancelledAt: "2026-01-01T00:00:00Z" },
+  ])("closes composer and quick actions for a terminal Requirement", (terminal) => {
+    requirementSurfaceRef.current = {
+      detail: makeRequirement({ chatSessionId: "chat-1", ...terminal }),
+      error: null,
+      isLoading: false,
+      canCompose: false,
+      projectLocked: true,
+    };
+    hasMessagesRef.current = true;
+    renderPage("session=chat-1");
+
+    expect(screen.getByText("chat-input")).toHaveAttribute("data-disabled", "true");
+    expect(screen.getByText("chat-input")).toHaveAttribute("data-project-locked", "true");
+    expect(screen.getByText("chat-message-list")).toHaveAttribute("data-quick-actions-disabled", "true");
+    expect(screen.getByText("requirement-flow-panel")).toBeInTheDocument();
+  });
+
+  it.each(["requirement_flow_disabled", "plan_mode_not_supported"])(
+    "does not retry or select a session after open returns %s",
+    async (code) => {
+      const error = new ApiError("open rejected", 403, "Forbidden", { code });
+      openRequirementMutationRef.current.mutateAsync = vi.fn().mockRejectedValue(error);
+      requirementSurfaceRef.current = {
+        detail: makeRequirement(),
+        error: null,
+        isLoading: false,
+        canCompose: false,
+        projectLocked: true,
+      };
+      const { replace, rerender } = renderPage("requirement=req-1");
+      await waitFor(() => expect(openRequirementMutationRef.current.mutateAsync).toHaveBeenCalledTimes(1));
+
+      act(() => {
+        openRequirementMutationRef.current.error = error;
+      });
+      rerender();
+      expect(await screen.findByText("open rejected")).toBeInTheDocument();
+      expect(storeRef.current.activeSessionId).toBeNull();
+      expect(replace).not.toHaveBeenCalledWith("/acme/chat?session=chat-1");
+
+      rerender();
+      expect(openRequirementMutationRef.current.mutateAsync).toHaveBeenCalledTimes(1);
+    },
+  );
+});
+
+describe("ChatPage requirement chat-session hint", () => {
+  it.each(["session=chat-bound", "session=chat-bound&requirement=req-1"])(
+    "uses the loaded Requirement binding after opening %s",
+    (search) => {
+      const row = makeChatSession({ id: "chat-bound", requirement_id: "req-1" });
+      controllerSessionRef.current = { currentSession: row };
+      storeRef.current = { activeSessionId: row.id };
+      renderPage(search);
+
+      expect(requirementSurfaceArgsRef.current?.requirementId).toBeUndefined();
+      expect(requirementSurfaceArgsRef.current?.chatSession).toBe(row);
+      expect(openRequirementMutationRef.current.mutateAsync).not.toHaveBeenCalled();
+    },
+  );
+
+  it("passes no loaded row while the session list has not settled", () => {
+    // The hint stays null so the hook waits for the projection instead of
+    // probing: no participant-probe fallback exists on the normal path.
+    controllerSessionRef.current = { currentSession: null };
+    storeRef.current = { activeSessionId: "chat-1" };
+    renderPage("session=chat-1");
+
+    expect(requirementSurfaceArgsRef.current?.chatSessionId).toBe("chat-1");
+    expect(requirementSurfaceArgsRef.current?.chatSession).toBeNull();
+  });
+
+  it("passes null when no session is selected", () => {
+    controllerSessionRef.current = { currentSession: null };
+    storeRef.current = { activeSessionId: null };
+    renderPage("");
+
+    expect(requirementSurfaceArgsRef.current?.chatSession).toBeNull();
+  });
+
+  it("passes the loaded row straight through so an ordinary Chat follows requirement_id=null", () => {
+    const row = makeChatSession({ id: "chat-ordinary", requirement_id: null });
+    controllerSessionRef.current = { currentSession: row };
+    storeRef.current = { activeSessionId: row.id };
+    renderPage("session=chat-ordinary");
+
+    expect(requirementSurfaceArgsRef.current?.chatSession).toBe(row);
   });
 });

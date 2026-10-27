@@ -258,9 +258,22 @@ WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', 
     WHERE i.id = $1
       AND (sqlc.narg('expected_revision')::bigint IS NULL OR i.revision = sqlc.narg('expected_revision')::bigint)
     FOR UPDATE
+), candidate_gated AS (
+    -- Requirement status policy is defined once in migration 9083
+    -- (requirement_issue_status_allowed); see
+    -- docs/requirement-status-gate-inventory.md for the rule matrix.
+    -- Generic edits pass no action and therefore cannot change the status of a
+    -- requirement-bound issue; dedicated callers set requirement_action to the
+    -- explicit action they perform.
+    SELECT candidate.*,
+        requirement_issue_status_allowed(
+            candidate.workspace_id, candidate.id, candidate.status, candidate.next_status,
+            COALESCE(sqlc.narg('requirement_action')::text, '')
+        ) AS requirement_status_allowed
+    FROM candidate
 ), changed AS (
     SELECT
-        candidate.*,
+        candidate_gated.*,
         ROW(
             title, description, status, priority, assignee_type, assignee_id,
             position, start_date, due_date, parent_issue_id, project_id, stage,
@@ -281,7 +294,7 @@ WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', 
             next_parent_issue_id, next_project_id, next_stage,
             next_duplicate_of_issue_id
         ) AS did_activity
-    FROM candidate
+    FROM candidate_gated
 )
 UPDATE issue AS i SET
     title = changed.next_title,
@@ -309,6 +322,7 @@ WHERE i.id = changed.id
   -- Under READ COMMITTED, concurrent statements may both populate candidate
   -- from the same snapshot; EvalPlanQual re-evaluates this target-row predicate
   -- after waiting for the first writer, leaving the stale writer with 0 rows.
+  AND changed.requirement_status_allowed
   AND (sqlc.narg('expected_revision')::bigint IS NULL OR i.revision = sqlc.narg('expected_revision')::bigint)
 RETURNING i.*;
 
@@ -318,7 +332,20 @@ RETURNING i.*;
 -- completion) so a status write cannot land without one: an issue carrying its
 -- old column's rank into a new column is the bug this guards against. See the
 -- next_position CASE in UpdateIssue for the policy.
-WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', COALESCE(sqlc.narg('source_task_id')::uuid::text, ''), true))
+WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', COALESCE(sqlc.narg('source_task_id')::uuid::text, ''), true)), candidate AS MATERIALIZED (
+    -- Same shared policy as UpdateIssue (migration 9083), so the two main
+    -- status write paths cannot drift apart. The empty action forbids a status
+    -- change on a requirement-bound issue unless a dedicated caller supplies
+    -- the explicit action it performs.
+    SELECT i.*,
+        requirement_issue_status_allowed(
+            i.workspace_id, i.id, i.status, $2,
+            COALESCE(sqlc.narg('requirement_action')::text, '')
+        ) AS requirement_status_allowed
+    FROM issue AS i
+    WHERE i.id = $1 AND i.workspace_id = $3
+    FOR UPDATE
+)
 UPDATE issue AS i SET
     status = $2,
     -- Same rule as UpdateIssue: a mark only survives cancelled -> cancelled.
@@ -337,8 +364,8 @@ UPDATE issue AS i SET
         ELSE i.last_activity_at
     END,
     updated_at = now()
-FROM wakeup_source
-WHERE i.id = $1 AND i.workspace_id = $3
+FROM candidate CROSS JOIN wakeup_source
+WHERE i.id = candidate.id AND candidate.requirement_status_allowed
 RETURNING i.*;
 
 -- name: LockIssuesForDuplicateMark :many
@@ -390,6 +417,16 @@ WHERE id = $1 AND workspace_id = $2;
 SELECT id, number, title, status FROM issue
 WHERE workspace_id = sqlc.arg('workspace_id')
   AND id = ANY(sqlc.arg('ids')::uuid[]);
+
+-- name: ListRequirementIDsForIssues :many
+-- Additive requirement_id for issue responses. A requirement approval binds at
+-- most one issue, so clients open the Requirement directly from the issue
+-- instead of routing through its source chat session. One indexed read per
+-- page; an issue with no requirement row simply has no result row.
+SELECT issue_id, id AS requirement_id
+FROM requirement
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND issue_id = ANY(sqlc.arg('issue_ids')::uuid[]);
 
 -- name: ClearIssueDuplicatesOf :many
 -- Deleting an issue clears the pointers of its duplicates, the way deleting a
@@ -477,7 +514,12 @@ LIMIT 1;
 -- itself is correctly untouched, but the links are already gone) — the exact
 -- cross-tenant leak the #1661 guard above exists to prevent.
 WITH target AS (
-    SELECT issue.id FROM issue WHERE issue.id = $1 AND issue.workspace_id = $2
+    SELECT issue.id FROM issue
+    WHERE issue.id = $1 AND issue.workspace_id = $2
+      AND NOT EXISTS (
+          SELECT 1 FROM requirement r
+          WHERE r.issue_id = issue.id AND r.cancelled_at IS NULL
+      )
 ),
 cleared_wakeup_receipts AS (
  DELETE FROM issue_wakeup_receipt WHERE wakeup_id IN (SELECT id FROM issue_wakeup WHERE issue_id IN (SELECT target.id FROM target))

@@ -633,6 +633,7 @@ WHERE i.id = $1
   AND i.workspace_id = $2
   AND i.status = $4::text
   AND i.status <> $3::text
+  AND NOT EXISTS (SELECT 1 FROM requirement r WHERE r.issue_id = i.id)
   AND EXISTS (
       SELECT 1 FROM issue_p4_changelist link WHERE link.issue_id = i.id
   )

@@ -162,6 +162,9 @@ func (s *IssueService) SyncYixiezuoPM(ctx context.Context, p PMSyncParams) (PMSy
 	}
 	closureStatusChanged := false
 	if !found {
+		if err := GateRequirementIssueSourceCreation(ctx, q, p.WorkspaceID, p.Source.Source); err != nil {
+			return out, err
+		}
 		policy := ResolveIssueCountPolicy(ctx, s.Entitlements, p.WorkspaceID)
 		number, err := AllocateIssueNumber(ctx, q, p.WorkspaceID, policy)
 		if err != nil {
@@ -227,9 +230,14 @@ func (s *IssueService) SyncYixiezuoPM(ctx context.Context, p PMSyncParams) (PMSy
 			}
 		}
 		if len(out.Result.Changes) > 0 {
-			issue, err = q.UpdateIssue(ctx, params)
+			issue, err = UpdateIssueWithRequirementGate(ctx, q, params)
 			if err != nil {
 				return out, err
+			}
+			if params.Status.Valid && issue.Status != "blocked" {
+				if _, err := disableRequirementWakeupsForIssue(ctx, q, issue.WorkspaceID, issue.ID); err != nil {
+					return out, err
+				}
 			}
 			out.Result.State = "updated"
 		}

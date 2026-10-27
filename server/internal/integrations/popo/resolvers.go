@@ -11,6 +11,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
 )
@@ -123,6 +124,40 @@ func (r *identityResolver) ResolveSender(ctx context.Context, inst engine.Resolv
 type deduper struct{ q *db.Queries }
 
 func (r *deduper) Claim(ctx context.Context, installationID pgtype.UUID, messageID string) (pgtype.UUID, error) {
+	if bridgeID, robotID, eventID, ok := parsePopoInboundExecutionID(messageID); ok {
+		if _, err := r.q.GetLegacyPopoExecutionFence(ctx, db.GetLegacyPopoExecutionFenceParams{
+			InstallationID: installationID, EventID: eventID,
+		}); err == nil {
+			return pgtype.UUID{}, engine.ErrDuplicate
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return pgtype.UUID{}, err
+		}
+		bridgeUUID, err := util.ParseUUID(bridgeID)
+		if err != nil {
+			return pgtype.UUID{}, err
+		}
+		claim, err := r.q.ClaimChannelInboundDedup(ctx, db.ClaimChannelInboundDedupParams{
+			InstallationID: installationID, MessageID: messageID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return pgtype.UUID{}, engine.ErrDuplicate
+			}
+			return pgtype.UUID{}, err
+		}
+		if _, err := r.q.ClaimPopoInboundExecution(ctx, db.ClaimPopoInboundExecutionParams{
+			BridgeID: bridgeUUID, RobotID: robotID, EventID: eventID, ClaimToken: claim.ClaimToken,
+		}); err != nil {
+			_, releaseErr := r.q.ReleaseChannelInboundDedup(ctx, db.ReleaseChannelInboundDedupParams{
+				InstallationID: installationID, MessageID: messageID, ClaimToken: claim.ClaimToken,
+			})
+			if errors.Is(err, pgx.ErrNoRows) {
+				return pgtype.UUID{}, errors.Join(engine.ErrDuplicate, releaseErr)
+			}
+			return pgtype.UUID{}, errors.Join(err, releaseErr)
+		}
+		return claim.ClaimToken, nil
+	}
 	claim, err := r.q.ClaimChannelInboundDedup(ctx, db.ClaimChannelInboundDedupParams{
 		InstallationID: installationID,
 		MessageID:      messageID,
@@ -137,6 +172,19 @@ func (r *deduper) Claim(ctx context.Context, installationID pgtype.UUID, message
 }
 
 func (r *deduper) Mark(ctx context.Context, installationID pgtype.UUID, messageID string, claimToken pgtype.UUID) error {
+	if bridgeID, robotID, eventID, ok := parsePopoInboundExecutionID(messageID); ok {
+		bridgeUUID, err := util.ParseUUID(bridgeID)
+		if err != nil {
+			return err
+		}
+		_, popoErr := r.q.MarkPopoInboundExecutionProcessed(ctx, db.MarkPopoInboundExecutionProcessedParams{
+			BridgeID: bridgeUUID, RobotID: robotID, EventID: eventID, ClaimToken: claimToken,
+		})
+		_, channelErr := r.q.MarkChannelInboundDedupProcessed(ctx, db.MarkChannelInboundDedupProcessedParams{
+			InstallationID: installationID, MessageID: messageID, ClaimToken: claimToken,
+		})
+		return errors.Join(popoErr, channelErr)
+	}
 	_, err := r.q.MarkChannelInboundDedupProcessed(ctx, db.MarkChannelInboundDedupProcessedParams{
 		InstallationID: installationID,
 		MessageID:      messageID,
@@ -146,6 +194,19 @@ func (r *deduper) Mark(ctx context.Context, installationID pgtype.UUID, messageI
 }
 
 func (r *deduper) Release(ctx context.Context, installationID pgtype.UUID, messageID string, claimToken pgtype.UUID) error {
+	if bridgeID, robotID, eventID, ok := parsePopoInboundExecutionID(messageID); ok {
+		bridgeUUID, err := util.ParseUUID(bridgeID)
+		if err != nil {
+			return err
+		}
+		_, popoErr := r.q.ReleasePopoInboundExecution(ctx, db.ReleasePopoInboundExecutionParams{
+			BridgeID: bridgeUUID, RobotID: robotID, EventID: eventID, ClaimToken: claimToken,
+		})
+		_, channelErr := r.q.ReleaseChannelInboundDedup(ctx, db.ReleaseChannelInboundDedupParams{
+			InstallationID: installationID, MessageID: messageID, ClaimToken: claimToken,
+		})
+		return errors.Join(popoErr, channelErr)
+	}
 	_, err := r.q.ReleaseChannelInboundDedup(ctx, db.ReleaseChannelInboundDedupParams{
 		InstallationID: installationID,
 		MessageID:      messageID,
@@ -191,6 +252,9 @@ func (r *sessionBinder) StartSession(ctx context.Context, p engine.StartSessionP
 		PersistMessage: p.PersistMessage, HistoryBoundaryPending: p.HistoryBoundaryPending,
 		BeforeCommit: p.BeforeCommit,
 	})
+	if _, _, _, ok := parsePopoInboundExecutionID(p.Message.MessageID); ok {
+		result.Append.DedupMarked = false
+	}
 	return engine.StartSessionResult{
 		SessionID: result.SessionID, BindingID: result.BindingID,
 		RouteRevision: result.RouteRevision, Append: result.Append,
@@ -206,7 +270,7 @@ func (r *sessionBinder) AppendMessage(ctx context.Context, p engine.AppendParams
 	if commandText == "" {
 		commandText = p.Message.Text
 	}
-	return r.session.AppendUserMessage(ctx, engine.AppendInput{
+	result, err := r.session.AppendUserMessage(ctx, engine.AppendInput{
 		SessionID:           p.SessionID,
 		Sender:              p.Sender,
 		InstallationID:      p.InstallationID,
@@ -217,6 +281,10 @@ func (r *sessionBinder) AppendMessage(ctx context.Context, p engine.AppendParams
 		MediaPendingSeconds: p.MediaPendingSeconds,
 		ForceFresh:          p.Message.ForceFresh,
 	})
+	if _, _, _, ok := parsePopoInboundExecutionID(p.Message.MessageID); ok {
+		result.DedupMarked = false
+	}
+	return result, err
 }
 
 func (r *sessionBinder) BindMedia(ctx context.Context, p engine.BindMediaParams) (engine.BindMediaResult, error) {

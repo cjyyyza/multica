@@ -733,6 +733,11 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 		return fmt.Errorf("get next issue position: %w", err)
 	}
 
+	if err := GateRequirementIssueCreation(ctx, qtx, IssueCreateParams{
+		WorkspaceID: ap.WorkspaceID, OriginType: pgtype.Text{String: "autopilot", Valid: true}, OriginID: ap.ID,
+	}, IssueCreateOpts{}); err != nil {
+		return err
+	}
 	issue, err := qtx.CreateIssueWithOrigin(ctx, db.CreateIssueWithOriginParams{
 		ID:           dbid.NewV7(),
 		WorkspaceID:  ap.WorkspaceID,

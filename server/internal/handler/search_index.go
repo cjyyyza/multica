@@ -571,11 +571,13 @@ func (h *Handler) searchIndexIssues(ctx context.Context, wsUUID pgtype.UUID, iss
 		return out
 	}
 	prefix := h.getIssuePrefix(ctx, wsUUID)
+	ids := make([]pgtype.UUID, 0, len(issues))
 	var originals []pgtype.UUID
 	for _, is := range issues {
+		ids = append(ids, is.ID)
 		originals = appendDuplicateOriginal(originals, is.Status, is.DuplicateOfIssueID)
 	}
-	fill := h.newStatusCategoryFiller(ctx, wsUUID, originals...)
+	fill := h.newIssueResponseFiller(ctx, wsUUID, ids, originals...)
 	for _, is := range issues {
 		resp := issueToResponse(is, prefix)
 		fill(&resp)

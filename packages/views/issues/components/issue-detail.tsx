@@ -118,6 +118,7 @@ import { WakeupsSection } from "./wakeups-section";
 import { QuickActionsSection } from "./quick-actions-section";
 import { PluginPanelSection } from "../../plugins";
 import { YixiezuoSource } from "./yixiezuo-source";
+import { RequirementFlowPanel, useRequirementSurface } from "../../requirements";
 import { PullRequestsSection } from "./pull-requests-section";
 import { P4ChangelistsSection, useIssueP4Surface } from "./p4-changelists-section";
 import { useGitHubSettings } from "@multica/core/github";
@@ -1528,6 +1529,16 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       return cached?.description != null ? cached : undefined;
     },
   });
+  const isRequirementIssue = issue?.origin_type === "requirement_chat";
+  const requirementSurface = useRequirementSurface({
+    wsId,
+    // Current backends project the Requirement id directly on the Issue.
+    requirementId: issue?.requirement_id,
+    // Old backends omit that projection; only then does the hook fall back to
+    // the source chat session id (`origin_id`) through the legacy probe.
+    chatSessionId: issue?.origin_id,
+    enabled: isRequirementIssue,
+  });
   // Pull requests for a Perforce project follow the issue, not the workspace
   // depot list: a project depot or an already-linked changelist is enough.
   const showP4Surface = useIssueP4Surface(id, issue?.project_id ?? null).visible;
@@ -2658,6 +2669,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
 
   const sidebarContent = (
     <div className="space-y-5">
+      {isRequirementIssue && <RequirementFlowPanel wsId={wsId} surface={requirementSurface} />}
       {/* Properties */}
       <div>
         <button
@@ -2671,15 +2683,27 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         {propertiesOpen && <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 pl-2">
           {/* Core props — always rendered. */}
           <PropRow label={t(($) => $.detail.prop_status)}>
-            <StatusPicker
-              status={issue.status}
-              onUpdate={handleUpdateField}
-              align="start"
-              projectId={issue.project_id}
-              issue={issue}
-              onMarkDuplicate={actions.openMarkDuplicate}
-              isDuplicate={isDuplicateIssue(issue)}
-            />
+            {isRequirementIssue ? (
+              <span data-testid="requirement-issue-status" className="inline-flex items-center gap-1.5">
+                <StatusIcon
+                  status={issue.status}
+                  category={resolveStatusCategory(issue.status)}
+                  color={resolveStatusColor(issue.status)}
+                  icon={resolveStatusIcon(issue.status)}
+                />
+                {resolveStatusLabel(issue.status)}
+              </span>
+            ) : (
+              <StatusPicker
+                status={issue.status}
+                onUpdate={handleUpdateField}
+                align="start"
+                projectId={issue.project_id}
+                issue={issue}
+                onMarkDuplicate={actions.openMarkDuplicate}
+                isDuplicate={isDuplicateIssue(issue)}
+              />
+            )}
           </PropRow>
           <PropRow label={t(($) => $.detail.prop_assignee)}>
             <AssigneePicker assigneeType={issue.assignee_type} assigneeId={issue.assignee_id} onUpdate={handleUpdateField} align="start" />
@@ -3170,7 +3194,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 It self-hides when no agent is active. */}
             <IssueAgentHeaderChip issueId={id} />
             <IssueWakeupHeaderChip issueId={id} onOpen={openWakeups} />
-            {onDone && !issueBehavesAsAny(issue, ["done", "closed"]) && (
+            {!isRequirementIssue && onDone && !issueBehavesAsAny(issue, ["done", "closed"]) && (
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -3178,6 +3202,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                       variant="ghost"
                       size="icon-sm"
                       className="text-muted-foreground"
+                      aria-label={t(($) => $.detail.mark_done_tooltip)}
                       onClick={() => { handleUpdateField({ status: "done" }); onDone?.(); }}
                     >
                       <CircleCheck />

@@ -1,6 +1,6 @@
 -- name: CreateIssueWakeup :one
-INSERT INTO issue_wakeup(id,workspace_id,issue_id,agent_id,created_by,source_task_id,parent_comment_id,instruction,kind,mode,event_types,filter_agent_id,filter_task_id,filter_actor_type,filter_actor_id,interval_seconds,cron_expression,timezone,next_fire_at,expires_at,expiry_seconds,on_timeout,condition,max_fires)
-VALUES(@id,@workspace_id,@issue_id,@agent_id,@created_by,sqlc.narg(source_task_id),sqlc.narg(parent_comment_id),@instruction,@kind,@mode,@event_types,sqlc.narg(filter_agent_id),sqlc.narg(filter_task_id),sqlc.narg(filter_actor_type),sqlc.narg(filter_actor_id),sqlc.narg(interval_seconds),sqlc.narg(cron_expression),@timezone,sqlc.narg(next_fire_at),sqlc.narg(expires_at),sqlc.narg(expiry_seconds),sqlc.narg(on_timeout),sqlc.narg(condition),sqlc.narg(max_fires)) RETURNING *;
+INSERT INTO issue_wakeup(id,workspace_id,issue_id,agent_id,created_by,source_task_id,parent_comment_id,instruction,kind,mode,event_types,filter_agent_id,filter_task_id,filter_actor_type,filter_actor_id,interval_seconds,cron_expression,timezone,next_fire_at,expires_at,expiry_seconds,on_timeout,condition,max_fires,requirement_id)
+VALUES(@id,@workspace_id,@issue_id,@agent_id,@created_by,sqlc.narg(source_task_id),sqlc.narg(parent_comment_id),@instruction,@kind,@mode,@event_types,sqlc.narg(filter_agent_id),sqlc.narg(filter_task_id),sqlc.narg(filter_actor_type),sqlc.narg(filter_actor_id),sqlc.narg(interval_seconds),sqlc.narg(cron_expression),@timezone,sqlc.narg(next_fire_at),sqlc.narg(expires_at),sqlc.narg(expiry_seconds),sqlc.narg(on_timeout),sqlc.narg(condition),sqlc.narg(max_fires),sqlc.narg(requirement_id)) RETURNING *;
 -- name: ListIssueWakeups :many
 SELECT w.id,w.workspace_id,w.issue_id,w.agent_id,w.created_by,w.source_task_id,w.parent_comment_id,w.instruction,
  w.kind,w.mode,w.event_types,w.filter_actor_type,
@@ -67,6 +67,51 @@ WHERE context->>'wakeup_id'= @wakeup_id::text AND status IN ('queued','deferred'
 -- A system rule only rests while its issue is closed and resumes on reopen.
 UPDATE issue_wakeup SET enabled=false,disabled_at=clock_timestamp(),updated_at=clock_timestamp()
 WHERE issue_id= @issue_id AND disabled_at IS NULL AND system_rule IS NULL;
+-- name: DisableIssueWakeupByID :exec
+UPDATE issue_wakeup SET enabled=false,disabled_at=COALESCE(disabled_at,clock_timestamp()),updated_at=clock_timestamp()
+WHERE id= @id;
+
+-- name: ListRequirementIssueWakeups :many
+-- Requirement questions are ordinary issue wakeups: one row per
+-- (requirement_id, parent_comment_id), kept for the life of the question.
+SELECT * FROM issue_wakeup
+WHERE workspace_id= @workspace_id AND requirement_id= @requirement_id
+ORDER BY created_at,id;
+
+-- name: HasActiveRequirementIssueWakeup :one
+-- A blocked notification is only fresh while its question wakeup is armed or
+-- triggered; a fenced wakeup belongs to an answered or abandoned question.
+SELECT EXISTS(
+    SELECT 1 FROM issue_wakeup
+    WHERE workspace_id= @workspace_id AND requirement_id= @requirement_id
+      AND parent_comment_id= @parent_comment_id AND disabled_at IS NULL
+) AS active;
+
+-- name: RearmRequirementIssueWakeup :one
+-- Recovery re-arms the same row. revision is the generation CAS: a stale
+-- completed run can no longer advance a question rearmed by someone else.
+UPDATE issue_wakeup
+SET revision = revision + 1,
+    enabled = true,
+    disabled_at = NULL,
+    source_task_id = COALESCE(sqlc.narg(source_task_id),source_task_id),
+    updated_at = clock_timestamp()
+WHERE id= @id AND workspace_id= @workspace_id AND requirement_id IS NOT NULL
+  AND revision= @expected_revision AND disabled_at IS NULL
+RETURNING *;
+
+-- name: MarkRequirementIssueWakeupTriggered :one
+-- A one-shot question woke its target: it stays triggered (no disabled_at) so
+-- recovery can rearm it once the run ends.
+UPDATE issue_wakeup
+SET enabled = false,
+    last_triggered_comment_id= @triggered_comment_id,
+    last_task_id=COALESCE(sqlc.narg(last_task_id),last_task_id),
+    updated_at = clock_timestamp()
+WHERE id= @id AND workspace_id= @workspace_id AND requirement_id IS NOT NULL
+  AND revision= @expected_revision AND disabled_at IS NULL
+RETURNING *;
+
 -- name: CancelUnstartedIssueWakeupTasks :many
 UPDATE agent_task_queue SET status='cancelled',completed_at=now(),error='Issue closed; wakeup disabled'
 WHERE issue_id= @issue_id AND context->>'wakeup_id' IS NOT NULL AND status IN ('queued','deferred') AND started_at IS NULL RETURNING *;
@@ -177,7 +222,7 @@ INSERT INTO agent_task_queue (
     coalesced_comment_ids, trigger_summary, force_fresh_session, is_leader_task, handoff_note,
     squad_id, context, originator_user_id, accountable_user_id, runtime_mcp_overlay, runtime_connected_apps,
     originator_source, delegated_from_task_id, rule_version_id, rerun_of_task_id, trigger_evidence_kind, trigger_evidence_ref_id,
-    workflow_step, id
+    workflow_step, id, mode, requirement_id
 )
 SELECT
     $1, $2, $3, 'queued', $4, sqlc.narg(trigger_comment_id),
@@ -210,8 +255,19 @@ SELECT
         (SELECT s.workflow_step FROM agent_task_queue s WHERE s.id = sqlc.narg(delegated_from_task_id) AND s.issue_id = $3),
         (SELECT i.status FROM issue i WHERE i.id = $3)
     ),
-    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
+    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()),
+    'execute',
+    (SELECT r.id FROM requirement r WHERE r.issue_id = $3)
 WHERE lock_task_owner_rows($1, $3, $2)
+  AND NOT EXISTS (
+      SELECT 1 FROM requirement r
+      LEFT JOIN issue terminal_issue ON terminal_issue.id = r.issue_id AND terminal_issue.workspace_id = r.workspace_id
+      WHERE r.issue_id = $3
+        AND (
+            r.cancelled_at IS NOT NULL
+            OR issue_effective_status(terminal_issue.workspace_id, terminal_issue.status) IN ('done', 'cancelled')
+        )
+  )
 RETURNING *;
 
 -- name: LocklessWakeup :one

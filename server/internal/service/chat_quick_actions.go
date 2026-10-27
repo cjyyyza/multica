@@ -206,6 +206,10 @@ func (s *TaskService) chatQuickActionsEligible(ctx context.Context, task db.Agen
 	if !task.ChatSessionID.Valid {
 		return false
 	}
+	session, err := s.Queries.GetChatSession(ctx, task.ChatSessionID)
+	if err != nil || s.CheckRequirementChatExecution(ctx, session) != nil {
+		return false
+	}
 	// Only an ordinary reply can seed suggestions: a no_response outcome has
 	// nothing to build on, and an attachment-only reply has no text to anchor in.
 	if msg == nil || msg.MessageKind != protocol.ChatMessageKindMessage {

@@ -53,6 +53,7 @@ import {
 } from "@multica/core/types";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useLocale, useT, useTimeAgo } from "../../i18n";
+import { RequirementIntakeSettings } from "../../requirements/components/requirement-intake-settings";
 
 const SELECT_CLASS =
   "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-title-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 md:text-body dark:bg-input/30";
@@ -588,13 +589,14 @@ function InstallationRow({
   onDisconnect: () => void;
 }) {
   const { t } = useT("settings");
+  const wsId = useWorkspaceId();
   const locale = useLocale();
   const { getAgentName } = useActorName();
   const isActive = installation.status === "active";
   const agentName = getAgentName(installation.agent_id);
   return (
-    <div className="flex items-start justify-between gap-4 py-3 first:pt-0 last:pb-0">
-      <div className="flex items-start gap-3">
+    <div className="flex flex-col gap-3 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex min-w-0 flex-1 items-start gap-3">
         <ActorAvatar
           actorType="agent"
           actorId={installation.agent_id}
@@ -602,7 +604,7 @@ function InstallationRow({
           enableHoverCard
           profileLink
         />
-        <div className="space-y-1">
+        <div className="min-w-0 flex-1 space-y-1">
           <p className="text-body font-medium">
             {agentName}
             {installation.robot_id ? (
@@ -623,6 +625,7 @@ function InstallationRow({
               when: new Date(installation.installed_at).toLocaleString(locale),
             })}
           </p>
+          {canManage && isActive ? <RequirementIntakeSettings wsId={wsId} installation={installation} /> : null}
         </div>
       </div>
       {canManage && isActive && (

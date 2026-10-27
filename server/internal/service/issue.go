@@ -29,6 +29,8 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+var ErrSourceAttachmentsUnavailable = errors.New("source attachments are unavailable")
+
 // IssueService is the shared issue-creation entry point for HTTP and channel
 // callers. It keeps numbering, duplicate guards, attachments, broadcasts,
 // analytics, and agent/squad enqueue aligned. Callers resolve transport inputs
@@ -136,9 +138,9 @@ type IssueCreateOpts struct {
 	Platform string
 
 	// AssignedAgentRunFireAt creates the automatic assigned-agent task in a
-	// durable deferred state. Channel /issue uses this while detached media is
-	// still resolving, then promotes the returned task after attachment binding.
-	// Zero preserves the ordinary immediate enqueue path.
+	// durable deferred state. Channel /issue and requirement approval persist
+	// that task with the issue, then promote it when their post-commit work is
+	// ready. Zero preserves the ordinary immediate enqueue path.
 	AssignedAgentRunFireAt time.Time
 
 	// ChannelIdempotency, when set, keys this create by the inbound channel
@@ -149,6 +151,10 @@ type IssueCreateOpts struct {
 	// ChannelSource freezes the originating chat for channel-created issues
 	// so later comments and run results return to that route.
 	ChannelSource *ChannelIssueSource
+
+	// RequirementApproval is present only in the server-owned approve transaction.
+	// Origin fields alone never satisfy the requirement gate.
+	RequirementApproval *RequirementApprovalContext
 }
 
 // ChannelIdempotencyKey is the external event key for a channel issue write.
@@ -240,38 +246,45 @@ type IssueCreateResult struct {
 	// IdempotentReplay is true when ChannelIdempotency found a prior write for
 	// the same inbound event. The returned Issue is the original row.
 	IdempotentReplay bool
+	createParams     IssueCreateParams
+	assignedTask     db.AgentTaskQueue
 }
 
-// Create runs the full issue-creation pipeline atomically end-to-end:
-//
-//  1. Begin transaction.
-//  2. Resolve & validate parent / project belong to the same workspace.
-//  3. Lock & check the duplicate guard.
-//  4. Increment the workspace issue counter.
-//  5. Insert the issue row (with optional origin stamping).
-//  6. Commit.
-//  7. Link any pre-uploaded attachments (post-commit, idempotent).
-//  8. For a media-gated channel issue, persist its deferred assigned-agent
-//     task in the issue transaction so both rows become visible atomically.
-//     Ordinary creates keep their existing event-before-enqueue ordering.
-//  9. Publish EventIssueCreated to the bus (payload via opts.BroadcastPayload).
-//  10. Capture the IssueCreated analytics event.
-//  11. Enqueue the ordinary agent task or trigger the squad leader when the
-//     issue is assigned and not in `backlog`.
-//
-// Validation that lives in the service (parent existence, project
-// workspace membership, parent → project back-fill) is enforced here so
-// every create entry — HTTP `POST /issues`, Lark `/issue`, future
-// MCP/API-key callers — shares the same workspace boundary semantics.
-// Caller-owned validation is limited to transport-shaped checks: title
-// required, RFC3339 date format, assignee pair sanity.
+type IssueCreatePreparation struct {
+	IssueCountPolicy IssueCountPolicy
+}
+
+func (s *IssueService) prepareIssueCreate(ctx context.Context, p IssueCreateParams) IssueCreatePreparation {
+	return IssueCreatePreparation{IssueCountPolicy: ResolveIssueCountPolicy(ctx, s.Entitlements, p.WorkspaceID)}
+}
+
+// Create commits the persistent issue pipeline with CreateInTx, then runs
+// FinalizeCreate for attachments, events, analytics, and ordinary assignment.
+// Channel idempotent replays return the original issue without repeating those
+// post-commit side effects.
 func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts IssueCreateOpts) (IssueCreateResult, error) {
-	issueCountPolicy := ResolveIssueCountPolicy(ctx, s.Entitlements, p.WorkspaceID)
+	prep := s.prepareIssueCreate(ctx, p)
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	result, err := s.CreateInTx(ctx, tx, p, opts, prep)
+	if err != nil || result.IdempotentReplay {
+		return result, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return IssueCreateResult{}, fmt.Errorf("commit: %w", err)
+	}
+	return s.FinalizeCreate(ctx, result, result.createParams, opts)
+}
+
+// CreateInTx writes the issue and any deferred assigned task through the
+// caller's transaction. It never commits or performs post-commit side effects.
+// Parent, project, label, property, duplicate, and requirement gates are shared
+// by HTTP, channel, agent, and embedded service callers.
+func (s *IssueService) CreateInTx(ctx context.Context, tx pgx.Tx, p IssueCreateParams, opts IssueCreateOpts, prep IssueCreatePreparation) (IssueCreateResult, error) {
+	issueCountPolicy := prep.IssueCountPolicy
 	qtx := s.Queries.WithTx(tx)
 	if p.Yixiezuo != nil {
 		source := p.Yixiezuo.Source
@@ -318,6 +331,9 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		return IssueCreateResult{}, replayErr
 	} else if ok {
 		return IssueCreateResult{Issue: replay, IdempotentReplay: true}, nil
+	}
+	if err := GateRequirementIssueCreation(ctx, qtx, p, opts); err != nil {
+		return IssueCreateResult{}, err
 	}
 
 	if p.Yixiezuo != nil {
@@ -506,6 +522,9 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	}
 	if err != nil {
 		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.ConstraintName == "idx_issue_requirement_chat_origin" {
+			return IssueCreateResult{}, &RequirementChatExecutionError{Code: RequirementChatIssueExistsCode, IssueID: util.UUIDToString(issue.ID)}
+		}
 		if errors.As(err, &pgErr) && pgErr.ConstraintName == "issue_properties_size_limit" {
 			return IssueCreateResult{}, ErrIssuePropertiesTooLarge
 		}
@@ -517,7 +536,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		if len(p.AttachmentIDs) > 0 {
 			linked, err := qtx.LinkAttachmentsToIssue(ctx, db.LinkAttachmentsToIssueParams{IssueID: issue.ID, WorkspaceID: p.WorkspaceID, AttachmentIds: p.AttachmentIDs, BumpRevision: false})
 			if err != nil || linked.LinkedCount != int64(len(p.AttachmentIDs)) {
-				return IssueCreateResult{}, fmt.Errorf("source attachments are unavailable; preview the issue again")
+				return IssueCreateResult{}, fmt.Errorf("%w; preview the issue again", ErrSourceAttachmentsUnavailable)
 			}
 		}
 		source := p.Yixiezuo.Source
@@ -609,6 +628,38 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		}
 	}
 
+	if p.OriginType.Valid && p.OriginType.String == "requirement_chat" && opts.RequirementApproval != nil {
+		approval := opts.RequirementApproval
+		bound, bindErr := qtx.BindRequirementIssue(ctx, db.BindRequirementIssueParams{
+			ID: approval.RequirementID, WorkspaceID: p.WorkspaceID, ExpectedRevision: approval.ExpectedRevision,
+			ChatSessionID: p.OriginID, IssueID: issue.ID,
+		})
+		if errors.Is(bindErr, pgx.ErrNoRows) {
+			current, loadErr := qtx.GetRequirement(ctx, db.GetRequirementParams{ID: approval.RequirementID, WorkspaceID: p.WorkspaceID})
+			if loadErr != nil {
+				return IssueCreateResult{}, fmt.Errorf("load rejected requirement issue binding: %w", loadErr)
+			}
+			if err := requirementCreationGateError(current); err != nil {
+				return IssueCreateResult{}, err
+			}
+			return IssueCreateResult{}, requirementRevisionConflict(approval.RequirementID, approval.ExpectedRevision, current.Revision)
+		}
+		if bindErr != nil {
+			return IssueCreateResult{}, fmt.Errorf("bind requirement issue: %w", bindErr)
+		}
+		if bound.IssueID != issue.ID {
+			return IssueCreateResult{}, errors.New("requirement approval bound a different issue")
+		}
+		if len(p.AttachmentIDs) > 0 {
+			linked, err := qtx.LinkAttachmentsToIssue(ctx, db.LinkAttachmentsToIssueParams{
+				IssueID: issue.ID, WorkspaceID: p.WorkspaceID, AttachmentIds: p.AttachmentIDs, BumpRevision: false,
+			})
+			if err != nil || linked.LinkedCount != int64(len(p.AttachmentIDs)) {
+				return IssueCreateResult{}, fmt.Errorf("%w; preview the issue again", ErrSourceAttachmentsUnavailable)
+			}
+		}
+	}
+
 	if !opts.AssignedAgentRunFireAt.IsZero() && s.shouldEnqueueAgentTaskWithQueries(ctx, qtx, issue) {
 		// The issue must never become visible without its media-gated assigned
 		// task. Inserting both rows through qtx makes the unique-index winner
@@ -627,10 +678,25 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		return IssueCreateResult{}, err
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return IssueCreateResult{}, fmt.Errorf("commit: %w", err)
-	}
+	return IssueCreateResult{Issue: issue, Labels: labels, AssignedTaskID: assignedTask.ID, createParams: p, assignedTask: assignedTask}, nil
+}
 
+// FinalizeCreate performs side effects only after the CreateInTx transaction
+// commits. The result carries the effective source parameters and full deferred
+// task snapshot so embedded creations behave exactly like Create.
+func (s *IssueService) FinalizeCreate(ctx context.Context, result IssueCreateResult, p IssueCreateParams, opts IssueCreateOpts) (IssueCreateResult, error) {
+	if result.IdempotentReplay {
+		return result, nil
+	}
+	if result.createParams.WorkspaceID.Valid {
+		p = result.createParams
+	}
+	issue := result.Issue
+	labels := result.Labels
+	assignedTask := result.assignedTask
+	if !assignedTask.ID.Valid {
+		assignedTask.ID = result.AssignedTaskID
+	}
 	attachments := s.linkAttachments(ctx, issue, p.AttachmentIDs)
 
 	actorID := opts.ActorID
@@ -655,9 +721,8 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 					"error", err)
 			}
 		} else if s.shouldEnqueueSquadLeaderOnAssign(ctx, issue) {
-			// AssignedAgentRunFireAt currently belongs to channel /issue, which
-			// always resolves an agent assignee. Preserve the ordinary squad path
-			// for any future caller that supplies the option with a squad.
+			// Current deferred-create callers resolve an agent assignee. Preserve
+			// the ordinary squad path for any future caller that supplies a squad.
 			s.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, p.CreatorType, actorID)
 		}
 	}
@@ -881,8 +946,13 @@ func (s *IssueService) persistChannelIssueLedger(ctx context.Context, qtx *db.Qu
 			ChatType:       src.ChatType,
 			BindingID:      src.BindingID,
 			RouteRevision:  src.RouteRevision,
-		}); err != nil && !isUniqueViolation(err) {
-			return fmt.Errorf("persist channel issue source: %w", err)
+		}); err != nil {
+			if opts.RequirementApproval != nil {
+				return requirementSourceLinkUnavailable("channel source association could not be verified")
+			}
+			if !isUniqueViolation(err) {
+				return fmt.Errorf("persist channel issue source: %w", err)
+			}
 		}
 	}
 	return nil
@@ -1016,7 +1086,7 @@ func classifyOrigin(issue db.Issue, opts IssueCreateOpts) (source, taskID, autop
 		return analytics.SourceManual, originID, ""
 	case "autopilot":
 		return analytics.SourceAutopilot, "", originID
-	case "lark_chat", "slack_chat", "dingtalk_chat", "wecom_chat", "telegram_chat", "popo_chat":
+	case "lark_chat", "slack_chat", "dingtalk_chat", "wecom_chat", "telegram_chat", "popo_chat", "requirement_chat":
 		return analytics.SourceManual, "", ""
 	default:
 		slog.Warn("analytics: unknown issue origin type",

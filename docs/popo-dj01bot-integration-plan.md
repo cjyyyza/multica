@@ -261,6 +261,10 @@ P1/P2 可对测试工作区开放，最终交付以 P5 为准。每批按行为�
 
 两端必须按此实现。P1 不实现扫码、媒体、群聊 @、`/reply` `/status` `/stop`、Issue 来源订阅。
 
+> 范围说明：本节只描述 `popo_bridge_command` 的 v1 通道，适用于普通出站、入站、媒体和控制命令。Requirement
+> 通知在 bridge 协商 `protocol_version = 2` 后走 §11 的原生 attempt/lease/receipt/recovery；v2 **不继承**本节
+> §8.3 的 `receipt_attempt_v1` 前提，也不继承 §8.6「超时未回执则重新 pending」的 v1 reclaim 语义。
+
 ### 8.1 鉴权
 
 | 路由 | 鉴权 |
@@ -315,6 +319,8 @@ TTL 15 分钟，单次兑换。服务端只存 hash。
   "capabilities": ["inbound", "send"]
 }
 ```
+
+当前 dj01bot v1 只声明 `inbound` 和 `send`。`receipt_attempt_v1` 不是已上线能力；只有未来双方明确协商并声明后，才允许 confirmed-failed 命令进入 `attempt>1`。未声明时，自动恢复、attempt>1 authorize 和手动 reconcile 都必须 fail closed，保持原 attempt。该约束**只约束 v1 command**；v2 requirement 传输原生携带 attempt/lease/payload_hash，不要求 bridge 报 `receipt_attempt_v1`（见 §11）。
 
 成功：
 
@@ -372,9 +378,10 @@ pairing 过期/已用：410。未知协议版本：400。
 }
 ```
 
-- 服务端用 bridge token 解析 workspace，再用 `(channel_type=popo, app_id=robot_id)` 解析安装。不信任 body 里的 workspace/agent/user。
-- 同一 `(installation_id, event_id)` 重放返回 200 `{ "accepted": true, "duplicate": true }`，不第二次进入引擎。
-- `{ "accepted": true }` 只表示已持久化（或判定重复）。引擎执行失败仍是 200 accepted + 后续失败回复，除非请求本身非法（400/401/404/503）。
+- 服务端用 bridge token 解析 workspace，再用 `(channel_type=popo, app_id=robot_id)` 校验当前安装和路由。不信任 body 里的 workspace/agent/user；installation 只用于路由，不再充当事件身份。
+- durable dedupe key 是认证 `(bridge_id, robot_id, event_id)`。legacy 无 `payload_hash` 的重放仍返回 200 `{ "accepted": true, "duplicate": true }`，但不宣称与 extended 相同的恢复证据强度。
+- extended wire 可附加 `payload_hash`，保存的是 bridge 的 pre-download 证据，不对 staged POST body 重新 hash 冒充。首次 durable commit 后返回 200 `{ "accepted": true }`；同 key 同 hash 返回 409 `{ "accepted": true, "code": "DURABLE_DUPLICATE", "payload_hash": "..." }`；异 hash 或 legacy hash 缺失返回 409 `{ "accepted": false, "code": "IDENTITY_CONFLICT" }`；路由失败返回 409 `{ "accepted": false, "code": "ROUTE_CONFLICT" }`。
+- `{ "accepted": true }` 只表示 transport 已持久化（或有完整 duplicate 证据），不表示业务执行完成。重放可进入引擎恢复未完成工作，bridge/robot/event 的执行 fence 防止重复副作用，换 chat 不能绕过。
 - P1 只处理 `chat.type=p2p` 且 `addressed_to_bot=true` 的文本。群聊未 @、非文本：`accepted: false`，不报错。
 - 未绑定成员走现有 `OutcomeNeedsBinding` 私聊发绑定链接。
 
@@ -383,7 +390,7 @@ pairing 过期/已用：410。未知协议版本：400。
 `GET /api/popo/bridge/commands?wait_ms=25000`
 
 - `wait_ms` 默认 25000，上限 30000。无命令时阻塞至超时后返回 `{ "commands": [] }`。
-- 每次最多 20 条。领取后状态 `leased`；发送命令租约 60s，扫码命令租约 12 分钟，覆盖最长 10 分钟的扫码等待；超时未回执则重新 `pending`。
+- 每次最多 20 条。领取后状态 `leased`；发送命令租约 60s，扫码命令租约 12 分钟，覆盖最长 10 分钟的扫码等待；超时未回执则重新 `pending`。这是 **v1 command** 的 reclaim 语义：v2 requirement delivery 不使用它，过期 lease 的恢复方式见 §11。
 - P1 命令类型只有 `send`：
 
 ```json
@@ -433,11 +440,16 @@ Windows 在准备附件前、实际调用 POPO 发送前，分别调用
 }
 ```
 
-`status`：`delivered` | `failed` | `unknown`。
+`status`：`delivered` | `failed` | `unknown` | `cancelled` | `expired` | `superseded`。
 
 - `delivered`：`send` 命令必须带真实 `remote_message_id`；扫码和取消扫码等控制命令不要求消息 ID。
-- `failed`：确认未送到，可另建命令重试（P1 可先不自动重试）。
+- `failed`：确认未送到。当前 v1 不自动重发；confirmed-failed recovery 只在未来明确协商 `receipt_attempt_v1` 后可用。
 - `unknown`：POPO 可能已收到；**禁止**再发同一 `delivery_id`。
+- `cancelled`：authorize 拒绝，或发送前被撤销／业务 fence，未确认送达。
+- `expired`：队列或业务有效期已过，未确认送达。
+- `superseded`：对应业务 occurrence 已被替代，未确认送达。
+- `cancelled`、`expired`、`superseded` 都是 terminal，command 原样持久化且不自动重发。Requirement outbox 中 `cancelled`／`expired` 投影为 `failed`（已有业务 `superseded` 不变），`superseded` 投影为 `superseded`，均不能进入 confirmed-failed 重发。
+- Requirement 命令若随后收到带真实消息 ID 的 `delivered` evidence，则同事务记录实际送达，并保留已有 `superseded_at`；旧 attempt 的回执不得覆盖已 `delivered` 的命令。
 - 幂等：同一 command 重复回执，若结果一致则 200；冲突则 409。
 - 成功回执与引用回复映射在同一事务提交；重复回执可修复旧版本留下的缺失映射。
 - 任务回复、评论、运行失败/取消和任务当前状态可从业务表恢复入队，使用稳定来源标识去重；不会重发 `unknown`，也不会重新执行智能体。修复范围和验证见 [可靠性加固记录](popo-integration-hardening.md)。
@@ -473,8 +485,8 @@ Windows 在准备附件前、实际调用 POPO 发送前，分别调用
 
 1. `popo_bridge_pairing`：`id, workspace_id, code_hash, created_by, hostname, expires_at, consumed_at, bridge_id, created_at`
 2. `popo_bridge`：`id, workspace_id, token_hash, hostname, status (active|revoked), last_heartbeat_at, robots_json, created_at, revoked_at, revoked_by`
-3. `popo_bridge_command`：`id, workspace_id, bridge_id, installation_id, type, delivery_id, payload jsonb, status (pending|leased|delivered|failed|unknown|cancelled), lease_expires_at, remote_message_id, last_error, created_at, updated_at`
-4. `popo_inbound_event`：`id, workspace_id, bridge_id, installation_id, event_id, robot_id, accepted, duplicate, created_at` — 与 `channel_inbound_message_dedup` 分工：本表证明“通道已接收”；去重表证明“引擎已认领”。
+3. `popo_bridge_command`：`id, workspace_id, bridge_id, installation_id, type, delivery_id, payload jsonb, status (pending|leased|delivered|failed|unknown|cancelled|expired|superseded), lease_expires_at, remote_message_id, last_error, created_at, updated_at`
+4. `popo_inbound_event`：`id, workspace_id, bridge_id, installation_id, event_id, robot_id, accepted, duplicate, payload_hash, payload_evidence, dedupe_enabled, execution_claim_token, execution_received_at, execution_processed_at, created_at` — 以 `(bridge_id, robot_id, event_id)` 证明通道已接收并保存 hash 证据；共享执行 fence 只承载现有 session 的原子 Mark，不再以 chat 或 installation 区分事件。
 
 每个新索引单独 `CREATE INDEX CONCURRENTLY` 迁移。最新已有迁移为 `503_popo_outbound_queue_workspace_index`，新文件从 `504_` 起。`popo_outbound_queue` 可停止写入；P1 不必 DROP（避免无必要的数据迁移）。`workspace_delete` 已清 outbound queue，需同样清理新表。
 
@@ -516,3 +528,199 @@ P2 起见计划 §3，本轮不实现。
 - DJ01Bot 只改 `G:\DJ01Bot\dj01bot-multica-bridge`。
 - 测试：Go 用 `server/internal/testutil`；Python 用假服务；不要默认解析真实 agent CLI。
 - 提交信息 conventional commits，英文说明 why。
+
+---
+
+## 11. Transport v2：原生 attempt / lease / receipt / recovery
+
+本节是 requirement 通知在 bridge 协商 `protocol_version = 2` 后的协议。v2 只加在 requirement 通知上；
+普通出站、入站、媒体与控制命令继续使用 §8 的 v1 通道。**v2 不使用 v1 reclaim，也不继承 v1 的自动重投语义**：
+bridge 不需要声明 `receipt_attempt_v1`，服务端也不把「lease 超时」等同于「未发送」。
+
+### 11.1 身份与数据模型
+
+一个通知由一个不可变 `popo_v2_command`（`source_key = requirement:<requirement_id>:<kind>:<occurrence_id>`）
+和每个收件人一个 `popo_v2_delivery` 组成。delivery 在首次建立时冻结以下身份，之后任何 attempt 都不得重建：
+
+- `command_id`、`delivery_id`（同时充当 `idempotency_key`）、`recipient_binding_id`、`trace_id`
+- `payload_snapshot` / `canonical_json` / `payload_hash`（sha256）
+- `expires_at`（requirement 通知固定为 outbox `created_at + 24h`，同时下发到 envelope）
+
+每次 attempt 有独立 `popo_v2_lease`：`lease_id`、`attempt`、`trace_id`、`state`、`not_sent`、`expires_at`。
+回执证据保存在 `popo_v2_receipt`（每次 attempt 至多一条）与 `popo_v2_receipt_component`（多段消息的逐段证据）。
+身份冲突写入独立的 `popo_v2_identity_conflict`，不影响已送达状态。
+
+| 表 | 状态/关键字段 | 终态 |
+| --- | --- | --- |
+| `popo_v2_command` | `source_key` 唯一身份，`expires_at` | 不写状态 |
+| `popo_v2_delivery` | `status`: `pending` / `failed` / `delivered` / `unknown` / `expired` / `superseded` / `cancelled` / `revoked`；`not_sent`、`retryable`、`partial_delivery`、`remote_message_id`、`evidence_finalized`、`latest_attempt` | `delivered` / `unknown` / `expired` / `superseded` / `cancelled` / `revoked` 不再自动派发 |
+| `popo_v2_lease` | `state`: `pending`（已创建、未交付给 bridge）/ `leased`（poll 事务已提交 envelope）/ 后续投影同 receipt；`not_sent` | 终态同 receipt |
+| `popo_v2_receipt` | `attempt`、`status`、`evidence_finalized`、`retryable`、`not_sent`、`remote_message_id`、`partial_delivery`、components | `delivered` / `unknown` / `failed` / `cancelled` / `expired` / `superseded` |
+| `requirement_outbox` | `pending` / `accepted` / `delivered` / `failed` / `unknown` / `conflict` / `superseded`；`transport_protocol=2`、`transport_attempt`、`transport_delivery_id` | 由 v2 投影写入 |
+
+lease 授权窗口为 60s，且不得超过 delivery 的 `expires_at`。**`state = leased` 只有在 envelope 所在事务提交后
+才可能出现**，因此 `state = pending` 是「服务端从未把该 lease 交给任何 bridge」的可靠证据。
+
+### 11.2 Wire 协议
+
+poll（`GET /api/popo/bridge/commands?protocol_version=1&supported_protocol_versions=1,2`）在
+`selected_protocol_version = 2` 时返回 v2 envelope，普通 v1 command 仍按原格式返回：
+
+```json
+{
+  "protocol_version": 2,
+  "type": "send",
+  "command_id": "<uuid>",
+  "delivery_id": "<uuid>",
+  "recipient_binding_id": "<uuid>",
+  "idempotency_key": "<uuid, 等于 delivery_id>",
+  "lease_id": "<uuid>",
+  "attempt": 1,
+  "payload_hash": "sha256:<64 hex>",
+  "created_at": "<RFC3339Nano>",
+  "expires_at": "<RFC3339Nano>",
+  "trace_id": "<uuid>",
+  "payload": { "...": "首次建立时冻结的 canonical payload" }
+}
+```
+
+同一 delivery 在有效 lease 窗口内被重复 poll 时返回**完全相同的 lease_id / attempt / payload**；bridge 必须按
+`delivery_id` 去重，重复 envelope 不构成新的发送授权。`attempt` 是该 envelope 对应的 lease attempt（首次为 1），
+bridge 回执必须原样带回该值，不需要也不允许从本地计数推断。`attempt` 与 `lease_id` 一样属于传输字段，**不参与**
+`payload_hash` 的 canonical 投影，因此同一 delivery 的所有 attempt 共享同一个 `payload_hash`。
+
+发送前 `POST /api/popo/bridge/commands/{id}/authorize`，body 必须携带
+`protocol_version: 2, command_id, delivery_id, lease_id, recipient_binding_id, idempotency_key, payload_hash, expires_at, trace_id`。
+响应 `{protocol_version: 2, allowed, command_id, delivery_id, lease_id, reason}`：
+
+- `allowed: true`：lease 仍有效、delivery 未过期、路由/成员/业务 occurrence 复核通过。
+- `allowed: false` 且 `reason` 为 `STALE_LEASE`（lease 过期/不可派发，附带 finalized retryable not-sent 证据）、`EXPIRED`、
+  `SUPERSEDED`、`CANCELLED`、`REVOKED`、`ROUTE_CONFLICT`、`IDENTITY_CONFLICT`。拒绝本身会写成该 attempt 的
+  finalized receipt（`STALE_LEASE` 允许重试，其余为终态），bridge 不得在 `allowed: false` 后发送。
+
+回执 `POST /api/popo/bridge/commands/{id}/receipt` 的 extended body：
+
+```json
+{
+  "protocol_version": 2,
+  "status": "delivered | failed | unknown | cancelled | expired | superseded",
+  "command_id": "<uuid>", "delivery_id": "<uuid>", "lease_id": "<uuid>",
+  "recipient_binding_id": "<uuid>", "idempotency_key": "<uuid>",
+  "payload_hash": "sha256:<64 hex>", "trace_id": "<uuid>", "attempt": 1,
+  "remote_message_id": "...", "error": "...", "error_code": "...",
+  "retryable": false, "not_sent": false, "partial_delivery": false, "evidence_finalized": true,
+  "completion_kind": "...", "completion_evidence": {},
+  "components": [{"component_id": "body", "kind": "message", "required": true,
+                  "status": "delivered", "remote_message_id": "...", "evidence_finalized": true,
+                  "retryable": false, "not_sent": false}]
+}
+```
+
+回执必须逐项匹配 `command_id` / `delivery_id` / `lease_id` / `attempt` / `recipient_binding_id` /
+`idempotency_key` / `payload_hash` / `trace_id`，其中 `attempt` 必须等于 envelope 携带的 `attempt`，否则
+409 `IDENTITY_CONFLICT`。`delivered` 必须带真实
+`remote_message_id` 且 required components 全部 `delivered + evidence_finalized + remote_message_id`；
+`failed` 若声明 `not_sent + retryable + evidence_finalized` 且没有 remote/partial 证据，才可能触发下一 attempt。
+
+### 11.3 状态机
+
+```
+outbox pending ──claim/prepare──> accepted (delivery pending, lease attempt=N pending)
+      ▲                                   │
+      │                                   ├─ poll 事务: lease.state=leased + envelope 提交
+      │                                   │        │
+      │                                   │        ├─ receipt delivered ──> outbox delivered
+      │                                   │        ├─ receipt failed(finalized, retryable, not_sent)
+      │                                   │        │        └─ outbox failed ──claim──> accepted attempt=N+1
+      │                                   │        ├─ receipt failed(not retryable / partial / remote)
+      │                                   │        │        └─ outbox failed（终态，不再 claim）
+      │                                   │        └─ receipt unknown ──> outbox unknown + needs_reconcile
+      │                                   │
+      │                                   └─ lease.state=pending 且过期（进程在 dispatch 前崩溃）
+      │                                            └─ recovery: 复用 attempt=N、重开同一 lease
+      │
+      └─ lease.state=leased 且过期且无 receipt（dispatch 后崩溃）
+               └─ recovery: delivery unknown + outbox unknown + needs_reconcile，禁止自动新 attempt
+```
+
+### 11.4 证据矩阵与恢复决策
+
+恢复入口是 `RequirementOutboxWorker.Reconcile`（每 2s 一轮）和 poll 前的 `RecoverV2Delivery`。判断只读取
+durable 证据：`lease.state`、`lease.not_sent`、`delivery.not_sent`、`remote_message_id`、`partial_delivery`、
+最新 receipt 的 `status/evidence_finalized/retryable/not_sent` 以及 component 证据。聚合 `not_sent=true`
+**不能**在 lease 已 dispatch 后作为「对端未发送」的证明。
+
+| 场景 | 服务端动作 | 投影 |
+| --- | --- | --- |
+| `lease.state=pending`，从未 dispatch，lease 已过期 | 重开**同一 lease / 同一 attempt / 同一 payload**，刷新授权窗口；不新增 attempt | delivery `pending`，outbox 保持 `accepted` |
+| `lease.state=pending`，lease 仍有效 | 无写入；poll 返回同一 envelope（idempotent 重发） | 不变 |
+| `lease.state=leased`（已 dispatch），lease 过期且无 receipt | fence：投影 unknown，不再签发 lease | delivery `unknown`（`not_sent=false, retryable=false, evidence_finalized=true`），outbox `unknown` + `needs_reconcile` |
+| `receipt.status=failed` + `evidence_finalized` + `retryable` + `not_sent` + component 证据完整 + attempt < 5 | 允许下一 attempt（claim/recovery 均可） | delivery `failed`（可重试），outbox `failed`，`transport_attempt` 增一 |
+| 存在 `unknown` / `partial_delivery` / `remote_message_id` / `delivered` 证据 | 禁止重发；不创建新 attempt | delivery/outbox 按 receipt 投影，`retryable=false` |
+| `delivery.expires_at <= now()` | 不再签发 lease，终态化 | delivery `expired`，outbox `failed`（保留 `superseded`） |
+| `outbox=accepted` 且 delivery/lease 已 stale | 自动扫描并按上面某一行投影；无法决定时保持 accepted 并计入指标 | 由扫描结果决定 |
+
+补充规则：
+
+- **retry budget**：每个 delivery 最多 5 个 attempt（首个 + 4 个证据确认的 not_sent 重试）。预算耗尽时即使
+  receipt 仍标 `retryable=true`，也把 delivery 投影为 `failed + retryable=false + evidence_finalized=true`，
+  outbox 终态 `failed`，claim 查询不再匹配。
+- **`accepted + stale`**：恢复扫描不依赖 `needs_reconcile` 提示，而是从 `popo_v2_delivery` / `popo_v2_lease`
+  推导：delivery 自身过期、或 delivery 非终态且无有效 lease 且 `updated_at` 超过 2 分钟。扫描按行开事务，
+  `FOR UPDATE` 锁 outbox 后锁 delivery；两个 server 实例同时扫描时由行锁串行化。
+- **扫描收敛与饥饿**：候选集合只保留仍需 durable 动作的行——已决定 delivery 与 outbox 投影不一致、非终态
+  delivery 到期/lease 陈旧、unknown delivery 自身到期；已投影的终态行不再被选中，避免已完成历史挤占新行的
+  page。后续 `needs_reconcile` sweep 同样排除 delivery 已为 `unknown` 且 attempt 相同的 v2 outbox；不会清除
+  面向 operator 的提示，v1 与 v2 conflict 仍可自动恢复，手动 reconcile 仍直接调用恢复路径。`Reconciled`
+  只统计真正写入的 pass，单行错误只记日志、计入 `RecoveryFailed` 并继续其余行，不会中断扫描或跳过同一轮的 claim。
+- **server restart**：accept 事务已提交但 poll 从未发生的行是 `accepted + delivery pending + lease pending`；
+  重启后扫描会重开 lease（同一 attempt），bridge 重新 poll 即恢复，不需要 bridge 报任何 v1 能力。
+- **v1-only bridge**：当 workspace 已选择 v2（`notification_v2` 开启）但 bridge 尚未协商 v2 时，通知保持
+  `pending`（`last_error = "POPO bridge has not negotiated requirement transport v2"`）并退避重试；**绝不**
+  生成 fallback v1 command。bridge 升级并协商 v2 后同一通知继续投递。已存在 v2 command 的通知在 bridge
+  降级后同样只 deferred，不回退 v1。
+
+### 11.5 Crash 示例
+
+| # | 崩溃窗口 | durable 现场 | 恢复结果 |
+| --- | --- | --- | --- |
+| 1 | accept 事务提交后、poll 前进程退出 | outbox `accepted`；delivery `pending`；lease `pending` attempt=N | 扫描/下次 poll 重开同一 lease（attempt 不变、payload 不变）；bridge 收到同一 delivery 的 envelope |
+| 2 | poll 提交后、bridge 回执前 bridge 崩溃 | lease `leased`、无 receipt | lease 过期后投影 delivery/outbox `unknown` + `needs_reconcile`；不新建 attempt |
+| 3 | 对端可能已发但服务端无 receipt（网络分区） | 同 2；对端本地可能有 journal | 服务端按 unknown fence；bridge 恢复后若上报 `delivered`（带真实 remote id），unknown 被升级为 delivered；若上报 finalized not-sent failed，则从 unknown → failed → 下一 attempt（受预算限制） |
+| 4 | server restart 后存在 accepted+stale | lease 过期 / delivery 过期 / 无有效 lease | 扫描重开 pending lease 或投影 unknown/expired；`requirementSyncMetrics` 的 `accepted/stale/oldest_accepted_seconds` 可观测 |
+| 5 | 恢复期间收到 duplicate/late receipt | 同一 attempt 已有 receipt，或恢复刚写入 unknown | 回执按 attempt/lease/payload_hash fence 幂等合并：`delivered` 为最高 rank，旧 attempt 不能覆盖新 attempt 终态；恢复不会改写已有 receipt |
+| 6 | confirmed not_sent 与 unknown/partial/delivered 的边界 | failed receipt 证据差异 | 只有 finalized + retryable + not_sent（且无 remote/partial）允许 attempt+1；unknown/partial/remote/delivered 均不重发 |
+
+### 11.6 Late / duplicate receipt 与 fencing
+
+- receipt 以 `(delivery_id, attempt)` 为幂等键；同一 attempt 的重复回执合并而不是覆盖。状态 rank 为
+  `delivered > unknown > failed > 其它`，`remote_message_id` 只取首个非空值，`evidence_finalized` 只能累积。
+- late receipt 若属于更旧 attempt：只保存/合并该 attempt 的证据，不修改 delivery/outbox 的较新 attempt 终态；
+  delivery 的 `latest_attempt` 单调递增。
+- 恢复扫描、投影和 fence 只写 delivery/lease/outbox；**从不重写 receipt 行**。因此 late `delivered` 始终可以
+  把 `unknown` / `expired` 修复为 `delivered`。
+- 幂等键/身份不匹配返回 409；同一 attempt 的冲突证据不会覆盖已记录的终态。
+
+### 11.7 锁序与并发
+
+所有同时触碰 outbox 与 delivery 的 v2 写路径统一按以下顺序取锁：
+
+```
+requirement_outbox (if any, by transport_delivery_id)
+  -> popo_v2_delivery
+     -> popo_v2_receipt / popo_v2_lease / popo_v2_command（claim 路径还先锁 command source advisory lock）
+```
+
+claim 路径先 `FOR UPDATE` outbox 行再进入 delivery；receipt / fence / recovery / poll 都先锁 outbox 再锁 delivery，
+因此多个 worker、多个 server 实例和 receipt 请求并发时不会形成 outbox↔delivery 的死锁环。重复 worker 竞争由
+`ClaimRequirementOutbox ... SKIP LOCKED`、delivery 行锁和 `(delivery_id, attempt)` 唯一索引共同兜底。
+
+bridge 或 installation revoke 在同一事务内 fence 其**全部**未完成 v2 delivery（delivery `cancelled`、outbox `failed`
+并记录原因）。fence 每次重读有界首页（默认 200 行）直到候选为空，而不是只处理一页；竞态中已终态或消失的行会跳过，
+不会令循环无法收敛。已 `delivered` / `unknown` 的 delivery 保持原状，由 late receipt 决定最终结果。
+
+### 11.8 回滚与灰度
+
+`notification_v2` 只影响**新**通知选择 v2。关闭 flag 不会把已有的 v2 delivery 降级或双写到 v1；已存在的 v2
+记录继续按本节恢复/对账到终态。只有 v2 记录全部终结且灰度观察期结束后，才可以删除 flag 与 v1 requirement
+双轨代码。

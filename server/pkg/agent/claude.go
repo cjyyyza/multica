@@ -40,6 +40,11 @@ type claudeBackend struct {
 }
 
 func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
+	switch opts.PermissionMode {
+	case "", PermissionModeExecute, PermissionModePlan:
+	default:
+		return nil, fmt.Errorf("claude does not recognize permission mode %q", opts.PermissionMode)
+	}
 	execPath := b.cfg.ExecutablePath
 	if execPath == "" {
 		execPath = "claude"
@@ -47,6 +52,22 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	if _, err := exec.LookPath(execPath); err != nil {
 		return nil, fmt.Errorf("claude executable not found at %q: %w", execPath, err)
 	}
+	if opts.PermissionMode == PermissionModePlan {
+		opts.McpConfig = json.RawMessage(`{"mcpServers":{}}`)
+	}
+	var planSettingsCleanup func()
+	if opts.PermissionMode == PermissionModePlan {
+		cleanup, err := prepareClaudePlanSettings(&opts)
+		if err != nil {
+			return nil, err
+		}
+		planSettingsCleanup = cleanup
+	}
+	defer func() {
+		if planSettingsCleanup != nil {
+			planSettingsCleanup()
+		}
+	}()
 
 	timeout := opts.Timeout
 	runCtx, cancel := runContext(ctx, timeout)
@@ -188,6 +209,9 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		defer cancel()
 		defer close(msgCh)
 		defer close(resCh)
+		if opts.PermissionMode == PermissionModePlan {
+			defer os.Remove(opts.ClaudeSettingsPath)
+		}
 		if mcpConfigPath != "" {
 			defer cleanupMcpConfigTemp(mcpConfigPath)
 		}
@@ -195,6 +219,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		startTime := time.Now()
 		var lastAssistantText string
 		var finalResultText string
+		var finalStructuredOutput json.RawMessage
 		sawResult := false
 		resultIsError := false
 		terminalReasonError := ""
@@ -279,6 +304,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 			case "result":
 				sawResult = true
 				finalResultText = msg.ResultText
+				finalStructuredOutput = msg.StructuredOutput
 				resultIsError = msg.IsError
 				terminalReasonError = claudeTerminalReasonFailure(msg.TerminalReason, msg.ResultText)
 				sessionID = msg.SessionID
@@ -309,7 +335,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				go func(msg claudeSDKMessage, reply func(io.Writer) error) {
 					defer controlWrites.Done()
 					if reply == nil {
-						b.handleControlRequest(msg, inputWriter)
+						b.handleControlRequest(msg, inputWriter, opts)
 						return
 					}
 					if err := reply(inputWriter); err != nil {
@@ -441,17 +467,19 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		}
 
 		resCh <- Result{
-			Status:         finalStatus,
-			Output:         finalOutput,
-			Error:          finalError,
-			DurationMs:     duration.Milliseconds(),
-			SessionID:      reportedSessionID,
-			Usage:          usage,
-			ResumeRejected: resumeRejected,
+			Status:           finalStatus,
+			Output:           finalOutput,
+			StructuredOutput: finalStructuredOutput,
+			Error:            finalError,
+			DurationMs:       duration.Milliseconds(),
+			SessionID:        reportedSessionID,
+			Usage:            usage,
+			ResumeRejected:   resumeRejected,
 		}
 	}()
 
 	session := &Session{Messages: msgCh, Result: resCh}
+	planSettingsCleanup = nil
 	if supplements != nil {
 		session.Supplement = supplements.supplement
 		session.SupplementReady = supplements.ready
@@ -553,8 +581,7 @@ func (b *claudeBackend) handleUser(msg claudeSDKMessage, ch chan<- Message) bool
 	return sawAsyncLaunch
 }
 
-func (b *claudeBackend) handleControlRequest(msg claudeSDKMessage, stdin interface{ Write([]byte) (int, error) }) {
-	// Auto-approve all tool uses in autonomous/daemon mode.
+func (b *claudeBackend) handleControlRequest(msg claudeSDKMessage, stdin interface{ Write([]byte) (int, error) }, opts ExecOptions) {
 	var req claudeControlRequestPayload
 	if err := json.Unmarshal(msg.Request, &req); err != nil {
 		return
@@ -574,18 +601,38 @@ func (b *claudeBackend) handleControlRequest(msg claudeSDKMessage, stdin interfa
 		)
 	}
 
+	if opts.PermissionMode == PermissionModePlan && !(req.ToolName == "StructuredOutput" && len(opts.OutputSchema) > 0) {
+		if reason, denied := claudePlanModeToolDenial(req.ToolName); denied {
+			b.cfg.Logger.Warn("claude: denied tool use in plan mode",
+				"request_id", msg.RequestID,
+				"tool", req.ToolName,
+				"reason", reason,
+			)
+			b.writeControlResponse(stdin, msg.RequestID, map[string]any{
+				"behavior": "deny",
+				"message":  reason,
+			})
+			return
+		}
+	}
+
+	b.writeControlResponse(stdin, msg.RequestID, map[string]any{
+		"behavior":     "allow",
+		"updatedInput": inputMap,
+	})
+}
+
+// writeControlResponse writes one control response line, logging instead of
+// failing because the CLI may already have exited.
+func (b *claudeBackend) writeControlResponse(stdin interface{ Write([]byte) (int, error) }, requestID string, body map[string]any) {
 	response := map[string]any{
 		"type": "control_response",
 		"response": map[string]any{
 			"subtype":    "success",
-			"request_id": msg.RequestID,
-			"response": map[string]any{
-				"behavior":     "allow",
-				"updatedInput": inputMap,
-			},
+			"request_id": requestID,
+			"response":   body,
 		},
 	}
-
 	data, err := json.Marshal(response)
 	if err != nil {
 		b.cfg.Logger.Warn("claude: failed to marshal control response", "error", err)
@@ -652,8 +699,9 @@ type claudeSDKMessage struct {
 	ParentToolUseID string          `json:"parent_tool_use_id,omitempty"`
 
 	// result fields
-	ResultText string `json:"result,omitempty"`
-	IsError    bool   `json:"is_error,omitempty"`
+	ResultText       string          `json:"result,omitempty"`
+	StructuredOutput json.RawMessage `json:"structured_output,omitempty"`
+	IsError          bool            `json:"is_error,omitempty"`
 	// TerminalReason is Claude Code's structured statement of why the turn
 	// ended. Read separately from IsError because the CLI computes the two
 	// independently — see claudeTerminalReasonFailure.
@@ -1076,12 +1124,16 @@ var claudeBlockedArgs = map[string]blockedArgMode{
 }
 
 func buildClaudeArgs(opts ExecOptions, logger *slog.Logger) []string {
+	permissionMode := opts.PermissionMode
+	if permissionMode == "" {
+		permissionMode = PermissionModeExecute
+	}
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
 		"--input-format", "stream-json",
 		"--verbose",
-		"--permission-mode", "bypassPermissions",
+		"--permission-mode", permissionMode,
 		// AskUserQuestion is Claude Code's built-in interactive question tool.
 		// The daemon runs Claude in non-interactive stream-json mode and has
 		// no UI for the prompt to render in, so a call returns an empty
@@ -1090,11 +1142,17 @@ func buildClaudeArgs(opts ExecOptions, logger *slog.Logger) []string {
 		// clarification belongs in an issue comment instead.
 		"--disallowedTools", "AskUserQuestion",
 	}
-	if hasManagedMcpConfig(opts.McpConfig) {
+	if hasManagedMcpConfig(opts.McpConfig) || opts.PermissionMode == PermissionModePlan {
 		// A saved agent-level config is authoritative, including an explicitly
-		// empty object. With no managed config, omit strict mode so Claude can
-		// inherit the user's local runtime MCP servers.
+		// empty object. Plan Mode always uses a managed config so user-global MCP
+		// servers cannot bypass the task-tool policy.
 		args = append(args, "--strict-mcp-config")
+	}
+	if opts.PermissionMode == PermissionModePlan {
+		args = append(args, "--tools", "Read,Glob,Grep")
+	}
+	if len(opts.OutputSchema) > 0 {
+		args = append(args, "--json-schema", string(opts.OutputSchema))
 	}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
@@ -1117,15 +1175,25 @@ func buildClaudeArgs(opts ExecOptions, logger *slog.Logger) []string {
 		args = append(args, "--resume", opts.ResumeSessionID)
 	}
 	blockedArgs := claudeBlockedArgs
-	if opts.ClaudeSettingsPath != "" {
-		// The daemon-owned --settings file is the enforcement layer for disabled
-		// inherited skills. Drop competing per-agent/default flags only while that
-		// policy is active, then append the managed file last.
-		blockedArgs = make(map[string]blockedArgMode, len(claudeBlockedArgs)+1)
+	if opts.ClaudeSettingsPath != "" || opts.PermissionMode == PermissionModePlan || len(opts.OutputSchema) > 0 {
+		blockedArgs = make(map[string]blockedArgMode, len(claudeBlockedArgs)+6)
 		for key, mode := range claudeBlockedArgs {
 			blockedArgs[key] = mode
 		}
-		blockedArgs["--settings"] = blockedWithValue
+		if len(opts.OutputSchema) > 0 {
+			blockedArgs["--json-schema"] = blockedWithValue
+		}
+		if opts.ClaudeSettingsPath != "" {
+			blockedArgs["--settings"] = blockedWithValue
+		}
+		if opts.PermissionMode == PermissionModePlan {
+			blockedArgs["--tools"] = blockedWithValue
+			blockedArgs["--dangerously-skip-permissions"] = blockedStandalone
+			blockedArgs["--allowedTools"] = blockedWithValue
+			blockedArgs["--disallowedTools"] = blockedWithValue
+			blockedArgs["--permission-prompt-tool"] = blockedWithValue
+			blockedArgs["--settings"] = blockedWithValue
+		}
 	}
 	args = append(args, filterCustomArgs(opts.ExtraArgs, blockedArgs, logger)...)
 	args = append(args, filterCustomArgs(opts.CustomArgs, blockedArgs, logger)...)

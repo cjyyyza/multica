@@ -73,6 +73,19 @@ func (q *replyQueries) GetChannelTaskDelivery(context.Context, pgtype.UUID) (db.
 func (q *replyQueries) GetChannelInstallation(context.Context, db.GetChannelInstallationParams) (db.ChannelInstallation, error) {
 	return q.installation, nil
 }
+
+func TestRequirementTasksDoNotMirrorOrdinaryProgressIntoPopo(t *testing.T) {
+	taskID := replyID("11111111-1111-4111-8111-111111111111")
+	q := &replyQueries{task: db.AgentTaskQueue{ID: taskID, RequirementID: replyID("22222222-2222-4222-8222-222222222222"), Status: "running"}}
+	queue := &replyQueue{}
+	out := &Outbound{q: q, queue: queue}
+	for _, kind := range []string{protocol.EventTaskRunning, protocol.EventTaskMessage, protocol.EventTaskCompleted, protocol.EventTaskFailed, protocol.EventTaskCancelled} {
+		out.enqueueTaskReply(t.Context(), events.Event{Type: kind, TaskID: uuidString(taskID)})
+	}
+	if len(queue.items) != 0 {
+		t.Fatalf("requirement execution produced %d routine notifications", len(queue.items))
+	}
+}
 func (q *replyQueries) ListTaskMessages(context.Context, pgtype.UUID) ([]db.TaskMessage, error) {
 	return nil, nil
 }

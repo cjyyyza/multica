@@ -15,7 +15,7 @@ type fakeMemberCommands struct {
 	unhandled bool
 }
 
-func (f *fakeMemberCommands) HandleMemberCommand(_ context.Context, inst ResolvedInstallation, actor ResolvedIdentity, msg channel.InboundMessage) (Result, bool, error) {
+func (f *fakeMemberCommands) HandleMemberCommand(_ context.Context, inst ResolvedInstallation, actor ResolvedIdentity, msg channel.InboundMessage, startChat bool) (Result, bool, error) {
 	f.calls++
 	f.actor = actor
 	return Result{Outcome: OutcomeIssueFollow, InstallationID: inst.ID, ReplyText: "review required"}, !f.unhandled, nil

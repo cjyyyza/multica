@@ -12,41 +12,98 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/integrations/popo"
+	"github.com/multica-ai/multica/server/internal/integrations/yixiezuo"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type PopoInstallationResponse struct {
-	ID              string `json:"id"`
-	WorkspaceID     string `json:"workspace_id"`
-	AgentID         string `json:"agent_id"`
-	RobotID         string `json:"robot_id"`
-	RobotName       string `json:"robot_name"`
-	BridgeID        string `json:"bridge_id"`
-	WebhookURL      string `json:"webhook_url"`
-	InstallerUserID string `json:"installer_user_id"`
-	Status          string `json:"status"`
-	InstalledAt     string `json:"installed_at"`
-	CreatedAt       string `json:"created_at"`
-	UpdatedAt       string `json:"updated_at"`
+	ID                     string `json:"id"`
+	WorkspaceID            string `json:"workspace_id"`
+	AgentID                string `json:"agent_id"`
+	RobotID                string `json:"robot_id"`
+	RobotName              string `json:"robot_name"`
+	BridgeID               string `json:"bridge_id"`
+	WebhookURL             string `json:"webhook_url"`
+	InstallerUserID        string `json:"installer_user_id"`
+	Status                 string `json:"status"`
+	InstalledAt            string `json:"installed_at"`
+	CreatedAt              string `json:"created_at"`
+	UpdatedAt              string `json:"updated_at"`
+	RequirementTemplateURL string `json:"requirement_template_url"`
 }
 
 func popoInstallationToResponse(row db.ChannelInstallation) PopoInstallationResponse {
 	info := popo.DecodePublicConfig(row.Config)
 	return PopoInstallationResponse{
-		ID:              uuidToString(row.ID),
-		WorkspaceID:     uuidToString(row.WorkspaceID),
-		AgentID:         uuidToString(row.AgentID),
-		RobotID:         info.RobotID,
-		RobotName:       info.RobotName,
-		BridgeID:        info.BridgeID,
-		WebhookURL:      info.WebhookURL,
-		InstallerUserID: uuidToString(row.InstallerUserID),
-		Status:          row.Status,
-		InstalledAt:     row.InstalledAt.Time.UTC().Format(time.RFC3339),
-		CreatedAt:       row.CreatedAt.Time.UTC().Format(time.RFC3339),
-		UpdatedAt:       row.UpdatedAt.Time.UTC().Format(time.RFC3339),
+		ID:                     uuidToString(row.ID),
+		WorkspaceID:            uuidToString(row.WorkspaceID),
+		AgentID:                uuidToString(row.AgentID),
+		RobotID:                info.RobotID,
+		RobotName:              info.RobotName,
+		BridgeID:               info.BridgeID,
+		WebhookURL:             info.WebhookURL,
+		InstallerUserID:        uuidToString(row.InstallerUserID),
+		Status:                 row.Status,
+		InstalledAt:            row.InstalledAt.Time.UTC().Format(time.RFC3339),
+		CreatedAt:              row.CreatedAt.Time.UTC().Format(time.RFC3339),
+		UpdatedAt:              row.UpdatedAt.Time.UTC().Format(time.RFC3339),
+		RequirementTemplateURL: info.RequirementTemplateURL,
 	}
+}
+
+func (h *Handler) SetPopoRequirementIntake(w http.ResponseWriter, r *http.Request) {
+	if h.PopoInstall == nil {
+		writeFeatureDisabled(w, "popo_not_configured", "popo integration not enabled")
+		return
+	}
+	ws, member, ok := h.yixiezuoWorkspace(w, r)
+	if !ok {
+		return
+	}
+	id, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "installationId"), "installation_id")
+	if !ok {
+		return
+	}
+	installation, err := h.PopoInstall.GetInWorkspace(r.Context(), id, ws)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "popo installation not found")
+		return
+	}
+	agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: installation.AgentID, WorkspaceID: ws})
+	if err != nil || !h.canManageAgent(w, r, agent) {
+		if err != nil {
+			writeError(w, http.StatusNotFound, "agent not found")
+		}
+		return
+	}
+	var input struct {
+		TemplateURL string `json:"template_url"`
+	}
+	if !decodeYixiezuoBody(w, r, &input) {
+		return
+	}
+	value := strings.TrimSpace(input.TemplateURL)
+	if value != "" {
+		source, err := yixiezuo.ParseSource(value)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := h.requirementService().ValidateDraftAgent(r.Context(), service.RequirementActor{WorkspaceID: ws, UserID: member.UserID}, installation.AgentID); err != nil {
+			writeRequirementError(w, err)
+			return
+		}
+		value = source.URL
+	}
+	updated, err := h.Queries.SetPopoRequirementTemplate(r.Context(), db.SetPopoRequirementTemplateParams{WorkspaceID: ws, ID: id, TemplateUrl: value})
+	if err != nil {
+		writeError(w, http.StatusConflict, "active installation no longer exists")
+		return
+	}
+	h.publish(protocol.EventPopoInstallationCreated, uuidToString(ws), "member", uuidToString(member.UserID), map[string]any{"id": uuidToString(id)})
+	writeJSON(w, http.StatusOK, popoInstallationToResponse(updated))
 }
 
 func (h *Handler) ListPopoInstallations(w http.ResponseWriter, r *http.Request) {

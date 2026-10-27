@@ -1,0 +1,119 @@
+{
+  "card": {
+    "title": "要件",
+    "source": "ソース",
+    "source_preview": "ソースプレビュー",
+    "participants": "参加者",
+    "run": "最新の実行",
+    "run_completed_not_done": "実行は完了しましたが、要件はまだ完了していません。"
+  },
+  "states": {
+    "intake_pending": "開始前",
+    "clarifying": "明確化中",
+    "awaiting_approval": "承認待ち",
+    "executing": "実行中",
+    "blocked": "ブロック中",
+    "in_review": "レビュー待ち",
+    "done": "完了",
+    "cancelled": "キャンセル済み",
+    "unknown": "不明"
+  },
+  "participants": {
+    "edit": "参加者を編集",
+    "stale": "参加者が変更されました。最新のリビジョンを確認してから保存してください。",
+    "remove": "削除",
+    "roles": {
+      "requester": "requester",
+      "approver": "approver",
+      "viewer": "viewer"
+    },
+    "add_member": "メンバーを追加",
+    "approver_required": "approver を1人以上残してください。",
+    "cancel": "キャンセル",
+    "save": "参加者を保存"
+  },
+  "candidate": {
+    "project": "プロジェクト",
+    "agent": "実行エージェント",
+    "goal": "目標",
+    "non_goals": "非目標",
+    "scope": "スコープ",
+    "constraints": "制約",
+    "acceptance_criteria": "受け入れ条件",
+    "no_project": "プロジェクトなし",
+    "unknown_project": "不明なプロジェクト（{{id}}）",
+    "unknown_agent": "不明なエージェント（{{id}}）",
+    "empty": "なし",
+    "attachments": "添付ファイル",
+    "file": "ファイル",
+    "unknown_attachment": "不明な添付ファイル（{{id}}）",
+    "attachments_unavailable": "選択した添付ファイルの一部がソースプレビューに存在しないため、承認できません。"
+  },
+  "approval": {
+    "title": "要件を承認",
+    "candidate_revision": "候補 v{{revision}}",
+    "review": "レビューして承認",
+    "confirm_title": "承認してタスクを作成",
+    "consequence": "タスクを1件作成してエージェントを開始します。変更は同じタスクで再確認し、独立した新しい要件は別のチャットで開始します。",
+    "stale": "候補またはリビジョンが変更されました。最新の候補を再確認してから承認してください。",
+    "review_latest": "最新の候補をレビュー",
+    "cancel": "キャンセル",
+    "confirm": "タスクを作成してエージェントを開始"
+  },
+  "review": {
+    "title": "レビュー",
+    "accept": "受け入れる",
+    "reject": "差し戻す",
+    "cancel": "要件をキャンセル",
+    "close": "閉じる",
+    "reject_reason": "差し戻し理由",
+    "reject_placeholder": "変更が必要な内容を入力...",
+    "reject_required": "差し戻し理由を入力してください。",
+    "reject_confirm": "差し戻す",
+    "cancel_title": "この要件をキャンセルしますか？",
+    "cancel_consequence": "実行を停止し、既存の Chat とタスクのリンクは保持されます。",
+    "cancel_confirm": "キャンセルする",
+    "accept_title": "受け入れて Yixiezuo に反映",
+    "accept_consequence": "タスクを完了にし、以下の概要、タスクへのリンク、選択したステータスを Yixiezuo に反映します。",
+    "result_summary": "成果の概要とリンク",
+    "result_placeholder": "変更内容、検証結果、成果物へのリンク...",
+    "source_status": "Yixiezuo のステータス",
+    "keep_source_status": "現在のステータスを維持",
+    "accept_stale": "タスクが変更されました。閉じて最新の内容を確認してください。",
+    "accept_confirm": "受け入れて反映"
+  },
+  "sync": {
+    "title": "同期ステータス",
+    "operations": "操作",
+    "deliveries": "配信",
+    "reconcile": "再確認",
+    "reconcile_operation": "操作を再確認",
+    "reconcile_delivery": "配信を再確認",
+    "no_auto_retry": "結果が不明な場合は自動再送しません。",
+    "request_hash": "request_hash"
+  },
+  "panel": {
+    "load_failed": "要件を読み込めませんでした。",
+    "closed": "この要件 Chat は読み取り専用です。",
+    "open_issue": "タスクを開く"
+  },
+  "intake": {
+    "title": "新しい要件",
+    "source_url": "ソース URL",
+    "preview": "ソースをプレビュー",
+    "previewing": "ソースプレビューを読み込み中...",
+    "agent": "エージェント",
+    "project": "プロジェクト",
+    "no_project": "プロジェクトなし",
+    "create": "要件を作成",
+    "creating": "作成中..."
+  },
+  "intake_settings": {
+    "template": "POPO 要件テンプレート",
+    "consequence": "設定すると、このボットに送ったアイデアから、テンプレートのプロジェクト・種類・必須フォーム値を使い、易协作に要確認の下書きを作成します。確認と承認は Multica Chat で行います。URL を空にすると無効になります。",
+    "save": "保存",
+    "saving": "保存中...",
+    "saved": "保存しました",
+    "save_failed": "要件の受付設定を保存できませんでした。"
+  }
+}
