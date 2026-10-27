@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -58,7 +59,10 @@ func writeTestClaudePlugin(t *testing.T, home, id, name string, enabled bool) st
 	if err := os.MkdirAll(filepath.Join(home, ".claude", "plugins"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	installed := `{"version":2,"plugins":{"` + id + `":[{"scope":"user","installPath":"` + installPath + `"}]}}`
+	installed, err := json.Marshal(map[string]any{"version": 2, "plugins": map[string]any{id: []map[string]string{{"scope": "user", "installPath": installPath}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(home, ".claude", "plugins", "installed_plugins.json"), []byte(installed), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -625,9 +629,7 @@ func TestListRuntimeLocalSkills_FollowsSymlinkedSkillDirs(t *testing.T) {
 	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
 		t.Fatalf("mkdir skills root: %v", err)
 	}
-	if err := os.Symlink(target, filepath.Join(skillsRoot, "lark-doc")); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
+	createTestSymlink(t, target, filepath.Join(skillsRoot, "lark-doc"))
 
 	// Sanity: also seed a regular non-symlink skill so we know enumeration
 	// returns both, in stable order.
@@ -690,7 +692,7 @@ func TestListRuntimeLocalSkills_CodexUsesSharedCODEXHOME(t *testing.T) {
 	if skills[0].Key != "debugger" {
 		t.Fatalf("key = %q, want debugger", skills[0].Key)
 	}
-	if skills[0].SourcePath != filepath.Join(codexHome, "skills", "debugger") {
+	if skills[0].SourcePath != filepath.ToSlash(filepath.Join(codexHome, "skills", "debugger")) {
 		t.Fatalf("source_path = %q", skills[0].SourcePath)
 	}
 }
@@ -1127,9 +1129,7 @@ func TestListRuntimeLocalSkills_PerRootVisitedAllowsCrossRootSymlinkAlias(t *tes
 	if err := os.MkdirAll(claudeRoot, 0o755); err != nil {
 		t.Fatalf("mkdir claude root: %v", err)
 	}
-	if err := os.Symlink(target, filepath.Join(claudeRoot, "bar")); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
+	createTestSymlink(t, target, filepath.Join(claudeRoot, "bar"))
 
 	skills, _, err := listRuntimeLocalSkills("claude")
 	if err != nil {

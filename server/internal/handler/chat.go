@@ -1013,11 +1013,13 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 	// Fire-and-forget and non-blocking: the response below is written whether
 	// or not a title is ever generated, and a disabled/failing LLM layer
 	// silently keeps the original first-message-derived title. session.Title
-	// is the default/original title observed here and drives the CAS so a
-	// manual rename mid-generation is never clobbered.
-	shouldGenerateTitle := shouldGenerateFirstMessageTitle(hadUserMessage, currentTitle, sent.InitialTitle, channelBacked, channelSourceKnown)
+	// and title_edited_at are what the CAS observes, so a manual rename that
+	// lands during generation is not overwritten. title_edited_at is set only
+	// by that rename; archive and resume-pointer writes do not count. This is
+	// the row loaded before the send.
+	shouldGenerateTitle := shouldGenerateFirstMessageTitle(hadUserMessage, currentTitle, sent.InitialTitle, channelBacked, channelSourceKnown, session.TitleEditedAt.Valid)
 	if shouldGenerateTitle {
-		h.maybeGenerateChatTitleAsync(workspaceID, userID, session.ID, currentTitle, req.Content)
+		h.maybeGenerateChatTitleAsync(workspaceID, userID, session.ID, currentTitle, session.TitleEditedAt, req.Content)
 	}
 
 	writeJSON(w, http.StatusCreated, SendChatMessageResponse{
@@ -1030,7 +1032,7 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func shouldGenerateFirstMessageTitle(hadUserMessage bool, currentTitle, initializedTitle string, channelBacked, channelSourceKnown bool) bool {
+func shouldGenerateFirstMessageTitle(hadUserMessage bool, currentTitle, initializedTitle string, channelBacked, channelSourceKnown, titleManuallyEdited bool) bool {
 	if hadUserMessage || currentTitle == "" || !channelSourceKnown {
 		return false
 	}
@@ -1040,7 +1042,12 @@ func shouldGenerateFirstMessageTitle(hadUserMessage bool, currentTitle, initiali
 		// the best-effort LLM replacement; otherwise manual naming always wins.
 		return initializedTitle != ""
 	}
-	return true
+	if initializedTitle != "" {
+		return true
+	}
+	// A first-party title with title_edited_at set is a manual rename. An
+	// insert-time seed leaves that column null and stays eligible.
+	return !titleManuallyEdited
 }
 
 type ChatMessagesCursorResponse struct {

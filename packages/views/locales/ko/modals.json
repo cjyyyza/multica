@@ -19,6 +19,16 @@
     "toast_deleted": "태스크를 삭제했습니다",
     "toast_delete_failed": "태스크를 삭제하지 못했습니다"
   },
+  "rename_issue": {
+    "title": "태스크 이름 변경",
+    "placeholder": "태스크 제목",
+    "input_aria_label": "{{identifier}} 이름 변경",
+    "submit": "저장",
+    "saving": "저장 중...",
+    "title_required": "제목을 입력하세요",
+    "toast_renamed": "태스크 이름이 변경되었습니다",
+    "toast_failed": "태스크 이름을 변경하지 못했습니다"
+  },
   "feedback": {
     "title": "피드백",
     "placeholder": "사용 경험, 발견한 버그, 필요한 기능을 알려주세요...",
@@ -78,6 +88,10 @@
     "members_label": "추가 멤버",
     "members_optional": "(선택 사항)",
     "members_hint": "리더가 이 멤버들에게 하위 태스크를 위임할 수 있습니다.",
+    "max_concurrent_tasks_label": "최대 동시 태스크",
+    "max_concurrent_tasks_hint": "스쿼드가 동시에 진행하는 이슈 수와 모든 에이전트가 동시에 실행하는 태스크 수를 제한합니다(1-50). 비워 두면 무제한입니다.",
+    "max_concurrent_tasks_placeholder": "무제한",
+    "max_concurrent_tasks_invalid": "1에서 50 사이의 정수를 입력하세요.",
     "members_placeholder": "에이전트 또는 워크스페이스 멤버 추가",
     "members_selected_count_other": "{{count}}개 선택됨",
     "members_more_count": "+{{count}}",

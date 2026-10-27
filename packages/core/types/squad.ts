@@ -23,6 +23,8 @@ export interface Squad {
   archived_by: string | null;
   member_count?: number;
   member_preview?: SquadMemberPreview[];
+  // Squad-wide cap on concurrently executing tasks. null/undefined = unlimited.
+  max_concurrent_tasks?: number | null;
 }
 
 export interface SquadMember {
@@ -50,6 +52,7 @@ export interface CreateSquadRequest {
   description?: string;
   leader_id: string;
   avatar_url?: string;
+  max_concurrent_tasks?: number | null;
 }
 
 export interface UpdateSquadRequest {
@@ -58,6 +61,8 @@ export interface UpdateSquadRequest {
   instructions?: string;
   leader_id?: string;
   avatar_url?: string;
+  // null clears the cap back to unlimited; omitted leaves it unchanged.
+  max_concurrent_tasks?: number | null;
 }
 
 export interface AddSquadMemberRequest {

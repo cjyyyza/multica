@@ -1082,6 +1082,7 @@ type RegisterResponse struct {
 	P4Depots        []P4DepotData   `json:"p4_depots,omitempty"`
 	P4DepotsVersion string          `json:"p4_depots_version,omitempty"`
 	Settings        json.RawMessage `json:"settings,omitempty"`
+	CACerts         string          `json:"ca_certs,omitempty"`
 }
 
 func (c *Client) Register(ctx context.Context, req map[string]any) (*RegisterResponse, error) {
@@ -1099,6 +1100,9 @@ type WorkspaceReposResponse struct {
 	P4Depots        []P4DepotData   `json:"p4_depots,omitempty"`
 	P4DepotsVersion string          `json:"p4_depots_version,omitempty"`
 	Settings        json.RawMessage `json:"settings,omitempty"`
+	// CACerts is the server's extra CA certificates (PEM) for git; see
+	// applyGitCACerts.
+	CACerts string `json:"ca_certs,omitempty"`
 }
 
 func (c *Client) GetWorkspaceRepos(ctx context.Context, workspaceID string) (*WorkspaceReposResponse, error) {

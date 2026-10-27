@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"io"
 )
@@ -33,6 +34,25 @@ const agentStreamInitialBufferBytes = 1024 * 1024
 func newAgentStreamScanner(r io.Reader) *bufio.Scanner {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, agentStreamInitialBufferBytes), agentStreamMaxLineBytes)
+	// Pipes deliver large events in small reads. ScanLines would search the
+	// whole accumulated event after every read, making long resumes quadratic.
+	searched := 0
+	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		if atEOF && len(data) == 0 {
+			return 0, nil, nil
+		}
+		if i := bytes.IndexByte(data[searched:], '\n'); i >= 0 {
+			i += searched
+			searched = 0
+			return i + 1, bytes.TrimSuffix(data[:i], []byte{'\r'}), nil
+		}
+		if atEOF {
+			searched = 0
+			return len(data), bytes.TrimSuffix(data, []byte{'\r'}), nil
+		}
+		searched = len(data)
+		return 0, nil, nil
+	})
 	return scanner
 }
 

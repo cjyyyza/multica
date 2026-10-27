@@ -558,6 +558,52 @@ Passing no `<workspace-id>` resolves to the current default workspace, so `multi
 multica workspace member list <workspace-id>
 ```
 
+## Chat
+
+### Start a Chat
+
+`chat create` opens a chat session with one agent and, when given a prompt,
+sends it as the first turn:
+
+```bash
+# Create the chat and queue the opening agent run
+multica chat create --agent "Backend Bot" --prompt "Investigate the failing deploy"
+
+# Create an empty chat to open later
+multica chat create --agent 7b37ce6a-b06b-43ed-b4ae-6bb7eacc67a4
+
+# Long or multi-line prompts (use the file form on Windows)
+multica chat create --agent "Backend Bot" --prompt-file ./prompt.md
+```
+
+`--agent` accepts a name (case-insensitive substring) or a full UUID.
+`--prompt` is sent as the session's first user message and queues an agent run
+immediately; the command returns when the run is queued, not when the agent
+replies. The agent must have a runtime and you must be allowed to invoke it; a
+message for an offline runtime waits in the queue. Without `--prompt`, only the
+session is created. `--title` names the chat and is kept. With a prompt, that
+name is written after the opening message is accepted, so automatic titling
+does not replace it. On an empty session the name is written after the session
+is created, and a later first message keeps it. Omit `--title` and the server
+titles the chat from the first message. The command prints the title at that
+moment: the derived title, unless automatic titling has already finished. Prompt
+input follows the same inline / `--prompt-stdin` / `--prompt-file` rules as
+issue descriptions and comments.
+
+The JSON output (the default) contains `session_id`, `agent_id`, and `title`
+when one is set, plus `message_id`, `task_id`, and `queued` when a prompt was
+sent. `queued` is true only when this turn is waiting behind another turn in
+the same session, and false when it is not; either value means the prompt was
+accepted. The run stays queued until a runtime claims it. If the session is
+created but the prompt fails to send, or the prompt is sent but the title
+update fails, the error names the session id so it can be opened instead of
+retried blindly.
+
+### Reading a Conversation
+
+Agents running inside a chat conversation read their own messages with
+`multica chat history` and `multica chat thread`.
+
 ## Issues
 
 ### List Issues
@@ -594,13 +640,23 @@ multica issue list --metadata pipeline_status=waiting_review
 multica issue list --metadata pr_number=482 --metadata is_blocked=true
 ```
 
-Use `--property "Name=Value"` (repeatable; one value per flag) to filter by custom property. Names and select option values are case-insensitive and resolve to ids; repeating the same property matches any of its values, different properties must all match. Values are option names or ids (select types), `true`/`false` (checkbox), a member name, email, or id (actor types), or the stored value itself for `text`, `url`, `number`, and `date` (`YYYY-MM-DD`). Only `=` is supported today; the `>=`, `<=` and `!=` spellings are reserved for comparison filters and are rejected. The reserved value `__none__` matches issues where the property is unset:
+Use `--property "Name=Value"` (repeatable; one member per flag) to filter by custom property. Names and select option values are case-insensitive and resolve to ids; repeating the same property matches any of its members, different properties must all match. Values are option names or ids (select types), `true`/`false` (checkbox), a member name, email, or id (actor types), or the stored value itself for `text`, `url`, `number`, and `date` (`YYYY-MM-DD`). The reserved value `__none__` matches issues where the property is unset:
 
 ```bash
 multica issue list --property "Impact=High" --property "Impact=Medium"
 multica issue list --property "Impact=__none__" --status in_review
 multica issue list --property "Score=42" --property "Ship Date=2026-08-28"
 ```
+
+Comparisons go in the same flag. `number` takes `>`, `>=`, `<` and `<=`; `date` takes `>` (after) and `<` (before); `text` and `url` take `~=` (contains, case-insensitive, matched exactly as typed). Quote the flag so the shell does not read `<` and `>` as redirection:
+
+```bash
+multica issue list --property "Score>=3" --property "Impact=High"
+multica issue list --property "Ship Date<2026-09-01" --status todo
+multica issue list --property "Notes~=follow up"
+```
+
+A comparison on a type that cannot honour it is rejected with an error naming the type. So is `!=` (the server has no not-equal filter), and so are `>=` and `<=` on a date: the server only compares dates strictly, and the error names the strict form to use instead. Repeating a property ORs its members, so `"Score>1"` plus `"Score<10"` is not a range. A property whose name contains `=`, `<`, `>`, `!` or `~` has to be given by its UUID.
 
 In JSON output, `properties` is a map from definition id to the stored value: an option id for `select`, a list of option ids for `multi_select`, a `member:<uuid>` reference for the actor types, and the value itself otherwise. Pass `--resolve-properties` to replace that map with the rows `issue property list` prints, one per set property, in catalog order: `property_id`, `name`, `type`, the stored `value`, a human `display`, `display_values` (the per-item names of a `multi_select` or `multi_actor` value) and `archived` when the definition is archived. Archived definitions still resolve, since their values stay on the issue. An option that is no longer in the definition, or a member who has left the workspace, keeps its raw id in `display`. The flag adds at most two requests: the catalog, shared with `--property` and `--sort property:`, and the member list, fetched only when an actor `--property` filter or an actor value on the page needs it and shared between the two. If either request fails the command fails rather than printing ids. In JSON output it combines with `--fields` only when that list keeps `properties`; a `--fields` list without it is rejected rather than resolving a key the same command would delete. The flag has no effect on `--output table`, where it and `--fields` are both ignored and neither is rejected.
 

@@ -1,7 +1,9 @@
 package execenv
 
 import (
+	"bytes"
 	"os"
+	"runtime"
 	"syscall"
 	"testing"
 )
@@ -15,6 +17,9 @@ import (
 // no such race; holding the lock there is harmless.
 func writeTestExecutable(tb testing.TB, path string, content []byte) {
 	tb.Helper()
+	if runtime.GOOS == "windows" && bytes.HasPrefix(content, []byte("#!")) {
+		tb.Skip("requires a POSIX script executable; run this fixture on Linux")
+	}
 	syscall.ForkLock.RLock()
 	defer syscall.ForkLock.RUnlock()
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)

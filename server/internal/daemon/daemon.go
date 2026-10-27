@@ -301,6 +301,26 @@ func (r terminalTaskReport) deliveryKey() string {
 
 type executionEnvironmentCommand func() ([]string, error)
 
+// cursorSupplementHookCommand returns the hook relay a steerable Cursor run
+// installs in .cursor/hooks.json. That file lands in the workdir, so steering
+// is offered only for daemon-managed workdirs, never inside a user's own
+// directory or worktree, and only when the workdir has no hooks.json of its
+// own. Windows is excluded because Cursor runs hooks there through PowerShell,
+// whose quoting the relay command is not verified against.
+func cursorSupplementHookCommand(env *execenv.Environment) ([]string, bool) {
+	if runtime.GOOS == "windows" || env == nil || env.LocalDirectory || env.LocalWorktree != nil {
+		return nil, false
+	}
+	if agent.CursorHooksInstallable(env.WorkDir) != nil {
+		return nil, false
+	}
+	executable, err := resolveSelfExecutable()
+	if err != nil {
+		return nil, false
+	}
+	return []string{executable, agent.CursorHookHelperArg}, true
+}
+
 func defaultExecutionEnvironmentCommand() ([]string, error) {
 	executable, err := resolveSelfExecutable()
 	if err != nil {
@@ -366,7 +386,6 @@ type workspaceState struct {
 	allowedP4Identities map[string]P4DepotData
 	taskP4Refs          map[string]map[string]P4DepotData // taskID -> identity -> depot
 	settings            json.RawMessage                   // workspace settings (JSONB)
-	lastRepoSyncErr     string
 	repoRefreshMu       contextLock
 	// coAuthorPublishMu serializes publication of the Co-authored-by verdict
 	// for this workspace. Unlike the fields above it is NOT guarded by
@@ -445,6 +464,10 @@ type Daemon struct {
 	p4Cache    *p4cache.Cache
 	skillCache *SkillBundleCache
 	logger     *slog.Logger
+
+	// gitCALastErr is the last applyGitCACerts failure, so a persistent one
+	// (e.g. on Windows) is logged once rather than on every repo refresh.
+	gitCALastErr atomic.Pointer[string]
 
 	// terminalReports is the durable outbox for complete/fail callbacks. The
 	// sender hook is production-wired through Client and overridable in focused
@@ -620,14 +643,15 @@ type Daemon struct {
 	wsClaimHTTPFallbackAfter atomic.Int64
 
 	// runtimeGoneMu guards runtimeGoneInflight, reregisterNextAttempt, and
-	// reregisterLastCompletedAt. The state lets heartbeat / poller / WS-ack
+	// reregisterLastCompletedGeneration. The state lets heartbeat / poller / WS-ack
 	// handlers converge on a single recovery path when they each detect that a
 	// runtime row was deleted server-side without three of them stampeding
 	// registerRuntimesForWorkspace.
-	runtimeGoneMu             sync.Mutex
-	runtimeGoneInflight       map[string]struct{}  // runtime_id -> currently recovering
-	reregisterNextAttempt     map[string]time.Time // workspace_id -> earliest time the next re-register attempt may run
-	reregisterLastCompletedAt map[string]time.Time // workspace_id -> wall-clock at which the last SUCCESSFUL re-register call returned (failures intentionally not stamped — see recordRegisterCompletion)
+	runtimeGoneMu                     sync.Mutex
+	runtimeGoneInflight               map[string]struct{}  // runtime_id -> currently recovering
+	reregisterNextAttempt             map[string]time.Time // workspace_id -> earliest time the next re-register attempt may run
+	reregisterLastCompletedGeneration map[string]uint64
+	runtimeRecoveryGeneration         atomic.Uint64
 
 	// pendingWorkMu guards pendingWorkInflight and pendingWorkLastRun, which
 	// coalesce and rate-limit server-pushed "heartbeat now" hints (MUL-5444).
@@ -775,47 +799,47 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	// server can split logs/metrics by client version (parallel to the CLI).
 	client.SetVersion(cfg.CLIVersion)
 	d := &Daemon{
-		cfg:                         cfg,
-		client:                      client,
-		repoCache:                   repocache.New(cacheRoot, logger),
-		p4Cache:                     &p4cache.Cache{Logger: logger, Timeout: cfg.P4Timeout},
-		skillCache:                  NewSkillBundleCache(skillCacheRoot),
-		logger:                      logger,
-		terminalReports:             newTerminalReportStore(cfg),
-		terminalReportWakeup:        make(chan struct{}, 1),
-		terminalReportNow:           time.Now,
-		terminalReportFlight:        make(map[string]struct{}),
-		workspaces:                  make(map[string]*workspaceState),
-		runtimeIndex:                make(map[string]Runtime),
-		profileLaunchSpecs:          make(map[string]profileLaunchSpec),
-		runtimeSet:                  newRuntimeSetWatcher(),
-		agentDiscoveryKick:          make(chan struct{}, 1),
-		agentVersions:               make(map[string]string),
-		skippedAgents:               make(map[string]string),
-		resolvedPaths:               make(map[string]healedAgent),
-		wsHBLastAck:                 make(map[string]time.Time),
-		activeEnvRoots:              make(map[string]int),
-		deletingEnvRoots:            make(map[string]bool),
-		activeStores:                make(map[string]int),
-		deletingStores:              make(map[string]bool),
-		localPathLocks:              NewLocalPathLocker(),
-		p4ClientLocks:               NewLocalPathLocker(),
-		p4Bindings:                  make(map[string]*p4TaskBinding),
-		runtimeGoneInflight:         make(map[string]struct{}),
-		pendingWorkInflight:         make(map[string]struct{}),
-		pendingWorkLastRun:          make(map[string]time.Time),
-		reregisterNextAttempt:       make(map[string]time.Time),
-		reregisterLastCompletedAt:   make(map[string]time.Time),
-		cancelPollInterval:          5 * time.Second,
-		taskSlotWait:                taskSlotWaitTimeout,
-		taskSupplementPollInterval:  defaultTaskSupplementPollInterval,
-		taskSupplementReadyInterval: defaultTaskSupplementReadyInterval,
-		envRootBusyWait:             15 * time.Second,
-		taskPrepareTimeout:          defaultTaskPrepareTimeout,
-		prepareLeaseRefresh:         taskPrepareLeaseRefresh,
-		reconcile:                   newReconcileBroadcaster(),
-		workspaceChanges:            newWorkspaceChangeSignal(),
-		wsRPC:                       newWSRPCClient(wsRPCResponseGrace),
+		cfg:                               cfg,
+		client:                            client,
+		repoCache:                         repocache.New(cacheRoot, logger),
+		p4Cache:                           &p4cache.Cache{Logger: logger, Timeout: cfg.P4Timeout},
+		skillCache:                        NewSkillBundleCache(skillCacheRoot),
+		logger:                            logger,
+		terminalReports:                   newTerminalReportStore(cfg),
+		terminalReportWakeup:              make(chan struct{}, 1),
+		terminalReportNow:                 time.Now,
+		terminalReportFlight:              make(map[string]struct{}),
+		workspaces:                        make(map[string]*workspaceState),
+		runtimeIndex:                      make(map[string]Runtime),
+		profileLaunchSpecs:                make(map[string]profileLaunchSpec),
+		runtimeSet:                        newRuntimeSetWatcher(),
+		agentDiscoveryKick:                make(chan struct{}, 1),
+		agentVersions:                     make(map[string]string),
+		skippedAgents:                     make(map[string]string),
+		resolvedPaths:                     make(map[string]healedAgent),
+		wsHBLastAck:                       make(map[string]time.Time),
+		activeEnvRoots:                    make(map[string]int),
+		deletingEnvRoots:                  make(map[string]bool),
+		activeStores:                      make(map[string]int),
+		deletingStores:                    make(map[string]bool),
+		localPathLocks:                    NewLocalPathLocker(),
+		p4ClientLocks:                     NewLocalPathLocker(),
+		p4Bindings:                        make(map[string]*p4TaskBinding),
+		runtimeGoneInflight:               make(map[string]struct{}),
+		pendingWorkInflight:               make(map[string]struct{}),
+		pendingWorkLastRun:                make(map[string]time.Time),
+		reregisterNextAttempt:             make(map[string]time.Time),
+		reregisterLastCompletedGeneration: make(map[string]uint64),
+		cancelPollInterval:                5 * time.Second,
+		taskSlotWait:                      taskSlotWaitTimeout,
+		taskSupplementPollInterval:        defaultTaskSupplementPollInterval,
+		taskSupplementReadyInterval:       defaultTaskSupplementReadyInterval,
+		envRootBusyWait:                   15 * time.Second,
+		taskPrepareTimeout:                defaultTaskPrepareTimeout,
+		prepareLeaseRefresh:               taskPrepareLeaseRefresh,
+		reconcile:                         newReconcileBroadcaster(),
+		workspaceChanges:                  newWorkspaceChangeSignal(),
+		wsRPC:                             newWSRPCClient(wsRPCResponseGrace),
 	}
 	d.activeEnvRootsCond = sync.NewCond(&d.activeEnvRootsMu)
 	d.activeStoresCond = sync.NewCond(&d.activeStoresMu)
@@ -1320,10 +1344,9 @@ func (d *Daemon) handleRuntimeGone(runtimeID string) {
 		return
 	}
 
-	// entryAt anchors the same-wave-straggler check at the bottom of the
-	// function. Captured at the very top so removeStaleRuntime mutex
-	// contention can't push it past a sibling's register completion.
-	entryAt := time.Now()
+	// Observe recovery before pruning: a successful sibling recovery makes
+	// this observation stale, even when the clock has not advanced.
+	entryGeneration := d.runtimeRecoveryGeneration.Load()
 
 	// Stampede control per runtime ID.
 	d.runtimeGoneMu.Lock()
@@ -1350,7 +1373,7 @@ func (d *Daemon) handleRuntimeGone(runtimeID string) {
 		"runtime_id", runtimeID, "workspace_id", workspaceID)
 	d.notifyRuntimeSetChanged()
 
-	if !d.tryClaimRegisterSlot(workspaceID, entryAt, time.Now()) {
+	if !d.tryClaimRegisterSlot(workspaceID, entryGeneration, time.Now()) {
 		d.logger.Debug("skip re-register: coalescing with recent attempt",
 			"workspace_id", workspaceID)
 		return
@@ -1367,49 +1390,24 @@ func (d *Daemon) handleRuntimeGone(runtimeID string) {
 	}
 }
 
-// tryClaimRegisterSlot atomically decides whether the calling goroutine should
-// run registerRuntimesForWorkspace. Returns true and claims the in-flight slot
-// when the caller may proceed; returns false (without mutating state) when the
-// call must be coalesced with a peer.
-//
-// Two gates are checked under runtimeGoneMu:
-//
-//  1. reregisterNextAttempt: a future timestamp means a peer holds the slot or
-//     a previous attempt failed and we are inside the failure backoff window.
-//  2. reregisterLastCompletedAt: a timestamp at or after our entryAt means a
-//     peer's register SUCCEEDED after we entered handleRuntimeGone, so the
-//     workspace state is already covered for our wave and we can bail.
-//     Failures intentionally don't stamp this field (see
-//     recordRegisterCompletion), so a same-wave straggler whose entryAt
-//     predates a failed sibling can still retry once the failure backoff
-//     expires — failures don't cover anything.
-//
-// entryAt is the wall-clock captured at the top of handleRuntimeGone. now is
-// passed in (rather than read inside) so tests can drive the gate
-// deterministically without sleeping.
-func (d *Daemon) tryClaimRegisterSlot(workspaceID string, entryAt, now time.Time) bool {
+// tryClaimRegisterSlot coalesces in-flight work and observations covered by a
+// successful recovery. Logical generations distinguish sequential events on
+// Windows clocks with coarse resolution; time is used only for failure backoff.
+func (d *Daemon) tryClaimRegisterSlot(workspaceID string, entryGeneration uint64, now time.Time) bool {
 	d.runtimeGoneMu.Lock()
 	defer d.runtimeGoneMu.Unlock()
 	if next, ok := d.reregisterNextAttempt[workspaceID]; ok && now.Before(next) {
 		return false
 	}
-	if last, ok := d.reregisterLastCompletedAt[workspaceID]; ok && !last.Before(entryAt) {
+	if last, ok := d.reregisterLastCompletedGeneration[workspaceID]; ok && last > entryGeneration {
 		return false
 	}
 	d.reregisterNextAttempt[workspaceID] = now.Add(reregisterCoalesceWindow)
 	return true
 }
 
-// recordRegisterCompletion records the outcome of a register call. On success
-// it stamps lastCompletedAt (which suppresses same-wave stragglers via
-// tryClaimRegisterSlot) and clears the in-flight slot so a genuinely later
-// runtime deletion can claim immediately. On failure it extends
-// reregisterNextAttempt by the failure backoff and intentionally does NOT
-// stamp lastCompletedAt — a failed register did not cover any workspace
-// state, so a same-wave straggler whose entryAt predates the failure must
-// still be allowed to retry once the backoff expires. workspaceSyncLoop only
-// retries when the workspace's runtimeIDs fully drain, so partial-deletion
-// recovery has to come from the straggler path.
+// Successful recovery covers earlier observations and releases the slot.
+// Failure only starts a backoff; it does not cover any pending observation.
 func (d *Daemon) recordRegisterCompletion(workspaceID string, completedAt time.Time, err error) {
 	d.runtimeGoneMu.Lock()
 	defer d.runtimeGoneMu.Unlock()
@@ -1417,7 +1415,7 @@ func (d *Daemon) recordRegisterCompletion(workspaceID string, completedAt time.T
 		d.reregisterNextAttempt[workspaceID] = completedAt.Add(reregisterFailureBackoff)
 		return
 	}
-	d.reregisterLastCompletedAt[workspaceID] = completedAt
+	d.reregisterLastCompletedGeneration[workspaceID] = d.runtimeRecoveryGeneration.Add(1)
 	delete(d.reregisterNextAttempt, workspaceID)
 }
 
@@ -3243,14 +3241,6 @@ func repoAllowlist(repos []RepoData) map[string]struct{} {
 	return allowed
 }
 
-func (d *Daemon) setWorkspaceRepoSyncError(workspaceID, syncErr string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if ws, ok := d.workspaces[workspaceID]; ok {
-		ws.lastRepoSyncErr = syncErr
-	}
-}
-
 func (d *Daemon) workspaceRepoAllowed(workspaceID, repoURL string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -3304,16 +3294,6 @@ func (d *Daemon) repoBarePathIsLive(barePath string) bool {
 		}
 	}
 	return false
-}
-
-func (d *Daemon) workspaceLastRepoSyncErr(workspaceID string) string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	ws, ok := d.workspaces[workspaceID]
-	if !ok {
-		return ""
-	}
-	return ws.lastRepoSyncErr
 }
 
 // workspaceCoAuthoredByEnabled returns whether the Co-authored-by hook should
@@ -3543,12 +3523,16 @@ func (d *Daemon) waitBackgroundSyncs() {
 }
 
 func (d *Daemon) syncWorkspaceRepos(workspaceID string, repos []RepoData) {
-	d.syncWorkspaceReposContext(context.Background(), workspaceID, repos)
+	_ = d.syncWorkspaceReposContext(context.Background(), workspaceID, repos)
 }
 
-func (d *Daemon) syncWorkspaceReposContext(ctx context.Context, workspaceID string, repos []RepoData) {
+// syncWorkspaceReposContext returns the sync error to its caller rather than
+// recording it per workspace: background syncs of other repos run
+// concurrently, and a shared slot let a later successful sync erase the
+// failure before a checkout could report it.
+func (d *Daemon) syncWorkspaceReposContext(ctx context.Context, workspaceID string, repos []RepoData) error {
 	if d.repoCache == nil {
-		return
+		return nil
 	}
 	var err error
 	if cache, ok := d.repoCache.(interface {
@@ -3559,11 +3543,9 @@ func (d *Daemon) syncWorkspaceReposContext(ctx context.Context, workspaceID stri
 		err = d.repoCache.Sync(workspaceID, repoDataToInfo(repos))
 	}
 	if err != nil {
-		d.setWorkspaceRepoSyncError(workspaceID, err.Error())
 		d.logger.Warn("repo cache sync failed", "workspace_id", workspaceID, "error", err)
-		return
 	}
-	d.setWorkspaceRepoSyncError(workspaceID, "")
+	return err
 }
 
 func (d *Daemon) refreshWorkspaceRepos(ctx context.Context, workspaceID string) (*WorkspaceReposResponse, error) {
@@ -3574,6 +3556,7 @@ func (d *Daemon) refreshWorkspaceRepos(ctx context.Context, workspaceID string) 
 	if err != nil {
 		return nil, err
 	}
+	d.applyGitCACerts(resp.CACerts)
 
 	d.mu.Lock()
 	if ws, ok := d.workspaces[workspaceID]; ok {
@@ -4062,7 +4045,7 @@ func (d *Daemon) ensureRepoReady(ctx context.Context, workspaceID, repoURL strin
 		return nil
 	}
 
-	d.syncWorkspaceReposContext(ctx, workspaceID, resp.Repos)
+	syncErr := d.syncWorkspaceReposContext(ctx, workspaceID, resp.Repos)
 	if err := ctx.Err(); err != nil {
 		return context.Cause(ctx)
 	}
@@ -4071,8 +4054,8 @@ func (d *Daemon) ensureRepoReady(ctx context.Context, workspaceID, repoURL strin
 		return nil
 	}
 
-	if syncErr := d.workspaceLastRepoSyncErr(workspaceID); syncErr != "" {
-		return fmt.Errorf("repo is configured but not synced: %s", syncErr)
+	if syncErr != nil {
+		return fmt.Errorf("repo is configured but not synced: %w", syncErr)
 	}
 
 	return fmt.Errorf("repo is configured but not synced")
@@ -4456,6 +4439,7 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context, reconcileProfiles bo
 			continue
 		}
 
+		d.applyGitCACerts(resp.CACerts)
 		if d.repoCache != nil && len(resp.Repos) > 0 {
 			go d.syncWorkspaceRepos(id, resp.Repos)
 		}
@@ -6574,6 +6558,7 @@ var runtimeDisplayNameOverrides = map[string]string{
 	"qwen":       "Qwen Code",
 	"qwenpaw":    "QwenPaw",
 	"mcode":      "MiniMax Code",
+	"muse":       "Muse Code",
 	"zeroclaw":   "ZeroClaw",
 }
 
@@ -7392,7 +7377,7 @@ func (d *Daemon) lockReusablePriorEnvRoot(ctx context.Context, task Task, localA
 	// later step is checked against THIS, not against whatever the name
 	// resolves to next: a path string cannot tell "the directory I validated"
 	// apart from "a different directory now answering to that name".
-	validatedInfo, err := os.Stat(priorRoot)
+	validatedInfo, err := util.StatFileIdentity(priorRoot)
 	if err != nil {
 		return nil, "", nil, false, nil
 	}
@@ -7443,7 +7428,7 @@ func (d *Daemon) lockReusablePriorEnvRoot(ctx context.Context, task Task, localA
 	}
 	// ...and the directory we are about to hand to Reuse has to be that same
 	// one, so the object locked and the object used cannot diverge.
-	currentInfo, err := os.Stat(filepath.Dir(recheckedWorkDir))
+	currentInfo, err := util.StatFileIdentity(filepath.Dir(recheckedWorkDir))
 	if err != nil || !os.SameFile(lockedInfo, currentInfo) {
 		d.logger.Info("prior workdir changed identity while being claimed; starting a fresh environment",
 			"task", task.ID)
@@ -7603,9 +7588,10 @@ func skillRefFromBundle(bundle SkillData) SkillRefData {
 // taskModelSelection is what a task actually launches with: the model
 // selector plus the capability overrides that survived validation.
 type taskModelSelection struct {
-	Model         string
-	ThinkingLevel string
-	ServiceTier   string
+	Model                string
+	ThinkingLevel        string
+	ServiceTier          string
+	ThinkingLevelWarning string
 }
 
 // resolveTaskModelSelection settles the model selector and its capability
@@ -7696,7 +7682,7 @@ func resolveTaskModelSelection(
 	// persisted level and let the CLI object, unless the binary itself has no
 	// such effort flag (MUL-7691).
 	if sel.ThinkingLevel != "" {
-		ok, err := agent.ValidateThinkingLevelWith(loadCatalog, provider, sel.Model, sel.ThinkingLevel)
+		check, err := agent.CheckThinkingLevelWith(loadCatalog, provider, sel.Model, sel.ThinkingLevel)
 		if err != nil {
 			taskLog.Warn("thinking_level: catalog cannot validate; passing through",
 				"provider", provider,
@@ -7704,17 +7690,36 @@ func resolveTaskModelSelection(
 				"thinking_level", sel.ThinkingLevel,
 				"error", err,
 			)
-		} else if !ok {
+		} else if !check.Valid {
 			taskLog.Warn("thinking_level: not valid for this (provider, model); skipping injection",
 				"provider", provider,
 				"model", sel.Model,
 				"thinking_level", sel.ThinkingLevel,
+				"reason", check.Reason,
 			)
+			sel.ThinkingLevelWarning = fmt.Sprintf("Thinking level %q was not applied: %s. The runtime will use its default thinking level.", sel.ThinkingLevel, check.Reason)
 			sel.ThinkingLevel = ""
 		}
 	}
 
 	return sel
+}
+
+func (d *Daemon) reportThinkingLevelWarning(ctx context.Context, taskID, warning string, msgSeq *atomic.Int32, taskLog *slog.Logger) {
+	if warning == "" {
+		return
+	}
+	message := TaskMessageData{
+		Seq:       int(msgSeq.Add(1)),
+		Type:      "text",
+		Content:   redact.Text(warning) + "\n\n",
+		CreatedAt: time.Now(),
+	}
+	reportCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := d.client.ReportTaskMessages(reportCtx, taskID, []TaskMessageData{message}); err != nil {
+		taskLog.Warn("failed to report thinking-level warning", "error", err)
+	}
 }
 
 // qualifyTaskModel promotes a persisted model id to the canonical
@@ -8260,7 +8265,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// into "declined and started clean". See lockReusablePriorEnvRoot for
 		// what remains uncovered.
 		if env != nil && lockedPriorInfo != nil {
-			usedInfo, statErr := os.Stat(filepath.Dir(env.WorkDir))
+			usedInfo, statErr := util.StatFileIdentity(filepath.Dir(env.WorkDir))
 			if statErr != nil || !os.SameFile(lockedPriorInfo, usedInfo) {
 				// No "task" field here: taskLog already carries the full id.
 				taskLog.Info("reused workdir is not the directory that was claimed; starting a fresh environment")
@@ -8552,7 +8557,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// "start task failed: <…>" string and the same failure_reason
 	// taxonomy as before — see MUL-2946 for the classifier contract.
 	var taskCapabilities []string
-	if agent.SupportsTaskSupplement(provider, resolvedVersion) && task.IssueID != "" {
+	var cursorHookCommand []string
+	supplementSupported := agent.SupportsTaskSupplement(provider, resolvedVersion) && task.IssueID != ""
+	if supplementSupported && provider == "cursor" {
+		cursorHookCommand, supplementSupported = cursorSupplementHookCommand(env)
+	}
+	if supplementSupported {
 		taskCapabilities = append(taskCapabilities, protocol.DaemonCapabilityTaskSupplementV1)
 	}
 	taskSupplementNegotiated, err := d.client.StartTask(prepareCtx, task, taskCapabilities...)
@@ -8833,6 +8843,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	execOpts := agent.ExecOptions{
 		EnableTaskSupplement:       taskSupplementNegotiated,
+		CursorHookCommand:          cursorHookCommand,
 		Cwd:                        env.WorkDir,
 		Model:                      model,
 		ThreadName:                 deriveTaskThreadName(task),
@@ -8937,6 +8948,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Shared across the resume-retry below so the retry's transcript rows
 	// keep ascending seq values for the same task.
 	var msgSeq atomic.Int32
+	d.reportThinkingLevelWarning(ctx, task.ID, selection.ThinkingLevelWarning, &msgSeq, taskLog)
 	result, tools, err := d.executeAndDrain(ctx, backend, prompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
 	if err != nil {
 		return TaskResult{}, err
@@ -9157,14 +9169,23 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Usage:         usageEntries,
 		}, nil
 	case "cancelled":
-		// Server cancelled the task (e.g. issue reassignment, user cancel).
-		// handleTask's cancelledByPoll branch already discards this result,
-		// so this case is mainly defensive — and preserves the "cancelled"
-		// status string for the "agent finished" log line so operators can
-		// distinguish "task cancelled by server" from a real timeout.
+		// The daemon's own context was cancelled (server cancel or daemon
+		// shutdown): the parent context cancellation propagates here as
+		// context.Canceled and the fail callback runs. A user cancel or issue
+		// reassignment is discarded earlier by handleTask's cancelledByPoll
+		// branch, so this case is mainly defensive — and preserves the
+		// "cancelled" status string for the "agent finished" log line so
+		// operators can distinguish a server cancellation from a real timeout.
+		//
+		// Comment stays empty on purpose. reportTaskResult forwards it as the
+		// task's `error`, which the UI shows verbatim under "Technical
+		// details", so a sentence written here would reach the reader
+		// untranslated. The status alone already yields failure_reason
+		// "cancelled", whose label is localized in every shipped locale, and
+		// it says the same thing — an English sentence beside it would only
+		// be a worse copy of it.
 		return TaskResult{
 			Status:    "cancelled",
-			Comment:   "task cancelled by server",
 			SessionID: result.SessionID,
 			WorkDir:   env.WorkDir,
 			EnvRoot:   env.RootDir,
@@ -9937,8 +9958,8 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 		waitForDrain()
 		// Idle watchdog cancels via agentCancel(), which propagates here as
 		// context.Canceled. Check this BEFORE the generic cancelled/timeout
-		// classifiers so a watchdog-induced stop isn't misreported as
-		// "task cancelled by server".
+		// classifiers so a watchdog-induced stop isn't misreported as a
+		// server cancellation.
 		if idleWatchdogFired.Load() {
 			// For a backend that publishes a terminal boundary, enter the
 			// hand-off without asking terminalObserved first. Reading a flag and

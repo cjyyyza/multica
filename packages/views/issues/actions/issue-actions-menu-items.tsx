@@ -15,6 +15,7 @@ import {
   Network,
   Pin,
   PinOff,
+  Pencil,
   Plus,
   Trash2,
   Unlink,
@@ -112,7 +113,7 @@ export function IssueActionsMenuItems({
   const wsId = useWorkspaceId();
   // Only the statuses the issue's workflow allows; entering a step that hands
   // the issue off confirms first, as in the status picker. (MUL-7420)
-  const { options: statusOptions, workflow } = useIssueStatusOptions(wsId, issue.project_id);
+  const { options: statusOptions, workflow } = useIssueStatusOptions(wsId, issue.project_id, issue.status);
   const openModal = useModalStore((s) => s.open);
   const setStatus = (status: string) => {
     if (workflow && status !== issue.status && stepHandsOff(workflowStep(workflow, status))) {
@@ -129,6 +130,7 @@ export function IssueActionsMenuItems({
     togglePin,
     copyLink,
     openCreateSubIssue,
+    openRename,
     openSetParent,
     removeParent,
     openAddChild,
@@ -185,6 +187,16 @@ export function IssueActionsMenuItems({
 
   return (
     <>
+      {/* Rename leads the menu: it is the only entry that changes what the
+          issue *is* rather than a property of it, and on list/board rows it is
+          the only way to reach the title at all. */}
+      <P.Item onClick={openRename}>
+        <Pencil className="h-3.5 w-3.5" />
+        {t(($) => $.actions.rename_issue)}
+      </P.Item>
+
+      <P.Separator />
+
       {/* Status */}
       <P.Sub>
         <P.SubTrigger>

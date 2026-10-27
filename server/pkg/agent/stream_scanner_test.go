@@ -4,9 +4,58 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
+
+func TestAgentStreamScannerPreservesLineBoundariesAcrossReads(t *testing.T) {
+	for _, input := range []string{"", "\n", "\r", "\r\n", "\n\n", "first\r\nsecond\npartial\r", "embedded\rreturn\nlast"} {
+		wantScanner := bufio.NewScanner(strings.NewReader(input))
+		var want []string
+		for wantScanner.Scan() {
+			want = append(want, wantScanner.Text())
+		}
+		scanner := newAgentStreamScanner(iotest.OneByteReader(strings.NewReader(input)))
+		var got []string
+		for scanner.Scan() {
+			got = append(got, scanner.Text())
+		}
+		if scanner.Err() != nil || !slices.Equal(got, want) {
+			t.Errorf("input %q: lines=%q, want %q, error=%v", input, got, want, scanner.Err())
+		}
+	}
+}
+
+type streamChunkReader struct{ io.Reader }
+
+func (r streamChunkReader) Read(p []byte) (int, error) {
+	return r.Reader.Read(p[:min(len(p), 4096)])
+}
+
+func BenchmarkAgentStreamLargePipeLine(b *testing.B) {
+	input := strings.Repeat("x", 16*1024*1024) + "\n"
+	for _, standard := range []bool{false, true} {
+		name := "incremental"
+		if standard {
+			name = "standard"
+		}
+		b.Run(name, func(b *testing.B) {
+			b.SetBytes(int64(len(input)))
+			for range b.N {
+				reader := streamChunkReader{strings.NewReader(input)}
+				scanner := newAgentStreamScanner(reader)
+				if standard {
+					scanner.Split(bufio.ScanLines)
+				}
+				if !scanner.Scan() || len(scanner.Bytes()) != len(input)-1 {
+					b.Fatalf("large line was not preserved: %v", scanner.Err())
+				}
+			}
+		})
+	}
+}
 
 // TestAgentStreamScannerReadsPastOldTenMiBCap is the regression for MUL-5722 /
 // GH#4520: Codex serializes a whole thread into the single `thread/resume`

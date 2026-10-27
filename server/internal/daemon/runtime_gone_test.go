@@ -21,17 +21,17 @@ import (
 // so callers can exercise handleRuntimeGone without going through Run.
 func freshDaemon(serverURL string) *Daemon {
 	return &Daemon{
-		client:                    NewClient(serverURL),
-		logger:                    slog.New(slog.NewTextHandler(testNopWriter{}, &slog.HandlerOptions{Level: slog.LevelWarn})),
-		workspaces:                make(map[string]*workspaceState),
-		runtimeIndex:              make(map[string]Runtime),
-		runtimeSet:                newRuntimeSetWatcher(),
-		agentVersions:             make(map[string]string),
-		wsHBLastAck:               make(map[string]time.Time),
-		activeEnvRoots:            make(map[string]int),
-		runtimeGoneInflight:       make(map[string]struct{}),
-		reregisterNextAttempt:     make(map[string]time.Time),
-		reregisterLastCompletedAt: make(map[string]time.Time),
+		client:                            NewClient(serverURL),
+		logger:                            slog.New(slog.NewTextHandler(testNopWriter{}, &slog.HandlerOptions{Level: slog.LevelWarn})),
+		workspaces:                        make(map[string]*workspaceState),
+		runtimeIndex:                      make(map[string]Runtime),
+		runtimeSet:                        newRuntimeSetWatcher(),
+		agentVersions:                     make(map[string]string),
+		wsHBLastAck:                       make(map[string]time.Time),
+		activeEnvRoots:                    make(map[string]int),
+		runtimeGoneInflight:               make(map[string]struct{}),
+		reregisterNextAttempt:             make(map[string]time.Time),
+		reregisterLastCompletedGeneration: make(map[string]uint64),
 	}
 }
 
@@ -561,17 +561,30 @@ func TestTryClaimRegisterSlot_FirstCallerClaims(t *testing.T) {
 
 	d := freshDaemon("")
 	t0 := time.Now()
-	if !d.tryClaimRegisterSlot("ws-1", t0, t0) {
+	if !d.tryClaimRegisterSlot("ws-1", 0, t0) {
 		t.Fatalf("first caller should claim the slot, got false")
 	}
 }
 
+func TestTryClaimRegisterSlotDistinctEventsWithIdenticalTimestamps(t *testing.T) {
+	d := freshDaemon("")
+	now := time.Now()
+	before := d.runtimeRecoveryGeneration.Load()
+	if !d.tryClaimRegisterSlot("ws-1", before, now) {
+		t.Fatal("initial observation was rejected")
+	}
+	d.recordRegisterCompletion("ws-1", now, nil)
+	if d.tryClaimRegisterSlot("ws-1", before, now) {
+		t.Fatal("a stale observation was not coalesced")
+	}
+	if !d.tryClaimRegisterSlot("ws-1", d.runtimeRecoveryGeneration.Load(), now) {
+		t.Fatal("a distinct observation with the same timestamp was suppressed")
+	}
+}
+
 func TestTryClaimRegisterSlot_StragglerBailsAfterSiblingSuccess(t *testing.T) {
-	// Deterministic regression for the race the flaky CoalescesConcurrentCallers
-	// test was catching: goroutine B enters at T0, goroutine A enters slightly
-	// later, A claims the slot, runs register to success, clears the slot. B's
-	// removeStaleRuntime then catches up and B reaches the coalesce gate. Without
-	// the lastCompletedAt gate, B would see an empty slot and double-register.
+	// Both callers observed the same generation. A successful recovery covers
+	// the observation B made before waiting for runtime pruning.
 	t.Parallel()
 
 	d := freshDaemon("")
@@ -579,17 +592,15 @@ func TestTryClaimRegisterSlot_StragglerBailsAfterSiblingSuccess(t *testing.T) {
 
 	// A: enters at T0+1ms, claims slot, register completes at T0+50ms.
 	aEntry := t0.Add(1 * time.Millisecond)
-	if !d.tryClaimRegisterSlot("ws-1", aEntry, aEntry) {
+	if !d.tryClaimRegisterSlot("ws-1", 0, aEntry) {
 		t.Fatalf("A: expected to claim, got bail")
 	}
 	d.recordRegisterCompletion("ws-1", t0.Add(50*time.Millisecond), nil)
 
 	// B: entered at T0 (BEFORE A completed and cleared the slot) but only
-	// arrives at the gate after A is done. Must bail on the lastCompletedAt
-	// check.
-	bEntry := t0
+	// arrives at the gate after A is done. Its observation is already covered.
 	bArrive := t0.Add(60 * time.Millisecond)
-	if d.tryClaimRegisterSlot("ws-1", bEntry, bArrive) {
+	if d.tryClaimRegisterSlot("ws-1", 0, bArrive) {
 		t.Fatalf("B: same-wave straggler must NOT re-claim the slot after A's success")
 	}
 }
@@ -605,21 +616,21 @@ func TestTryClaimRegisterSlot_DistinctLaterEventClaims(t *testing.T) {
 	d := freshDaemon("")
 	t0 := time.Now()
 
-	if !d.tryClaimRegisterSlot("ws-1", t0, t0) {
+	if !d.tryClaimRegisterSlot("ws-1", 0, t0) {
 		t.Fatalf("first caller should claim")
 	}
 	d.recordRegisterCompletion("ws-1", t0.Add(50*time.Millisecond), nil)
 
 	// A genuinely later event: entered AFTER the prior register completed.
 	laterEntry := t0.Add(100 * time.Millisecond)
-	if !d.tryClaimRegisterSlot("ws-1", laterEntry, laterEntry) {
+	if !d.tryClaimRegisterSlot("ws-1", d.runtimeRecoveryGeneration.Load(), laterEntry) {
 		t.Fatalf("genuinely later event must be allowed to claim, got bail")
 	}
 }
 
 func TestTryClaimRegisterSlot_FailureBackoffSuppressesRetries(t *testing.T) {
 	// After a failed register, callers within the failure backoff window must
-	// bail even if their entry time predates the failure (the daemon must not
+	// bail even if their observation predates the failure (the daemon must not
 	// replace a server-side log flood with a register flood). Callers past the
 	// window are allowed to proceed.
 	t.Parallel()
@@ -627,32 +638,26 @@ func TestTryClaimRegisterSlot_FailureBackoffSuppressesRetries(t *testing.T) {
 	d := freshDaemon("")
 	t0 := time.Now()
 
-	if !d.tryClaimRegisterSlot("ws-1", t0, t0) {
+	if !d.tryClaimRegisterSlot("ws-1", 0, t0) {
 		t.Fatalf("first caller should claim")
 	}
 	failAt := t0.Add(50 * time.Millisecond)
 	d.recordRegisterCompletion("ws-1", failAt, errors.New("boom"))
 
 	within := failAt.Add(reregisterFailureBackoff / 2)
-	if d.tryClaimRegisterSlot("ws-1", within, within) {
+	if d.tryClaimRegisterSlot("ws-1", 0, within) {
 		t.Fatalf("call within failure backoff must be coalesced")
 	}
 
 	past := failAt.Add(reregisterFailureBackoff + time.Second)
-	if !d.tryClaimRegisterSlot("ws-1", past, past) {
+	if !d.tryClaimRegisterSlot("ws-1", 0, past) {
 		t.Fatalf("call past failure backoff must be allowed to claim")
 	}
 }
 
 func TestTryClaimRegisterSlot_StragglerAfterFailedSiblingRetriesPastBackoff(t *testing.T) {
-	// Regression for the failure-path semantics gap the second review caught:
-	// recordRegisterCompletion must NOT stamp lastCompletedAt on failure,
-	// because a failed register has not covered any workspace state. A
-	// same-wave straggler whose entryAt predates the failure but who only
-	// reaches the gate after the failure backoff has expired must be allowed
-	// to claim — otherwise the workspace stays unregistered until
-	// workspaceSyncLoop notices, and that loop only fires when the workspace's
-	// runtimeIDs fully drain (partial deletions wouldn't trigger it).
+	// Failed recovery covers no observations. A waiting caller may retry once
+	// the failure backoff expires, even if it observed the same generation.
 	t.Parallel()
 
 	d := freshDaemon("")
@@ -660,9 +665,9 @@ func TestTryClaimRegisterSlot_StragglerAfterFailedSiblingRetriesPastBackoff(t *t
 
 	// A: enters at T0+1ms, claims slot, register FAILS at T0+50ms. The
 	// failure stamps reregisterNextAttempt = failAt + failureBackoff and
-	// (per the fix) does NOT stamp lastCompletedAt.
+	// does not advance the completed generation.
 	aEntry := t0.Add(1 * time.Millisecond)
-	if !d.tryClaimRegisterSlot("ws-1", aEntry, aEntry) {
+	if !d.tryClaimRegisterSlot("ws-1", 0, aEntry) {
 		t.Fatalf("A: expected to claim, got bail")
 	}
 	failAt := t0.Add(50 * time.Millisecond)
@@ -670,27 +675,26 @@ func TestTryClaimRegisterSlot_StragglerAfterFailedSiblingRetriesPastBackoff(t *t
 
 	// B: entered at T0 (BEFORE A's failure) but was stuck on removeStaleRuntime
 	// mutex contention; arrives at the gate at failAt + failureBackoff + 1s.
-	// nextAttempt has expired; lastCompletedAt is unset; B must claim.
-	bEntry := t0
+	// nextAttempt has expired; the generation is unchanged; B must claim.
 	bArrive := failAt.Add(reregisterFailureBackoff + time.Second)
-	if !d.tryClaimRegisterSlot("ws-1", bEntry, bArrive) {
-		t.Fatalf("B: straggler whose entryAt predates a failed sibling must reclaim once failure backoff expires")
+	if !d.tryClaimRegisterSlot("ws-1", 0, bArrive) {
+		t.Fatalf("B: an observation predating a failed sibling must retry after backoff")
 	}
 }
 
 func TestTryClaimRegisterSlot_PeerHoldingSlotForcesCoalesce(t *testing.T) {
 	// While a peer holds an unfinished slot, callers must bail regardless of
-	// the lastCompletedAt state.
+	// the completed generation.
 	t.Parallel()
 
 	d := freshDaemon("")
 	t0 := time.Now()
-	if !d.tryClaimRegisterSlot("ws-1", t0, t0) {
+	if !d.tryClaimRegisterSlot("ws-1", 0, t0) {
 		t.Fatalf("first caller should claim")
 	}
-	// Peer is still running register; lastCompletedAt is not yet set, but
+	// Peer is still running register; no generation has completed yet, but
 	// reregisterNextAttempt is t0 + coalesceWindow.
-	if d.tryClaimRegisterSlot("ws-1", t0.Add(time.Millisecond), t0.Add(time.Millisecond)) {
+	if d.tryClaimRegisterSlot("ws-1", 0, t0.Add(time.Millisecond)) {
 		t.Fatalf("caller arriving while peer holds the slot must coalesce")
 	}
 }

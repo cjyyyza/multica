@@ -19,6 +19,16 @@
     "toast_deleted": "Issue deleted",
     "toast_delete_failed": "Failed to delete issue"
   },
+  "rename_issue": {
+    "title": "Rename issue",
+    "placeholder": "Issue title",
+    "input_aria_label": "Rename {{identifier}}",
+    "submit": "Save",
+    "saving": "Saving...",
+    "title_required": "Enter a title",
+    "toast_renamed": "Issue renamed",
+    "toast_failed": "Failed to rename issue"
+  },
   "feedback": {
     "title": "Feedback",
     "placeholder": "Tell us about your experience, bugs you've found, or features you'd like to see…",
@@ -78,6 +88,10 @@
     "members_label": "Additional Members",
     "members_optional": "(optional)",
     "members_hint": "The leader can delegate sub-issues to these members.",
+    "max_concurrent_tasks_label": "Max Concurrent Tasks",
+    "max_concurrent_tasks_hint": "Limits how many issues the squad works in flight and how many tasks run at once across its agents (1-50). Leave empty for no limit.",
+    "max_concurrent_tasks_placeholder": "Unlimited",
+    "max_concurrent_tasks_invalid": "Enter a whole number between 1 and 50.",
     "members_placeholder": "Add agents or workspace members",
     "members_selected_count_one": "{{count}} selected",
     "members_selected_count_other": "{{count}} selected",

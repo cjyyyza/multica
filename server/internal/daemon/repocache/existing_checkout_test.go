@@ -303,7 +303,7 @@ func TestFreshCheckoutDiscardsLocalWork(t *testing.T) {
 			if got := gitHead(t, fresh.Path); got != upstream {
 				t.Fatalf("HEAD = %s, want the latest default branch %s", got, upstream)
 			}
-			if got := readFile(t, filepath.Join(fresh.Path, "tracked.txt")); got != "base\n" {
+			if got := strings.ReplaceAll(readFile(t, filepath.Join(fresh.Path, "tracked.txt")), "\r\n", "\n"); got != "base\n" {
 				t.Fatalf("tracked.txt = %q, want the uncommitted edit discarded", got)
 			}
 			for _, name := range []string{"new.txt", "committed.txt"} {

@@ -215,11 +215,9 @@ func TestRecordHeartbeat_NoopStoreAlwaysWritesDB(t *testing.T) {
 
 	// Pin last_seen_at to "just now" to ensure the DB-flush condition is not
 	// what's driving the write.
-	setRuntimeLastSeenAt(t, runtimeID, time.Now())
+	dbfx.Exec(t, `UPDATE agent_runtime SET last_seen_at = now() - interval '1 second' WHERE id = $1`, runtimeID)
 	rt := loadRuntime(t, runtimeID)
 	before := rt.LastSeenAt.Time
-
-	time.Sleep(50 * time.Millisecond)
 
 	if err := testHandler.recordHeartbeat(context.Background(), rt); err != nil {
 		t.Fatalf("recordHeartbeat: %v", err)
@@ -403,11 +401,9 @@ func TestRecordHeartbeat_TouchErrorFallsBackToDB(t *testing.T) {
 	testHandler.LivenessStore = fake
 	t.Cleanup(func() { testHandler.LivenessStore = orig })
 
-	setRuntimeLastSeenAt(t, runtimeID, time.Now())
+	dbfx.Exec(t, `UPDATE agent_runtime SET last_seen_at = now() - interval '1 second' WHERE id = $1`, runtimeID)
 	rt := loadRuntime(t, runtimeID)
 	before := rt.LastSeenAt.Time
-
-	time.Sleep(50 * time.Millisecond)
 
 	if err := testHandler.recordHeartbeat(context.Background(), rt); err != nil {
 		t.Fatalf("recordHeartbeat: %v", err)

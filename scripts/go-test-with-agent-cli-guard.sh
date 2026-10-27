@@ -17,6 +17,7 @@ trap 'exit 143' TERM
 mkdir -p "$BIN_DIR"
 
 while IFS= read -r name || [ -n "$name" ]; do
+  name=${name%$'\r'}
   case "$name" in
     ""|'#'*) continue ;;
     *[!A-Za-z0-9._-]*)

@@ -102,11 +102,24 @@ func runSquadGet(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Name:         %s\n", strVal(squad, "name"))
 	fmt.Printf("Description:  %s\n", strVal(squad, "description"))
 	fmt.Printf("Leader ID:    %s\n", strVal(squad, "leader_id"))
+	fmt.Printf("Max Concurrent Tasks: %s\n", maxConcurrentTasksDisplay(squad))
 	fmt.Printf("Created:      %s\n", strVal(squad, "created_at"))
 	if inst := strVal(squad, "instructions"); inst != "" {
 		fmt.Printf("Instructions: %s\n", inst)
 	}
 	return nil
+}
+
+func maxConcurrentTasksDisplay(s map[string]any) string {
+	v, ok := s["max_concurrent_tasks"]
+	if !ok || v == nil {
+		return "unlimited"
+	}
+	n, ok := v.(float64)
+	if !ok {
+		return "unlimited"
+	}
+	return strconv.Itoa(int(n))
 }
 
 // ── Create ──────────────────────────────────────────────────────────────────
@@ -127,6 +140,10 @@ func runSquadCreate(cmd *cobra.Command, _ []string) error {
 	if leader == "" {
 		return fmt.Errorf("--leader is required (agent name or ID)")
 	}
+	maxTasks, _ := cmd.Flags().GetInt("max-concurrent-tasks")
+	if maxTasks < 0 || maxTasks > 50 {
+		return fmt.Errorf("--max-concurrent-tasks must be between 1 and 50 (0 leaves it unlimited)")
+	}
 
 	client, err := newAPIClient(cmd)
 	if err != nil {
@@ -146,6 +163,15 @@ func runSquadCreate(cmd *cobra.Command, _ []string) error {
 	}
 	if v, _ := cmd.Flags().GetString("description"); v != "" {
 		body["description"] = v
+	}
+	if cmd.Flags().Changed("max-concurrent-tasks") {
+		v, _ := cmd.Flags().GetInt("max-concurrent-tasks")
+		if v < 0 || v > 50 {
+			return fmt.Errorf("--max-concurrent-tasks must be between 1 and 50 (0 leaves it unlimited)")
+		}
+		if v > 0 {
+			body["max_concurrent_tasks"] = v
+		}
 	}
 
 	var result map[string]any
@@ -171,6 +197,12 @@ var squadUpdateCmd = &cobra.Command{
 }
 
 func runSquadUpdate(cmd *cobra.Command, args []string) error {
+	if cmd.Flags().Changed("max-concurrent-tasks") {
+		maxTasks, _ := cmd.Flags().GetInt("max-concurrent-tasks")
+		if maxTasks < 0 || maxTasks > 50 {
+			return fmt.Errorf("--max-concurrent-tasks must be between 1 and 50 (0 clears the limit)")
+		}
+	}
 	client, err := newAPIClient(cmd)
 	if err != nil {
 		return err
@@ -203,9 +235,18 @@ func runSquadUpdate(cmd *cobra.Command, args []string) error {
 		v, _ := cmd.Flags().GetString("avatar-url")
 		body["avatar_url"] = v
 	}
+	if cmd.Flags().Changed("max-concurrent-tasks") {
+		maxTasks, _ := cmd.Flags().GetInt("max-concurrent-tasks")
+		if maxTasks == 0 {
+			// Explicit null clears the cap back to unlimited.
+			body["max_concurrent_tasks"] = nil
+		} else {
+			body["max_concurrent_tasks"] = maxTasks
+		}
+	}
 
 	if len(body) == 0 {
-		return fmt.Errorf("no fields to update; use flags like --name, --description, --instructions, --leader")
+		return fmt.Errorf("no fields to update; use flags like --name, --description, --instructions, --leader, --max-concurrent-tasks")
 	}
 
 	var result map[string]any
@@ -515,6 +556,7 @@ func init() {
 	squadCreateCmd.Flags().String("name", "", "Squad name (required)")
 	squadCreateCmd.Flags().String("description", "", "Squad description")
 	squadCreateCmd.Flags().String("leader", "", "Leader agent (name or ID) — required")
+	squadCreateCmd.Flags().Int("max-concurrent-tasks", 0, "Max tasks the squad may run at once (1-50, 0 = unlimited)")
 	squadCreateCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// update
@@ -523,6 +565,7 @@ func init() {
 	squadUpdateCmd.Flags().String("instructions", "", "New instructions")
 	squadUpdateCmd.Flags().String("leader", "", "New leader agent (name or ID)")
 	squadUpdateCmd.Flags().String("avatar-url", "", "New avatar URL")
+	squadUpdateCmd.Flags().Int("max-concurrent-tasks", 0, "Max tasks the squad may run at once (1-50, 0 = clear to unlimited)")
 	squadUpdateCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// delete

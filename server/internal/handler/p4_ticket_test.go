@@ -99,11 +99,8 @@ func TestClaimTaskSendsP4TicketOnlyWithDepots(t *testing.T) {
 		t.Skip("database not available")
 	}
 
-	var agentID, runtimeID string
-	dbfx.QueryRow(t,
-		`SELECT id, runtime_id FROM agent WHERE workspace_id = $1 LIMIT 1`,
-		testWorkspaceID,
-	).Scan(&agentID, &runtimeID)
+	runtimeID := dbfx.Runtime(t, "p4-ticket-claim")
+	agentID := dbfx.Agent(t, "P4 ticket claim", runtimeID)
 
 	claim := func(t *testing.T, label string) string {
 		t.Helper()

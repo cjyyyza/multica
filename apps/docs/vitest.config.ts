@@ -3,6 +3,9 @@ import path from "path";
 import { platformTestOptions } from "../../scripts/vitest-platform.mjs";
 
 export default defineConfig({
+  oxc: {
+    jsx: { runtime: "automatic" },
+  },
   test: {
     ...platformTestOptions,
     environment: "node",

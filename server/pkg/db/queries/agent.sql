@@ -280,6 +280,25 @@ WHERE runtime_id = $1 AND kind = 'user'
 ORDER BY id
 FOR UPDATE;
 
+-- name: ListNonOwnerAgentsByRuntime :many
+-- Returns every agent bound to a runtime whose owner differs from its owner,
+-- including hidden Builder execution carriers. This is the dependency plan shown before a public
+-- runtime is made private: owner-owned agents keep their binding, while every
+-- teammate-owned agent loses machine access.
+SELECT * FROM agent
+WHERE runtime_id = @runtime_id
+  AND owner_id IS DISTINCT FROM @runtime_owner_id
+ORDER BY name ASC;
+
+-- name: ListNonOwnerAgentsByRuntimeForUpdate :many
+-- Runtime access-change locking serializes new bindings. NOWAIT avoids waiting
+-- behind a writer that already holds an agent and needs the runtime row.
+SELECT * FROM agent
+WHERE runtime_id = @runtime_id
+  AND owner_id IS DISTINCT FROM @runtime_owner_id
+ORDER BY id
+FOR UPDATE NOWAIT;
+
 -- name: RestoreAgent :one
 UPDATE agent SET archived_at = NULL, archived_by = NULL, updated_at = now()
 WHERE id = $1
@@ -753,6 +772,53 @@ WHERE id = (
                 AND active.issue_id IS NULL
                 AND active.chat_session_id IS NULL
                 AND active.autopilot_run_id IS NULL
+              )
+            )
+      )
+      AND NOT EXISTS (
+          -- Resolve ownership consistently with the serialized capacity recheck
+          -- and runtime wakeups, including guest delegation and issue-less runs.
+          SELECT 1
+          FROM squad sq
+          WHERE sq.id = task_effective_squad_id(atq.id)
+            AND sq.archived_at IS NULL
+            AND sq.max_concurrent_tasks IS NOT NULL
+            AND (
+              -- Gate 1: cap simultaneously executing squad tasks so MCP /
+              -- editor contention inside the squad stays bounded.
+              (
+                SELECT count(*)
+                FROM agent_task_queue active_squad
+                WHERE active_squad.status IN ('dispatched', 'running', 'waiting_local_directory')
+                  AND task_effective_squad_id(active_squad.id) = sq.id
+              ) >= sq.max_concurrent_tasks
+              OR
+              -- Gate 2: only `max_concurrent_tasks` issues may hold an
+              -- in-flight chain slot. Waiting-for-human tasks are terminal for
+              -- this purpose, so the slot frees immediately; a queued handoff
+              -- still occupies its issue's slot so another issue cannot slip in
+              -- during the leader <-> worker gap. The (created_at, id) tie-break
+              -- gives two simultaneous handoffs a strict DAG order.
+              (
+                atq.issue_id IS NOT NULL
+                AND (
+                  SELECT count(DISTINCT in_flight.issue_id)
+                  FROM agent_task_queue in_flight
+                  WHERE in_flight.issue_id IS NOT NULL
+                    AND in_flight.issue_id <> atq.issue_id
+                    AND task_effective_squad_id(in_flight.id) = sq.id
+                    AND (
+                      in_flight.status IN ('dispatched', 'running', 'waiting_local_directory')
+                      OR (
+                        in_flight.status = 'queued'
+                        AND in_flight.delegated_from_task_id IS NOT NULL
+                        AND (
+                          atq.delegated_from_task_id IS NULL
+                          OR (in_flight.created_at, in_flight.id) < (atq.created_at, atq.id)
+                        )
+                      )
+                    )
+                ) >= sq.max_concurrent_tasks
               )
             )
       )

@@ -341,9 +341,7 @@ func TestShouldReusePriorWorkdirSquadLeaderRejectsSymlinkEscape(t *testing.T) {
 	// EvalSymlinks + IsLocal must reject it so a symlink can't smuggle a user
 	// directory past the containment check.
 	workDir := filepath.Join(parent, "workdir")
-	if err := os.Symlink(external, workDir); err != nil {
-		t.Fatalf("symlink workdir -> external: %v", err)
-	}
+	createTestSymlink(t, external, workDir)
 
 	task := leaderReuseTestTask("task-symlink-escape")
 	task.PriorWorkDir = workDir
@@ -1005,8 +1003,13 @@ func TestLockReusablePriorEnvRootSurvivesWorkspacesRootSwap(t *testing.T) {
 	d := &Daemon{logger: discardLogger()}
 	d.cfg.WorkspacesRoot = root
 
+	rootPinned := false
 	reuseLockTestHook = func() {
 		if err := os.Rename(root, root+"-moved"); err != nil {
+			if windowsSharingViolation(err) {
+				rootPinned = true
+				return
+			}
 			t.Fatalf("move the workspaces root aside: %v", err)
 		}
 		if err := os.Symlink(outside, root); err != nil {
@@ -1019,7 +1022,11 @@ func TestLockReusablePriorEnvRootSurvivesWorkspacesRootSwap(t *testing.T) {
 	if claim != nil {
 		claim.Release()
 	}
-	if ok {
+	if rootPinned {
+		if !ok || claim == nil {
+			t.Fatal("the pinned, unchanged root must remain reusable")
+		}
+	} else if ok {
 		t.Fatal("reuse was accepted after the workspaces root itself was replaced")
 	}
 	if locks := findTaskLocks(t, outside); len(locks) > 0 {

@@ -215,7 +215,7 @@ func cleanArchiveEntryName(name string) string {
 // on a Unix server, and NUL bytes would be removed before persistence. Neither
 // can safely be passed to the daemon as a bundle path.
 func validateArchiveFilePath(p string) bool {
-	if strings.ContainsRune(p, '\x00') {
+	if path.IsAbs(p) || strings.ContainsRune(p, '\x00') {
 		return false
 	}
 	if len(p) >= 2 && isASCIIAlpha(p[0]) && p[1] == ':' {

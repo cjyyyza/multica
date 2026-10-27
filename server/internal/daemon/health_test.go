@@ -451,7 +451,7 @@ func TestRepoCheckoutUsesTaskScopedProjectRefByDefault(t *testing.T) {
 	d.registerTaskRepos(workspaceID, "task-1", []RepoData{{URL: repoURL, Ref: "release/v2"}})
 
 	rec := httptest.NewRecorder()
-	body := strings.NewReader(`{"url":"` + repoURL + `","workspace_id":"` + workspaceID + `","workdir":"` + workDir + `","agent_name":"Other Agent","task_id":"task-1"}`)
+	body := strings.NewReader(repoCheckoutTestJSON(t, map[string]any{"url": repoURL, "workspace_id": workspaceID, "workdir": workDir, "agent_name": "Other Agent", "task_id": "task-1"}))
 	d.repoCheckoutHandler().ServeHTTP(rec, authorizedRepoCheckoutRequest(body))
 
 	if rec.Code != http.StatusOK {
@@ -480,7 +480,7 @@ func TestRepoCheckoutRejectsMissingTaskCredential(t *testing.T) {
 	d.logger = captureLogger(&logs)
 
 	rec := httptest.NewRecorder()
-	body := strings.NewReader(`{"url":"` + repoURL + `","workspace_id":"` + workspaceID + `","workdir":"` + workDir + `","task_id":"task-1"}`)
+	body := strings.NewReader(repoCheckoutTestJSON(t, map[string]any{"url": repoURL, "workspace_id": workspaceID, "workdir": workDir, "task_id": "task-1"}))
 	d.repoCheckoutHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repo/checkout", body))
 
 	if rec.Code != http.StatusUnauthorized {
@@ -530,7 +530,7 @@ func TestRepoCheckoutRejectsUnknownTaskCredential(t *testing.T) {
 	d.logger = captureLogger(&logs)
 
 	rec := httptest.NewRecorder()
-	body := strings.NewReader(`{"url":"` + repoURL + `","workspace_id":"` + workspaceID + `","workdir":"` + workDir + `","task_id":"task-1"}`)
+	body := strings.NewReader(repoCheckoutTestJSON(t, map[string]any{"url": repoURL, "workspace_id": workspaceID, "workdir": workDir, "task_id": "task-1"}))
 	req := httptest.NewRequest(http.MethodPost, "/repo/checkout", body)
 	req.Header.Set("Authorization", "Bearer mat_not_an_active_task")
 	d.repoCheckoutHandler().ServeHTTP(rec, req)
@@ -618,7 +618,7 @@ func TestRepoCheckoutRejectsAnotherTaskWorkdir(t *testing.T) {
 	otherWorkDir := t.TempDir()
 
 	rec := httptest.NewRecorder()
-	body := strings.NewReader(`{"url":"` + repoURL + `","workspace_id":"` + workspaceID + `","workdir":"` + otherWorkDir + `","task_id":"task-1"}`)
+	body := strings.NewReader(repoCheckoutTestJSON(t, map[string]any{"url": repoURL, "workspace_id": workspaceID, "workdir": otherWorkDir, "task_id": "task-1"}))
 	d.repoCheckoutHandler().ServeHTTP(rec, authorizedRepoCheckoutRequest(body))
 
 	if rec.Code != http.StatusForbidden {
@@ -653,7 +653,7 @@ func TestRepoCheckoutRejectsUnresolvableWorkdirWithTheReason(t *testing.T) {
 	missing := filepath.Join(workDir, "does-not-exist")
 
 	rec := httptest.NewRecorder()
-	body := strings.NewReader(`{"url":"` + repoURL + `","workspace_id":"` + workspaceID + `","workdir":"` + missing + `","task_id":"task-1"}`)
+	body := strings.NewReader(repoCheckoutTestJSON(t, map[string]any{"url": repoURL, "workspace_id": workspaceID, "workdir": missing, "task_id": "task-1"}))
 	d.repoCheckoutHandler().ServeHTTP(rec, authorizedRepoCheckoutRequest(body))
 
 	if rec.Code != http.StatusForbidden {
@@ -678,7 +678,7 @@ func TestRepoCheckoutExplicitRefOverridesProjectDefault(t *testing.T) {
 	d.registerTaskRepos(workspaceID, "task-1", []RepoData{{URL: repoURL, Ref: "release/v2"}})
 
 	rec := httptest.NewRecorder()
-	body := strings.NewReader(`{"url":"` + repoURL + `","workspace_id":"` + workspaceID + `","workdir":"` + workDir + `","task_id":"task-1","ref":"hotfix"}`)
+	body := strings.NewReader(repoCheckoutTestJSON(t, map[string]any{"url": repoURL, "workspace_id": workspaceID, "workdir": workDir, "task_id": "task-1", "ref": "hotfix"}))
 	d.repoCheckoutHandler().ServeHTTP(rec, authorizedRepoCheckoutRequest(body))
 
 	if rec.Code != http.StatusOK {
@@ -699,7 +699,7 @@ func TestRepoCheckoutForwardsIsolatedMode(t *testing.T) {
 	d := newRepoCheckoutTestDaemon(t, workspaceID, repoURL, workDir, cache)
 
 	rec := httptest.NewRecorder()
-	body := strings.NewReader(`{"url":"` + repoURL + `","workspace_id":"` + workspaceID + `","workdir":"` + workDir + `","task_id":"task-1","checkout_mode":"isolated"}`)
+	body := strings.NewReader(repoCheckoutTestJSON(t, map[string]any{"url": repoURL, "workspace_id": workspaceID, "workdir": workDir, "task_id": "task-1", "checkout_mode": "isolated"}))
 	d.repoCheckoutHandler().ServeHTTP(rec, authorizedRepoCheckoutRequest(body))
 
 	if rec.Code != http.StatusOK {
@@ -723,8 +723,8 @@ func TestRepoCheckoutForwardsFresh(t *testing.T) {
 		body string
 		want bool
 	}{
-		{body: `{"url":"` + repoURL + `","workspace_id":"` + workspaceID + `","workdir":"` + workDir + `","task_id":"task-1"}`, want: false},
-		{body: `{"url":"` + repoURL + `","workspace_id":"` + workspaceID + `","workdir":"` + workDir + `","task_id":"task-1","fresh":true}`, want: true},
+		{body: repoCheckoutTestJSON(t, map[string]any{"url": repoURL, "workspace_id": workspaceID, "workdir": workDir, "task_id": "task-1"}), want: false},
+		{body: repoCheckoutTestJSON(t, map[string]any{"url": repoURL, "workspace_id": workspaceID, "workdir": workDir, "task_id": "task-1", "fresh": true}), want: true},
 	} {
 		rec := httptest.NewRecorder()
 		d.repoCheckoutHandler().ServeHTTP(rec, authorizedRepoCheckoutRequest(strings.NewReader(tc.body)))
@@ -747,7 +747,7 @@ func TestRepoCheckoutRejectsUnknownMode(t *testing.T) {
 	d := newRepoCheckoutTestDaemon(t, workspaceID, repoURL, workDir, cache)
 
 	rec := httptest.NewRecorder()
-	body := strings.NewReader(`{"url":"` + repoURL + `","workspace_id":"` + workspaceID + `","workdir":"` + workDir + `","task_id":"task-1","checkout_mode":"unsafe"}`)
+	body := strings.NewReader(repoCheckoutTestJSON(t, map[string]any{"url": repoURL, "workspace_id": workspaceID, "workdir": workDir, "task_id": "task-1", "checkout_mode": "unsafe"}))
 	d.repoCheckoutHandler().ServeHTTP(rec, authorizedRepoCheckoutRequest(body))
 
 	if rec.Code != http.StatusBadRequest {
@@ -768,7 +768,7 @@ func TestRepoCheckoutReturnsRetryableBusyToCapableClient(t *testing.T) {
 	d := newRepoCheckoutTestDaemon(t, workspaceID, repoURL, workDir, cache)
 
 	rec := httptest.NewRecorder()
-	body := strings.NewReader(`{"url":"` + repoURL + `","workspace_id":"` + workspaceID + `","workdir":"` + workDir + `","task_id":"task-1","retry_busy":true}`)
+	body := strings.NewReader(repoCheckoutTestJSON(t, map[string]any{"url": repoURL, "workspace_id": workspaceID, "workdir": workDir, "task_id": "task-1", "retry_busy": true}))
 	d.repoCheckoutHandler().ServeHTTP(rec, authorizedRepoCheckoutRequest(body))
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -1008,4 +1008,13 @@ func TestHealthHandlerReportsProfileIdentity(t *testing.T) {
 			t.Errorf("launched_by should be omitted for a standalone daemon, got %v", raw["launched_by"])
 		}
 	})
+}
+
+func repoCheckoutTestJSON(t *testing.T, fields map[string]any) string {
+	t.Helper()
+	body, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
 }

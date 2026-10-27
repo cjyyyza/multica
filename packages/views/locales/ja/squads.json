@@ -98,7 +98,15 @@
     "members": "メンバー",
     "created_by": "作成者",
     "created": "作成日時",
-    "updated": "更新日時"
+    "updated": "更新日時",
+    "max_concurrent_tasks": "最大同時タスク数"
+  },
+  "max_concurrent_tasks_dialog": {
+    "title": "最大同時タスク数を設定",
+    "placeholder": "無制限",
+    "hint": "スクワッドが同時に進行するイシュー数と、全エージェントが同時に実行するタスク数を制限します（1〜50）。空欄なら無制限です。",
+    "invalid": "1〜50 の整数を入力してください。",
+    "unlimited": "無制限"
   },
   "toasts": {
     "member_added": "メンバーを追加しました",
@@ -110,7 +118,8 @@
     "leader_updated": "リーダーを更新しました",
     "leader_update_failed": "リーダーを更新できませんでした",
     "archive_failed": "スクワッドをアーカイブできませんでした",
-    "instructions_saved": "指示を保存しました"
+    "instructions_saved": "指示を保存しました",
+    "max_concurrent_tasks_saved": "同時実行の上限を保存しました"
   },
   "profile_card": {
     "unavailable": "スクワッドを利用できません",
