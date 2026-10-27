@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/integrations/channel"
+	"github.com/multica-ai/multica/server/internal/integrations/popo"
 	"github.com/multica-ai/multica/server/internal/integrations/yixiezuo"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -24,6 +26,23 @@ type requirementApproveFixture struct {
 	OperationID    string
 	InstallationID string
 	BindingID      string
+}
+
+func TestRequirementApproveMemberGroupRouteKeepsPhysicalDestination(t *testing.T) {
+	enableRequirementFlowForTest(t)
+	f := newRequirementApproveFixture(t, "994421")
+	groupID := "requirement-approve-994421"
+	sessionKey := popo.SessionKey(channel.InboundMessage{Source: channel.Source{ChatID: groupID, ChatType: channel.ChatTypeGroup, SenderID: "alice@example.test"}}, parseUUID(testUserID))
+	dbfx.Exec(t, `UPDATE channel_chat_session_binding SET channel_chat_id=$2, config=jsonb_build_object('chat_id',$3::text) WHERE id=$1`, f.BindingID, sessionKey, groupID)
+	dbfx.Exec(t, `UPDATE yixiezuo_operation SET payload=jsonb_set(payload,'{channel,session_key}',to_jsonb($2::text)) WHERE id=$1`, f.OperationID, sessionKey)
+	approved, _ := approveRequirementForTest(t, f, "approve-member-route-994421")
+	issue := approveIssueForTest(t, approved)
+	var destination, bindingID string
+	var revision int64
+	dbfx.QueryRow(t, `SELECT channel_chat_id, binding_id::text, route_revision FROM channel_issue_source WHERE issue_id=$1`, issue.ID).Scan(&destination, &bindingID, &revision)
+	if destination != groupID || bindingID != f.BindingID || revision != 7 {
+		t.Fatalf("member route replaced the physical source: chat=%s binding=%s revision=%d", destination, bindingID, revision)
+	}
 }
 
 func newRequirementApproveFixture(t *testing.T, externalID string, projectIDs ...string) requirementApproveFixture {

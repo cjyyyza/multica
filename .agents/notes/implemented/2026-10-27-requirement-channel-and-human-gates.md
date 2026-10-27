@@ -12,7 +12,7 @@ POPO 是需求的发起和通知渠道，批准属于 Multica Chat。把 POPO �
 
 批准始终要求可验证的来源快照、当前参与者权限、最新候选及 revision/digest。预览携带 POPO 渠道时严格验证其工作区、机器人和当前绑定；未携带渠道时不制造绑定，也不阻止 Chat 批准、Issue 创建或验收回写。
 
-机器人可以配置易协作模板，普通想法进入需求草稿流程，`/new` 明确发起独立需求。入口只创建来源草稿和 Requirement，不进入普通 POPO Chat 执行管道。新草稿的渠道元数据不制造普通 Chat 绑定；批准验证来源操作、机器人和 Agent，继续使用原生 Requirement Chat。
+机器人可以配置易协作默认模板；成员按个人会话选择需求模式后，普通想法进入需求草稿流程，`/new` 发起独立需求。入口只创建来源草稿和 Requirement，不进入普通 POPO Chat 执行管道。新草稿的渠道元数据不制造普通 Chat 绑定；批准验证来源操作、机器人和 Agent，继续使用原生 Requirement Chat。个人模式、命令和群聊隔离由[成员会话路由记录](2026-10-27-popo-member-conversation-routing.md)细化；本记录的来源、批准与验收边界继续适用。
 
 来源草稿复用成员专属的 `yixiezuo_operation` 和 Windows bridge，使用独立 `draft` kind。新建前重新校验成员、Agent、来源机器人和写开关；读取模板的项目、类型及新建表单，只补齐必填值，正文使用转义后的新想法并标注待澄清，不复制原单正文、附件、关注人或父子关系。缺省指派给当前 bridge 的易协作用户。
 

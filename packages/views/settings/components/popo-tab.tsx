@@ -579,6 +579,81 @@ function BridgeRow({
   );
 }
 
+function PopoAccountBinding({ installation }: { installation: PopoInstallation }) {
+  const { t } = useT("settings");
+  const wsId = useWorkspaceId();
+  const qc = useQueryClient();
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [unbindOpen, setUnbindOpen] = useState(false);
+  const [unbinding, setUnbinding] = useState(false);
+  const boundUserIDs = installation.bound_popo_user_ids ?? [];
+
+  async function handleUnbind() {
+    if (unbinding) return;
+    setUnbinding(true);
+    try {
+      await api.deletePopoBinding(wsId, installation.id);
+      await qc.invalidateQueries({ queryKey: popoKeys.all(wsId) });
+      setUnbindOpen(false);
+      toast.success(t(($) => $.popo.account_unbound));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t(($) => $.popo.account_unbind_failed));
+    } finally {
+      setUnbinding(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2" data-testid="popo-account-binding">
+      {boundUserIDs.length > 0 ? (
+        <>
+          <span className="break-all text-caption text-muted-foreground">
+            {t(($) => $.popo.account_bound, { ids: boundUserIDs.join(", ") })}
+          </span>
+          <Button type="button" variant="outline" size="sm" onClick={() => setUnbindOpen(true)}>
+            {t(($) => $.popo.account_unbind)}
+          </Button>
+        </>
+      ) : (
+        <Button type="button" variant="outline" size="sm" onClick={() => setHelpOpen(true)}>
+          {t(($) => $.popo.account_bind)}
+        </Button>
+      )}
+
+      <Dialog open={helpOpen} onOpenChange={setHelpOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>{t(($) => $.popo.account_bind_title)}</DialogTitle></DialogHeader>
+          <p className="text-body text-muted-foreground">
+            {t(($) => $.popo.account_bind_instructions, { robot: installation.robot_name || installation.robot_id })}
+          </p>
+          <p className="text-caption text-muted-foreground">{t(($) => $.popo.account_bind_expiry)}</p>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => void qc.invalidateQueries({ queryKey: popoKeys.all(wsId) })}>
+              {t(($) => $.popo.account_refresh)}
+            </Button>
+            <Button type="button" onClick={() => setHelpOpen(false)}>{t(($) => $.popo.pairing_done)}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={unbindOpen} onOpenChange={(open) => { if (!open && !unbinding) setUnbindOpen(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t(($) => $.popo.account_unbind_title)}</AlertDialogTitle>
+            <AlertDialogDescription>{t(($) => $.popo.account_unbind_description)}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={unbinding}>{t(($) => $.popo.revoke_bridge_cancel)}</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" disabled={unbinding} onClick={handleUnbind}>
+              {unbinding ? t(($) => $.popo.account_unbinding) : t(($) => $.popo.account_unbind)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
 function InstallationRow({
   installation,
   canManage,
@@ -626,6 +701,7 @@ function InstallationRow({
             })}
           </p>
           {canManage && isActive ? <RequirementIntakeSettings wsId={wsId} installation={installation} /> : null}
+          {isActive ? <PopoAccountBinding installation={installation} /> : null}
         </div>
       </div>
       {canManage && isActive && (

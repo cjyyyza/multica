@@ -2,6 +2,7 @@ package popo
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,14 +24,15 @@ func NewPopoResolverSet(q *db.Queries, tx engine.TxStarter, replier engine.Outbo
 		Installation: &installationResolver{q: q},
 		Identity:     &identityResolver{q: q},
 		Dedup:        &deduper{q: q},
-		Session: &sessionBinder{session: engine.NewChatSession(q, tx, TypePopo, engine.SessionTitles{
+		Session: &sessionBinder{q: q, session: engine.NewChatSession(q, tx, TypePopo, engine.SessionTitles{
 			Group:    "POPO group",
 			Direct:   "POPO direct message",
 			Fallback: "POPO chat",
 		})},
-		Audit:      &auditor{q: q},
-		Replier:    replier,
-		OriginType: originPopoChat,
+		Audit:                  &auditor{q: q},
+		Replier:                replier,
+		OriginType:             originPopoChat,
+		MemberScopedGroupChats: true,
 	}
 	if media != nil {
 		set.Media = media
@@ -42,10 +44,20 @@ type popoBindingConfig struct {
 	ChatID string `json:"chat_id"`
 }
 
-func popoSessionRouting(msg channel.InboundMessage) (bindingKey string, config []byte) {
+func popoSessionRouting(msg channel.InboundMessage, userID pgtype.UUID) (bindingKey string, config []byte) {
 	chatID := msg.Source.ChatID
 	cfg, _ := json.Marshal(popoBindingConfig{ChatID: chatID})
+	if msg.Source.ChatType == channel.ChatTypeGroup {
+		identity, _ := json.Marshal([]string{chatID, msg.Source.SenderID, util.UUIDToString(userID)})
+		return fmt.Sprintf("member:%x", sha256.Sum256(identity)), cfg
+	}
 	return chatID, cfg
+}
+
+// SessionKey freezes the member-scoped route used by source-operation evidence.
+func SessionKey(msg channel.InboundMessage, userID pgtype.UUID) string {
+	key, _ := popoSessionRouting(msg, userID)
+	return key
 }
 
 func decodePopoRaw(msg channel.InboundMessage) (popoRawEvent, error) {
@@ -223,11 +235,14 @@ type chatSession interface {
 	BindMediaRefs(ctx context.Context, in engine.BindMediaInput) error
 }
 
-type sessionBinder struct{ session chatSession }
+type sessionBinder struct {
+	q       *db.Queries
+	session chatSession
+}
 
 func (r *sessionBinder) EnsureSession(ctx context.Context, p engine.EnsureSessionParams) (pgtype.UUID, error) {
-	bindingKey, config := popoSessionRouting(p.Message)
-	return r.session.EnsureSession(ctx, engine.EnsureSessionInput{
+	bindingKey, config := popoSessionRouting(p.Message, p.Sender)
+	input := engine.EnsureSessionInput{
 		WorkspaceID:    p.Installation.WorkspaceID,
 		AgentID:        p.Installation.AgentID,
 		InstallationID: p.Installation.ID,
@@ -235,11 +250,27 @@ func (r *sessionBinder) EnsureSession(ctx context.Context, p engine.EnsureSessio
 		BindingKey:     bindingKey,
 		BindingConfig:  config,
 		ChatType:       p.Message.Source.ChatType,
+	}
+	sessionID, err := r.session.EnsureSession(ctx, input)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	session, err := r.q.GetChatSession(ctx, sessionID)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	if session.CreatorID == p.Sender {
+		return sessionID, nil
+	}
+	started, err := r.session.StartSession(ctx, engine.StartSessionInput{
+		EnsureSessionInput: input,
+		Initiator:          p.Sender,
 	})
+	return started.SessionID, err
 }
 
 func (r *sessionBinder) StartSession(ctx context.Context, p engine.StartSessionParams) (engine.StartSessionResult, error) {
-	bindingKey, config := popoSessionRouting(p.Message)
+	bindingKey, config := popoSessionRouting(p.Message, p.Creator)
 	result, err := r.session.StartSession(ctx, engine.StartSessionInput{
 		EnsureSessionInput: engine.EnsureSessionInput{
 			WorkspaceID: p.Installation.WorkspaceID, AgentID: p.Installation.AgentID,

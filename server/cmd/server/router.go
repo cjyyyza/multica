@@ -1993,6 +1993,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/popo/status", h.GetPopoStatus)
 					r.Post("/popo/install", h.RegisterPopoBot)
 					r.Delete("/popo/installations/{installationId}", h.RevokePopoInstallation)
+					r.Delete("/popo/installations/{installationId}/binding", h.DeletePopoBinding)
 					r.Patch("/popo/installations/{installationId}/requirement-intake", h.SetPopoRequirementIntake)
 					r.Post("/popo/registrations", h.CreatePopoRegistration)
 					r.Get("/popo/registrations/{registrationId}", h.GetPopoRegistration)

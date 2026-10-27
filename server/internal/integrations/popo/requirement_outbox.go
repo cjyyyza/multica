@@ -590,9 +590,27 @@ func (w *RequirementOutboxWorker) buildPayload(ctx context.Context, q *db.Querie
 		refs["comment_id"] = uuidString(command.OccurrenceID)
 	}
 	link := w.appURL + "/" + url.PathEscape(workspaceSlug) + "/chat?requirement=" + url.QueryEscape(uuidString(prep.requirement.ID))
-	text := "Requirement " + snapshot.State + ": " + title + "\n" + link
+	state := snapshot.State
+	switch command.RequirementKind.String {
+	case "requirement_draft":
+		state = "intake_pending"
+	case "requirement_review":
+		state = "in_review"
+	case "requirement_blocked":
+		state = "blocked"
+	default:
+		switch snapshot.State {
+		case "created":
+			state = "intake_pending"
+		case "candidate submitted":
+			state = "awaiting_approval"
+		case "accepted":
+			state = "done"
+		}
+	}
+	text := "需求流程 · " + RequirementStateLabel(state) + "：" + title + "\n" + link + "\n" + RequirementNextStep(state)
 	if command.RequirementKind.String == "requirement_blocked" {
-		text = "Requirement question: " + title + "\n\n" + snapshot.Question + "\n\n" + link
+		text += "\n\n" + snapshot.Question
 	}
 	issueRef, _ := refs["issue_id"].(string)
 	commentRef, _ := refs["comment_id"].(string)

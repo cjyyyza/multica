@@ -5825,6 +5825,12 @@ export class ApiClient {
     });
   }
 
+  async deletePopoBinding(workspaceId: string, installationId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/popo/installations/${encodeURIComponent(installationId)}/binding`, {
+      method: "DELETE",
+    });
+  }
+
   async setPopoRequirementIntake(
     workspaceId: string,
     installationId: string,

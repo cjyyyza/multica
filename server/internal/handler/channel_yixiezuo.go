@@ -49,7 +49,7 @@ func (h *Handler) HandleMemberCommand(ctx context.Context, inst engine.ResolvedI
 	}
 	key := sourceCommandKey(inst, identity.UserID, msg.MessageID)
 	result.ReplyKey = "source_ack:" + key
-	scope := &yixiezuo.ChannelScope{InstallationID: uuidToString(inst.ID), ChatID: msg.Source.ChatID, ChatType: string(msg.Source.ChatType)}
+	scope := popoRequirementScope(inst, identity.UserID, msg)
 	err := h.runSourceCommand(ctx, inst, identity.UserID, scope, key, command, &result)
 	var action *yixiezuoActionError
 	if errors.As(err, &action) {

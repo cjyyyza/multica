@@ -219,8 +219,21 @@ func (h *Handler) notifyRequirementDraftOutcome(ctx context.Context, row db.Yixi
 	if err != nil {
 		return
 	}
+	if payload.Draft == nil {
+		return
+	}
+	agentID, err := util.ParseUUID(payload.Draft.AgentID)
+	if err != nil {
+		return
+	}
+	binding, err := h.Queries.ResolveRequirementRecipientBinding(ctx, db.ResolveRequirementRecipientBindingParams{
+		WorkspaceID: row.WorkspaceID, RecipientUserID: row.RequestedBy, AgentID: agentID, InstallationID: installationID,
+	})
+	if err != nil {
+		return
+	}
 	_ = h.PopoBridge.Enqueue(ctx, popo.OutboundItem{WorkspaceID: row.WorkspaceID, InstallationID: installationID,
-		ChatID: payload.Channel.ChatID, ChatType: payload.Channel.ChatType, Content: h.requirementDraftReply(ctx, row),
+		ChatID: binding.ChannelUserID, ChatType: "p2p", Content: h.requirementDraftReply(ctx, row),
 		SourceKey: "requirement-draft:" + uuidToString(row.ID) + ":" + row.State, OutboundKind: "issue_ack",
 	})
 }

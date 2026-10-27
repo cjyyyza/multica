@@ -81,6 +81,7 @@ type ChannelScope struct {
 	InstallationID string `json:"installation_id"`
 	ChatID         string `json:"chat_id"`
 	ChatType       string `json:"chat_type"`
+	SessionKey     string `json:"session_key,omitempty"`
 }
 
 type Operation struct {

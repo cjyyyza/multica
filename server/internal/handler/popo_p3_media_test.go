@@ -207,7 +207,7 @@ func TestPopoGroupAtWithImageDescriptor(t *testing.T) {
 	var chatType string
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT chat_type FROM channel_chat_session_binding
-		WHERE installation_id = $1 AND channel_chat_id = $2 AND retired_at IS NULL
+		WHERE installation_id = $1 AND config->>'chat_id' = $2 AND retired_at IS NULL
 	`, e.install, groupID).Scan(&chatType); err != nil {
 		t.Fatalf("load group binding: %v", err)
 	}

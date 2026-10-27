@@ -156,6 +156,10 @@ type InboundMessage struct {
 	// contextual enrichment. Shared command classifiers read this field so a
 	// rewritten Text is never interpreted as a second command. Empty means Text.
 	CommandText string
+	// CommandReplay is set only by the router after a duplicate claim. A member
+	// control may recover a durable result, but must not reinterpret old chat
+	// input using a newer conversation mode.
+	CommandReplay bool
 
 	// HasSelectedContext means Text includes a quote or forward explicitly
 	// selected by the sender, including an unavailable-content placeholder.

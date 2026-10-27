@@ -250,16 +250,22 @@ func loadRequirementApproveSource(ctx context.Context, q *db.Queries, row db.Req
 			ChatID: payload.Channel.ChatID, ChatType: payload.Channel.ChatType,
 		}, nil
 	}
+	// Old source snapshots retain their original shared route; new snapshots
+	// freeze the personal route separately from the real outbound chat id.
+	sessionKey := payload.Channel.SessionKey
+	if sessionKey == "" {
+		sessionKey = payload.Channel.ChatID
+	}
 	binding, err := q.LockCurrentChannelChatSessionBinding(ctx, db.LockCurrentChannelChatSessionBindingParams{
-		InstallationID: installationID, ChannelChatID: payload.Channel.ChatID,
+		InstallationID: installationID, ChannelChatID: sessionKey,
 	})
-	if err != nil || !binding.ID.Valid || binding.InstallationID != installationID || binding.ChannelChatID != payload.Channel.ChatID ||
+	if err != nil || !binding.ID.Valid || binding.InstallationID != installationID || binding.ChannelChatID != sessionKey ||
 		binding.ChannelType != "popo" || binding.ChatType != payload.Channel.ChatType {
 		return yixiezuo.Snapshot{}, nil, requirementSourceLinkUnavailable("source chat binding is unavailable")
 	}
 	return snapshot, &ChannelIssueSource{
 		InstallationID: installation.ID, ChannelType: installation.ChannelType,
-		ChatID: binding.ChannelChatID, ChatType: binding.ChatType,
+		ChatID: payload.Channel.ChatID, ChatType: binding.ChatType,
 		BindingID: binding.ID, RouteRevision: binding.RouteRevision,
 	}, nil
 }

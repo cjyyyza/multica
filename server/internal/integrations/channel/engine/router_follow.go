@@ -346,6 +346,7 @@ func (r *Router) recoverDuplicateCommand(ctx context.Context, set ResolverSet, i
 		}, true, nil
 	}
 	if set.Commands != nil {
+		msg.CommandReplay = true
 		if result, handled, err := set.Commands.HandleMemberCommand(ctx, inst, identity, msg, startChat); handled {
 			return result, err == nil, nil
 		}

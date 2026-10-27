@@ -233,7 +233,9 @@ func inboundFromBridge(robotID, bridgeID string, req BridgeInbound) (channel.Inb
 		return channel.InboundMessage{}, false
 	}
 	cleaned := text
-	if cleaned == "" {
+	// Automatic group history can belong to another member's conversation.
+	// Only an explicit quote or forward may carry selected group context.
+	if cleaned == "" || (chatType == channel.ChatTypeGroup && !req.HasSelectedContext) {
 		cleaned = commandText
 	}
 	forceFresh := false

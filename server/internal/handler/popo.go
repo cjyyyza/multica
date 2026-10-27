@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/integrations/popo"
@@ -19,19 +20,20 @@ import (
 )
 
 type PopoInstallationResponse struct {
-	ID                     string `json:"id"`
-	WorkspaceID            string `json:"workspace_id"`
-	AgentID                string `json:"agent_id"`
-	RobotID                string `json:"robot_id"`
-	RobotName              string `json:"robot_name"`
-	BridgeID               string `json:"bridge_id"`
-	WebhookURL             string `json:"webhook_url"`
-	InstallerUserID        string `json:"installer_user_id"`
-	Status                 string `json:"status"`
-	InstalledAt            string `json:"installed_at"`
-	CreatedAt              string `json:"created_at"`
-	UpdatedAt              string `json:"updated_at"`
-	RequirementTemplateURL string `json:"requirement_template_url"`
+	ID                     string   `json:"id"`
+	WorkspaceID            string   `json:"workspace_id"`
+	AgentID                string   `json:"agent_id"`
+	RobotID                string   `json:"robot_id"`
+	RobotName              string   `json:"robot_name"`
+	BridgeID               string   `json:"bridge_id"`
+	WebhookURL             string   `json:"webhook_url"`
+	InstallerUserID        string   `json:"installer_user_id"`
+	Status                 string   `json:"status"`
+	InstalledAt            string   `json:"installed_at"`
+	CreatedAt              string   `json:"created_at"`
+	UpdatedAt              string   `json:"updated_at"`
+	RequirementTemplateURL string   `json:"requirement_template_url"`
+	BoundPopoUserIDs       []string `json:"bound_popo_user_ids"`
 }
 
 func popoInstallationToResponse(row db.ChannelInstallation) PopoInstallationResponse {
@@ -50,6 +52,7 @@ func popoInstallationToResponse(row db.ChannelInstallation) PopoInstallationResp
 		CreatedAt:              row.CreatedAt.Time.UTC().Format(time.RFC3339),
 		UpdatedAt:              row.UpdatedAt.Time.UTC().Format(time.RFC3339),
 		RequirementTemplateURL: info.RequirementTemplateURL,
+		BoundPopoUserIDs:       []string{},
 	}
 }
 
@@ -124,15 +127,70 @@ func (h *Handler) ListPopoInstallations(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to list popo installations")
 		return
 	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	userUUID, ok := parseUUIDOrBadRequest(w, userID, "user id")
+	if !ok {
+		return
+	}
+	bindings, err := h.Queries.ListPopoBindingsForMember(r.Context(), db.ListPopoBindingsForMemberParams{WorkspaceID: wsUUID, UserID: userUUID})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list popo account bindings")
+		return
+	}
+	bindingsByInstallation := map[pgtype.UUID][]string{}
+	for _, binding := range bindings {
+		bindingsByInstallation[binding.InstallationID] = append(bindingsByInstallation[binding.InstallationID], binding.ChannelUserID)
+	}
 	out := make([]PopoInstallationResponse, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, popoInstallationToResponse(row))
+		response := popoInstallationToResponse(row)
+		response.BoundPopoUserIDs = bindingsByInstallation[row.ID]
+		if response.BoundPopoUserIDs == nil {
+			response.BoundPopoUserIDs = []string{}
+		}
+		out = append(out, response)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"installations":     out,
 		"configured":        true,
 		"install_supported": true,
 	})
+}
+
+func (h *Handler) DeletePopoBinding(w http.ResponseWriter, r *http.Request) {
+	if h.PopoInstall == nil {
+		writeFeatureDisabled(w, "popo_not_configured", "popo integration not enabled")
+		return
+	}
+	wsUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "workspace id")
+	if !ok {
+		return
+	}
+	installationID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "installationId"), "installation_id")
+	if !ok {
+		return
+	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	userUUID, ok := parseUUIDOrBadRequest(w, userID, "user id")
+	if !ok {
+		return
+	}
+	_, err := h.Queries.DeletePopoBindingForMember(r.Context(), db.DeletePopoBindingForMemberParams{WorkspaceID: wsUUID, InstallationID: installationID, UserID: userUUID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "popo account binding not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete popo account binding")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type RegisterPopoRequest struct {

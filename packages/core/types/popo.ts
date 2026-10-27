@@ -17,6 +17,7 @@ export interface PopoInstallation {
    * New installs return `""`; kept so older desktop builds keep parsing. */
   webhook_url: string;
   requirement_template_url?: string;
+  bound_popo_user_ids?: string[];
   installer_user_id: string;
   status: "active" | "revoked" | string;
   installed_at: string;

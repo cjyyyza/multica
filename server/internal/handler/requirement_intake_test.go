@@ -175,6 +175,7 @@ func TestPopoRequirementIntakeUsesNaturalIdeaAndKeepsApprovalInChat(t *testing.T
 	testutil.Call(t, testHandler.SetPopoRequirementIntake, settingsReq).Want(http.StatusOK)
 	dbfx.Cleanup(t, `DELETE FROM yixiezuo_operation WHERE workspace_id=$1 AND payload->'channel'->>'installation_id'=$2`, testWorkspaceID, e.install)
 	for _, message := range []struct{ id, text string }{
+		{"select-mode", "/mode requirement"},
 		{"natural-idea", "Build a temporary acceptance report"},
 		{"natural-idea", "Build a temporary acceptance report"},
 		{"followup", "Please approve it"},
@@ -240,6 +241,7 @@ func TestPopoRequirementDraftRevokedRobotIsFencedBeforeCreate(t *testing.T) {
 	dbfx.Exec(t, `UPDATE agent SET runtime_id=$2 WHERE id=$1`, e.agentID, runtimeID)
 	dbfx.Exec(t, `UPDATE channel_installation SET config=jsonb_set(config,'{requirement_template_url}','"https://dj01.pm.netease.com/issues/108402"') WHERE id=$1`, e.install)
 	dbfx.Cleanup(t, `DELETE FROM yixiezuo_operation WHERE workspace_id=$1 AND payload->'channel'->>'installation_id'=$2`, testWorkspaceID, e.install)
+	e.inbound(t, "revoked-mode", "/mode requirement", nil)
 	e.inbound(t, "revoked-idea", "A request before disconnect", nil)
 	dbfx.Exec(t, `UPDATE channel_installation SET status='revoked' WHERE id=$1`, e.install)
 	var claim struct {

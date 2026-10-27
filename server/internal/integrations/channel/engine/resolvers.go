@@ -83,6 +83,8 @@ type Result struct {
 	// ReplyText is the user-visible follow-up ack for OutcomeIssueFollow
 	// (/reply, /status, /stop, quote-comment). Empty means silent.
 	ReplyText string
+	// ReplyToSender keeps personal controls out of a shared group transcript.
+	ReplyToSender bool
 	// ReplyKey identifies a durable member-command acknowledgment across replay.
 	ReplyKey    string
 	CommentID   pgtype.UUID
@@ -422,6 +424,9 @@ type ResolverSet struct {
 	Typing       TypingNotifier
 	Commands     MemberCommandHandler
 	OriginType   string
+	// MemberScopedGroupChats gives each sender their own model conversation.
+	// The adapter still stores the real group as its outbound destination.
+	MemberScopedGroupChats bool
 }
 
 // MemberCommandHandler runs authenticated, explicit controls before the chat

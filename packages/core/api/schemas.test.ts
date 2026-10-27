@@ -2139,6 +2139,13 @@ describe("POPO installation schemas", () => {
       .toBe("https://dj01.pm.netease.com/issues/108402");
   });
 
+  it("defaults account bindings for older servers and rejects malformed binding lists", () => {
+    expect(PopoInstallationSchema.parse({ id: "i1" }).bound_popo_user_ids).toEqual([]);
+    expect(PopoInstallationSchema.parse({ id: "i1", bound_popo_user_ids: ["alice@corp"] }).bound_popo_user_ids)
+      .toEqual(["alice@corp"]);
+    expect(PopoInstallationSchema.safeParse({ id: "i1", bound_popo_user_ids: "alice@corp" }).success).toBe(false);
+  });
+
   it("falls back safely for malformed list, install, and redeem responses", () => {
     expect(
       parseWithFallback(

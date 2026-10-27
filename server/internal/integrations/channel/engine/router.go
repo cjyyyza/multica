@@ -422,7 +422,7 @@ func (r *Router) processClaimed(ctx context.Context, set ResolverSet, msg channe
 	// 5-6. Resolve the current Chat route, then either append normally or
 	// atomically create the next Chat route with its optional first turn.
 	sessionCreator := identity.UserID
-	if msg.Source.ChatType == channel.ChatTypeGroup {
+	if msg.Source.ChatType == channel.ChatTypeGroup && !set.MemberScopedGroupChats {
 		sessionCreator = inst.InstallerUserID
 	}
 

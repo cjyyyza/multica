@@ -33,3 +33,13 @@ func TestInvokeDeniedRepliesOnlyToTheSender(t *testing.T) {
 		})
 	}
 }
+
+func TestPersonalConversationControlReplyDoesNotReachTheGroup(t *testing.T) {
+	queue := &replyQueue{}
+	replier := NewOutboundReplier(OutboundReplierConfig{Queue: queue})
+	msg := channel.InboundMessage{Source: channel.Source{ChatID: "shared-group", ChatType: channel.ChatTypeGroup, SenderID: "alice@example.test"}}
+	replier.Reply(context.Background(), engine.ResolvedInstallation{}, msg, engine.Result{Outcome: engine.OutcomeIssueFollow, ReplyToSender: true, ReplyText: "Alice current requirement", ReplyKey: "alice-control"})
+	if len(queue.items) != 1 || queue.items[0].ChatID != msg.Source.SenderID || queue.items[0].ChatType != "p2p" {
+		t.Fatalf("personal control leaked into group: %+v", queue.items)
+	}
+}

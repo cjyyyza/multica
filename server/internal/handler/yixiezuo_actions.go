@@ -73,7 +73,12 @@ func sourceScopeMatches(a, b *yixiezuo.ChannelScope) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	return *a == *b
+	if a.InstallationID != b.InstallationID || a.ChatID != b.ChatID || a.ChatType != b.ChatType {
+		return false
+	}
+	// Historical reviews did not freeze a session key. Their authenticated
+	// owner and physical channel scope remain mandatory on every command.
+	return a.SessionKey == "" || b.SessionKey == "" || a.SessionKey == b.SessionKey
 }
 
 func authorizeRequirementSourceOperation(ctx context.Context, q *db.Queries, ws, actor, issueID pgtype.UUID) (pgtype.UUID, error) {

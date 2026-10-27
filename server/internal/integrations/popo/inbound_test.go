@@ -2,6 +2,7 @@ package popo
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -243,14 +244,23 @@ func TestInboundFromBridgeQuoteKeepsUserCommandText(t *testing.T) {
 	}
 }
 
-func TestInboundFromBridgePreservesEnrichedBody(t *testing.T) {
-	msg, ok := inboundFromBridge("robot", "bridge", BridgeInbound{
-		EventID: "enriched", Sender: BridgeSender{ID: "alice"},
-		Chat: BridgeChat{ID: "group", Type: "group"}, AddressedToBot: true,
-		Text: "[recent context] Windows build failed\n\nPlease summarize", CommandText: "Please summarize",
-	})
-	if !ok || !strings.Contains(msg.Text, "Windows build failed") || msg.CommandText != "Please summarize" {
-		t.Fatalf("enriched body or command changed: %+v", msg)
+func TestInboundFromBridgeKeepsOnlySelectedGroupContext(t *testing.T) {
+	const enriched = "[recent context] Bob's earlier requirement\n\nPlease summarize"
+	for _, tc := range []struct {
+		chatType string
+		selected bool
+		want     string
+	}{{"p2p", false, enriched}, {"group", false, "Please summarize"}, {"group", true, enriched}} {
+		t.Run(tc.chatType+"/"+strconv.FormatBool(tc.selected), func(t *testing.T) {
+			msg, ok := inboundFromBridge("robot", "bridge", BridgeInbound{
+				EventID: "enriched", Sender: BridgeSender{ID: "alice"},
+				Chat: BridgeChat{ID: "conversation", Type: tc.chatType}, AddressedToBot: true,
+				Text: enriched, CommandText: "Please summarize", HasSelectedContext: tc.selected,
+			})
+			if !ok || msg.Text != tc.want || msg.CommandText != "Please summarize" {
+				t.Fatalf("unexpected member context: %+v", msg)
+			}
+		})
 	}
 }
 

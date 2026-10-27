@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	msgFreshPending     = "✅ Fresh start ready. Your next chat message will run without previous context."
-	msgChatStarted      = "✅ Started a new Multica chat. Your next message will enter it."
+	msgFreshPending     = "普通聊天 · 已清空你的当前上下文。下一条消息从新上下文开始；/mode 查看个人模式。"
+	msgChatStarted      = "普通聊天 · 已新建你的 Multica Chat。下一条消息进入此聊天；/requirement 切换需求流程。"
 	msgIssueUsage       = "Please include an issue title. Use:\n\n/issue <title>\n[description] (optional)"
 	msgIssueNotMember   = "You're not a member of this Multica workspace, so I can't file an issue for you. Ask a workspace admin to invite you, then send the command again."
 	msgIssueDisabled    = "This POPO bot isn't connected to Multica (or was disconnected). Ask a workspace admin to reconnect it."
@@ -72,6 +72,13 @@ func NewOutboundReplier(cfg OutboundReplierConfig) *OutboundReplier {
 }
 
 func (r *OutboundReplier) Reply(ctx context.Context, inst engine.ResolvedInstallation, msg channel.InboundMessage, res engine.Result) {
+	if res.ReplyToSender && msg.Source.ChatType == channel.ChatTypeGroup {
+		if strings.TrimSpace(msg.Source.SenderID) == "" {
+			return
+		}
+		res.ReplyText = "群聊中的个人会话（" + msg.Source.ChatID + "）：\n" + res.ReplyText
+		msg.Source.ChatID, msg.Source.ChatType = msg.Source.SenderID, channel.ChatTypeP2P
+	}
 	switch res.Outcome {
 	case engine.OutcomeNeedsBinding:
 		if err := r.sendBindingPrompt(ctx, inst, msg, res); err != nil {

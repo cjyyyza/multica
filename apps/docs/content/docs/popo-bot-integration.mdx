@@ -57,7 +57,22 @@ Once a run starts, its Multica reply card shows progress and the final state. Re
 
 ### Commands
 
-- `/new` and `/clear` use the shared engine, same as Feishu.
+Ordinary chat is the default for new account bindings. Existing bindings on robots with a configured requirement template retain their previous requirement-entry default during upgrade until the member explicitly selects a mode. Each member chooses their mode independently for each private chat or group. The robot's requirement template only supplies a default source template. In groups, each Multica member has a separate model conversation. Automatic group history is excluded; explicitly selected quotes and forwards remain available as input. Messages and replies posted to the group remain visible there. Personal mode controls and requirement queries reply privately to the sender.
+
+| Command | Action |
+| --- | --- |
+| `/mode`, `/help` | Show your mode or command help |
+| `/mode chat`, `/chat` | Select ordinary chat |
+| `/mode requirement`, `/requirement` | Select the requirement flow and show your current requirement |
+| `/requirement new [template-url] <idea>` | Create an independent requirement draft |
+| `/requirement status [requirement-id]` | Read the requirement stage and next step |
+| `/requirement list` | List recent requirements you participate in for this agent |
+| `/requirement open <requirement-id>` | Select an accessible requirement and return its Chat or issue link |
+| `/requirement resolve <operation-id> <new-issue-url>` | Read back an unconfirmed source draft |
+
+Requirement intake needs the member's own 易协作 bridge. Clarification and approval happen in Multica Chat; execution and later changes use its single linked issue, followed by human acceptance. Multica labels requirement conversations and shows the current stage and next step. Requirement Chat access follows participant roles; the resulting issue keeps workspace issue permissions.
+
+- `/new [message]` starts a new ordinary Chat in chat mode, or an independent requirement in requirement mode. `/clear` resets an ordinary Chat's context.
 - `/issue <title>` creates a Multica issue (`origin_type=popo_chat`).
 - `/reply ISSUE-123 <comment>`, `/status ISSUE-123` and `/stop ISSUE-123` operate on an existing task. Stopping a run keeps task status separate.
 - `/yixiezuo preview <issue-url>` queues a single-source preview. Keep `multica yixiezuo bridge --workspace-id <workspace-uuid>` running under the same Multica member account that is bound to the sender.
@@ -71,7 +86,7 @@ The selected project can carry a `perforce_depot` resource. After a member assig
 
 ## Manage connections
 
-**Settings → Integrations → POPO** lists bridges and robots. Owners and admins can revoke a bridge token immediately. Disconnecting a robot stops inbound/outbound for that agent but keeps Multica conversations.
+**Settings → Integrations → POPO** lists bridges and robots. Each member can see their own POPO account binding on each robot, open the private-chat binding instructions, and unlink their account. Unlinking keeps Chat and requirement history but clears that robot's personal mode selections. Owners and admins can revoke a bridge token immediately. Disconnecting a robot stops inbound/outbound for that agent but keeps Multica conversations.
 
 ## Self-hosting setup
 

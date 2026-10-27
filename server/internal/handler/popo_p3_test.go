@@ -29,7 +29,7 @@ func TestPopoGroupMentionCreatesGroupSession(t *testing.T) {
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT chat_type, chat_session_id::text
 		FROM channel_chat_session_binding
-		WHERE installation_id = $1 AND channel_chat_id = $2 AND retired_at IS NULL
+		WHERE installation_id = $1 AND config->>'chat_id' = $2 AND retired_at IS NULL
 	`, e.install, groupID).Scan(&groupType, &groupSession); err != nil {
 		t.Fatalf("load group binding: %v", err)
 	}

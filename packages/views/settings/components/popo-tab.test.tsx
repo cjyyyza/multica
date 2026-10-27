@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -53,6 +53,7 @@ const getPopoRegistration = vi.hoisted(() => vi.fn());
 const cancelPopoRegistration = vi.hoisted(() => vi.fn());
 const createPopoBridgePairing = vi.hoisted(() => vi.fn());
 const revokePopoBridge = vi.hoisted(() => vi.fn());
+const deletePopoBinding = vi.hoisted(() => vi.fn());
 const ApiError = vi.hoisted(() => {
   return class ApiError extends Error {
     status: number;
@@ -152,6 +153,7 @@ vi.mock("@multica/core/api", () => ({
     deletePopoInstallation: vi.fn(),
     createPopoBridgePairing,
     revokePopoBridge,
+    deletePopoBinding,
     getBaseUrl: () => "https://multica.example",
   },
 }));
@@ -223,6 +225,8 @@ beforeEach(() => {
   cancelPopoRegistration.mockReset();
   createPopoBridgePairing.mockReset();
   revokePopoBridge.mockReset();
+  deletePopoBinding.mockReset();
+  deletePopoBinding.mockResolvedValue(undefined);
 });
 
 describe("popoPairCommand", () => {
@@ -234,6 +238,29 @@ describe("popoPairCommand", () => {
 });
 
 describe("PopoTab", () => {
+  it("guides unbound members to POPO and awaits confirmed unbinding", async () => {
+    const installation = {
+      id: "inst-1", workspace_id: "ws-1", agent_id: "agent-1", robot_id: "robot-1",
+      robot_name: "Requirements Bot", bridge_id: "bridge-1", webhook_url: "",
+      installer_user_id: "owner-1", status: "active", installed_at: "2026-01-01T00:00:00Z",
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+      bound_popo_user_ids: [],
+    };
+    listingRef.current.installations = [installation];
+    renderUI(<PopoTab />);
+    await userEvent.click(screen.getByRole("button", { name: "Link POPO account" }));
+    expect(await screen.findByText(/Send a private message to Requirements Bot/)).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    listingRef.current.installations = [{ ...installation, bound_popo_user_ids: ["alice@corp"] }];
+    renderUI(<PopoTab />);
+    expect(screen.getByText("Linked: alice@corp")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Unlink account" }));
+    const confirmation = await screen.findByRole("alertdialog");
+    await userEvent.click(within(confirmation).getByRole("button", { name: "Unlink account" }));
+    await waitFor(() => expect(deletePopoBinding).toHaveBeenCalledWith("ws-1", "inst-1"));
+  });
+
   it("explains how to enable POPO when MULTICA_POPO_ENABLED is off", () => {
     listingRef.current.configured = false;
     listingRef.current.install_supported = false;
