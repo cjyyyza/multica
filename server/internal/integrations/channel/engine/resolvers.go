@@ -427,7 +427,7 @@ type ResolverSet struct {
 // MemberCommandHandler runs authenticated, explicit controls before the chat
 // pipeline. Implementations must persist mutation idempotency before returning.
 type MemberCommandHandler interface {
-	HandleMemberCommand(context.Context, ResolvedInstallation, ResolvedIdentity, channel.InboundMessage) (Result, bool, error)
+	HandleMemberCommand(context.Context, ResolvedInstallation, ResolvedIdentity, channel.InboundMessage, bool) (Result, bool, error)
 }
 
 // IssueCreator is the narrow subset of service.IssueService the Router needs

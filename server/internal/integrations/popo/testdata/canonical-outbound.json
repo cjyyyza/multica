@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "hash_algorithm": "multica-outbound-sha256-v2",
+  "hash_input": "multica-outbound-sha256-v2\\n<canonical-json>",
+  "excluded_from_identity": [
+    "lease_id",
+    "trace_id",
+    "created_at",
+    "retry counts",
+    "receipts",
+    "receive timestamps",
+    "local paths"
+  ],
+  "vectors": [
+    {
+      "name": "generic-send-notification-card-and-excluded-lease-trace",
+      "command": {
+        "protocol_version": 2,
+        "type": "send",
+        "command_id": "cmd-golden",
+        "delivery_id": "dlv-golden",
+        "recipient_binding_id": "recipient-golden",
+        "idempotency_key": "dlv-golden",
+        "lease_id": "lease-not-hashed",
+        "payload_hash": "sha256:c28a215d0017cd36ee27a6a0327086149f42a2c608350ada20d3ae8f63837631",
+        "created_at": "2026-10-24T08:00:00Z",
+        "expires_at": "2026-10-24T12:00:00Z",
+        "trace_id": "trace-not-hashed",
+        "payload": {
+          "robot_id": "robot-a",
+          "chat_id": "chat-a",
+          "chat_type": "p2p",
+          "text": "hello\nworld",
+          "notification": {
+            "kind": "requirement_draft",
+            "source_key": "requirement:req-1:requirement_draft:intake-1",
+            "occurrence_id": "intake-1",
+            "requirement_id": "req-1",
+            "requirement_revision": 1
+          },
+          "card": {
+            "schema_version": 1,
+            "type": "requirement_link",
+            "title": "Draft",
+            "summary": "Short",
+            "url": "https://multica.example/requirements/req-1"
+          }
+        }
+      },
+      "projection": {
+        "type": "send",
+        "command_id": "cmd-golden",
+        "delivery_id": "dlv-golden",
+        "recipient_binding_id": "recipient-golden",
+        "idempotency_key": "dlv-golden",
+        "expires_at": "2026-10-24T12:00:00Z",
+        "payload": {
+          "robot_id": "robot-a",
+          "chat_id": "chat-a",
+          "chat_type": "p2p",
+          "text": "hello\nworld",
+          "notification": {
+            "kind": "requirement_draft",
+            "source_key": "requirement:req-1:requirement_draft:intake-1",
+            "occurrence_id": "intake-1",
+            "requirement_id": "req-1",
+            "requirement_revision": 1
+          },
+          "card": {
+            "schema_version": 1,
+            "type": "requirement_link",
+            "title": "Draft",
+            "summary": "Short",
+            "url": "https://multica.example/requirements/req-1"
+          }
+        }
+      },
+      "canonical": "{\"command_id\":\"cmd-golden\",\"delivery_id\":\"dlv-golden\",\"expires_at\":\"2026-10-24T12:00:00Z\",\"idempotency_key\":\"dlv-golden\",\"payload\":{\"card\":{\"schema_version\":1,\"summary\":\"Short\",\"title\":\"Draft\",\"type\":\"requirement_link\",\"url\":\"https://multica.example/requirements/req-1\"},\"chat_id\":\"chat-a\",\"chat_type\":\"p2p\",\"notification\":{\"kind\":\"requirement_draft\",\"occurrence_id\":\"intake-1\",\"requirement_id\":\"req-1\",\"requirement_revision\":1,\"source_key\":\"requirement:req-1:requirement_draft:intake-1\"},\"robot_id\":\"robot-a\",\"text\":\"hello\\nworld\"},\"recipient_binding_id\":\"recipient-golden\",\"type\":\"send\"}",
+      "payload_hash": "sha256:c28a215d0017cd36ee27a6a0327086149f42a2c608350ada20d3ae8f63837631"
+    }
+  ]
+}

@@ -3,10 +3,12 @@ package popo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/events"
@@ -118,6 +120,12 @@ func (o *Outbound) issueIdentifier(ctx context.Context, issueID pgtype.UUID) str
 
 func (o *Outbound) enqueueSource(ctx context.Context, source db.ChannelIssueSource, issueID, commentID, taskID pgtype.UUID, text, kind string) {
 	if o.queue == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	// Requirement notifications carry the question/review and a precise link.
+	// Do not mirror every comment or status change through the ordinary stream.
+	_, err := o.q.GetRequirementByIssue(ctx, db.GetRequirementByIssueParams{WorkspaceID: source.WorkspaceID, IssueID: issueID})
+	if !errors.Is(err, pgx.ErrNoRows) {
 		return
 	}
 	inst, err := o.q.GetChannelInstallation(ctx, db.GetChannelInstallationParams{

@@ -19,6 +19,7 @@ import (
 type BridgeInbound struct {
 	ProtocolVersion int          `json:"protocol_version"`
 	EventID         string       `json:"event_id"`
+	PayloadHash     string       `json:"payload_hash,omitempty"`
 	RobotID         string       `json:"robot_id"`
 	Sender          BridgeSender `json:"sender"`
 	Chat            BridgeChat   `json:"chat"`
@@ -107,10 +108,18 @@ func jsonString(v any) string {
 	}
 }
 
+const (
+	InboundCodeDurableDuplicate = "DURABLE_DUPLICATE"
+	InboundCodeIdentityConflict = "IDENTITY_CONFLICT"
+	InboundCodeRouteConflict    = "ROUTE_CONFLICT"
+)
+
 type InboundDecision struct {
-	Accepted  bool
-	Duplicate bool
-	Message   channel.InboundMessage
+	Accepted    bool
+	Duplicate   bool
+	Code        string
+	PayloadHash string
+	Message     channel.InboundMessage
 }
 
 func (s *BridgeService) AcceptInbound(ctx context.Context, bridge db.PopoBridge, req BridgeInbound) (InboundDecision, error) {
@@ -129,6 +138,10 @@ func (s *BridgeService) AcceptInbound(ctx context.Context, bridge db.PopoBridge,
 	if chatID == "" {
 		return InboundDecision{}, ErrMissingChat
 	}
+	payloadHash := strings.TrimSpace(req.PayloadHash)
+	if payloadHash != "" && !validSHA256Hash(payloadHash) {
+		return InboundDecision{}, ErrInvalidInboundPayloadHash
+	}
 	robotID, err := normalizeRobotID(req.RobotID)
 	if err != nil {
 		return InboundDecision{}, err
@@ -139,39 +152,65 @@ func (s *BridgeService) AcceptInbound(ctx context.Context, bridge db.PopoBridge,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return InboundDecision{}, ErrInstallationWrong
+			return InboundDecision{Accepted: false, Code: InboundCodeRouteConflict}, nil
 		}
 		return InboundDecision{}, err
 	}
 	if inst.WorkspaceID != bridge.WorkspaceID || inst.Status != "active" || DecodePublicConfig(inst.Config).BridgeID != uuidString(bridge.ID) {
-		return InboundDecision{}, ErrInstallationWrong
+		return InboundDecision{Accepted: false, Code: InboundCodeRouteConflict}, nil
 	}
 
 	msg, p1OK := inboundFromBridge(robotID, util.UUIDToString(bridge.ID), req)
 	if !p1OK {
 		return InboundDecision{Accepted: false}, nil
 	}
-
+	msg.MessageID = popoInboundExecutionID(uuidString(bridge.ID), robotID, eventID)
 	_, err = s.q.InsertPopoInboundEvent(ctx, db.InsertPopoInboundEventParams{
-		WorkspaceID:    bridge.WorkspaceID,
-		BridgeID:       bridge.ID,
-		InstallationID: inst.ID,
-		EventID:        eventID,
-		RobotID:        robotID,
-		Accepted:       true,
-		Duplicate:      false,
+		WorkspaceID: bridge.WorkspaceID, BridgeID: bridge.ID, InstallationID: inst.ID,
+		EventID: eventID, RobotID: robotID, Accepted: true, Duplicate: false,
+		PayloadHash: nullText(payloadHash), PayloadEvidence: append([]byte(nil), req.Raw...),
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
-			// Bridge receipt is not engine processing. Replays still enter
-			// Handle; channel_inbound_message_dedup is the execution fence.
-			logTrace("popo inbound received", eventID, util.UUIDToString(inst.ID), chatID, "", "", "", "")
-			return InboundDecision{Accepted: true, Duplicate: true, Message: msg}, nil
+		if !isUniqueViolation(err) {
+			return InboundDecision{}, err
 		}
-		return InboundDecision{}, err
+		existing, loadErr := s.q.GetPopoInboundEventByIdentity(ctx, db.GetPopoInboundEventByIdentityParams{
+			BridgeID: bridge.ID, RobotID: robotID, EventID: eventID,
+		})
+		if loadErr != nil {
+			return InboundDecision{}, loadErr
+		}
+		logTrace("popo inbound received", eventID, util.UUIDToString(inst.ID), chatID, "", "", "", "")
+		return inboundDuplicateDecision(existing, payloadHash, msg), nil
 	}
 	logTrace("popo inbound received", eventID, util.UUIDToString(inst.ID), chatID, "", "", "", "")
 	return InboundDecision{Accepted: true, Message: msg}, nil
+}
+
+func inboundDuplicateDecision(existing db.PopoInboundEvent, requestHash string, msg channel.InboundMessage) InboundDecision {
+	if requestHash == "" {
+		return InboundDecision{Accepted: true, Duplicate: true, Message: msg}
+	}
+	if !existing.PayloadHash.Valid || existing.PayloadHash.String != requestHash {
+		return InboundDecision{Accepted: false, Code: InboundCodeIdentityConflict}
+	}
+	return InboundDecision{
+		Accepted: true, Duplicate: true, Code: InboundCodeDurableDuplicate,
+		PayloadHash: existing.PayloadHash.String, Message: msg,
+	}
+}
+
+func popoInboundExecutionID(bridgeID, robotID, eventID string) string {
+	raw, _ := json.Marshal([3]string{bridgeID, robotID, eventID})
+	return string(raw)
+}
+
+func parsePopoInboundExecutionID(messageID string) (bridgeID, robotID, eventID string, ok bool) {
+	var identity [3]string
+	if json.Unmarshal([]byte(messageID), &identity) != nil || identity[0] == "" || identity[1] == "" || identity[2] == "" {
+		return "", "", "", false
+	}
+	return identity[0], identity[1], identity[2], true
 }
 
 func inboundFromBridge(robotID, bridgeID string, req BridgeInbound) (channel.InboundMessage, bool) {

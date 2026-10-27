@@ -316,7 +316,7 @@ func (r *Router) dispatch(ctx context.Context, set ResolverSet, msg channel.Inbo
 		token, err := set.Dedup.Claim(ctx, inst.ID, msg.MessageID)
 		if err != nil {
 			if errors.Is(err, ErrDuplicate) {
-				if recovered, ok, recoverErr := r.recoverDuplicateCommand(ctx, set, inst, msg); recoverErr != nil {
+				if recovered, ok, recoverErr := r.recoverDuplicateCommand(ctx, set, inst, msg, startChat); recoverErr != nil {
 					return Result{}, inst, recoverErr
 				} else if ok {
 					return recovered, inst, nil
@@ -402,15 +402,15 @@ func (r *Router) processClaimed(ctx context.Context, set ResolverSet, msg channe
 		}, finalizeMark, nil
 	}
 
-	if !startChat {
-		if set.Commands != nil {
-			if result, handled, err := set.Commands.HandleMemberCommand(ctx, inst, identity, msg); handled {
-				if err != nil {
-					return Result{}, finalizeRelease, err
-				}
-				return result, finalizeMark, nil
+	if set.Commands != nil {
+		if result, handled, err := set.Commands.HandleMemberCommand(ctx, inst, identity, msg, startChat); handled {
+			if err != nil {
+				return Result{}, finalizeRelease, err
 			}
+			return result, finalizeMark, nil
 		}
+	}
+	if !startChat {
 		if followRes, handled, followErr := r.handleFollow(ctx, set, inst, identity, msg); handled {
 			if followErr != nil {
 				return Result{}, finalizeRelease, followErr

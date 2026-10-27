@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "hash_algorithm": "multica-inbound-sha256-v1",
+  "hash_input": "multica-inbound-sha256-v1\\n<canonical-json>",
+  "canonical_rules": {
+    "encoding": "UTF-8",
+    "object_keys": "recursive lexicographic sort",
+    "arrays": "preserve order",
+    "whitespace": "none",
+    "numbers": "finite JSON numbers; 1.0 serializes as 1 and -0 as 0",
+    "strings": "JSON escapes only; Unicode is not ASCII-folded",
+    "undefined": "not a JSON value and rejected",
+    "excluded_from_identity": [
+      "local paths",
+      "staging state",
+      "lease",
+      "trace",
+      "retry counts",
+      "receipts",
+      "receive timestamps"
+    ]
+  },
+  "vectors": [
+    {
+      "name": "recursive-order-null-unicode-and-array-order",
+      "projection": {
+        "optional": "included",
+        "nested": { "b": true, "a": "雪" },
+        "empty": null,
+        "array": [3, 2, 1],
+        "a": 1
+      },
+      "canonical": "{\"a\":1,\"array\":[3,2,1],\"empty\":null,\"nested\":{\"a\":\"雪\",\"b\":true},\"optional\":\"included\"}",
+      "payload_hash": "sha256:b6969dd724fa3889d77a0abd33517019de7493870191c12a87e8027086bd8288"
+    },
+    {
+      "name": "omitted-field-and-number-normalization",
+      "projection": {
+        "negativeZero": -0.0,
+        "exponent": 0.0000001,
+        "a": 1.0
+      },
+      "canonical": "{\"a\":1,\"exponent\":1e-7,\"negativeZero\":0}",
+      "payload_hash": "sha256:d8f4ece1563bfc666ffae5a208ada6a10141bbde8ec6b8b627badb4b55542dd1"
+    },
+    {
+      "name": "p2p-remote-image-projection",
+      "projection": {
+        "text": "你好\n[image]",
+        "sender": { "name": "Alice", "id": "alice@example.com" },
+        "schema_version": 1,
+        "robot_id": "robot-a",
+        "quote": null,
+        "media": [
+          {
+            "url": "https://cdn.example/image.png",
+            "name": "",
+            "kind": "image",
+            "file_id": ""
+          }
+        ],
+        "has_selected_context": false,
+        "event_type": "IM_P2P_TO_ROBOT_MSG",
+        "event_id": "evt-1",
+        "command_text": "你好",
+        "chat": { "type": "p2p", "id": "alice@example.com" },
+        "addressed_to_bot": true
+      },
+      "canonical": "{\"addressed_to_bot\":true,\"chat\":{\"id\":\"alice@example.com\",\"type\":\"p2p\"},\"command_text\":\"你好\",\"event_id\":\"evt-1\",\"event_type\":\"IM_P2P_TO_ROBOT_MSG\",\"has_selected_context\":false,\"media\":[{\"file_id\":\"\",\"kind\":\"image\",\"name\":\"\",\"url\":\"https://cdn.example/image.png\"}],\"quote\":null,\"robot_id\":\"robot-a\",\"schema_version\":1,\"sender\":{\"id\":\"alice@example.com\",\"name\":\"Alice\"},\"text\":\"你好\\n[image]\"}",
+      "payload_hash": "sha256:565d80a17a9c34ef9c8a598ea6d1f056d668148d9461d55ed48d71600a37c89f"
+    }
+  ]
+}

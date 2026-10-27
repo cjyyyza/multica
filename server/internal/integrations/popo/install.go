@@ -117,30 +117,60 @@ func (s *InstallService) Register(ctx context.Context, p RegisterParams) (db.Cha
 // not required to appear on a heartbeat: occupancy is Windows-side, and the
 // websocket may not have been reported yet. Secrets never enter config.
 func (s *InstallService) RegisterFromScan(ctx context.Context, p RegisterParams) (db.ChannelInstallation, error) {
+	robotID, err := s.validateScanRegistration(ctx, s.q, p)
+	if err != nil {
+		return db.ChannelInstallation{}, err
+	}
+	return s.writeInstall(ctx, p, robotID)
+}
+
+// registerFromScanInTx leaves the durable commit to the caller-owned transaction.
+func (s *InstallService) registerFromScanInTx(ctx context.Context, tx pgx.Tx, p RegisterParams) (db.ChannelInstallation, error) {
+	qtx := s.q.WithTx(tx)
+	robotID, err := s.validateScanRegistration(ctx, qtx, p)
+	if err != nil {
+		return db.ChannelInstallation{}, err
+	}
+	persist, err := newInstallPersist(p, robotID)
+	if err != nil {
+		return db.ChannelInstallation{}, err
+	}
+	return s.persistInstallWithQueries(ctx, qtx, persist)
+}
+
+func (s *InstallService) validateScanRegistration(ctx context.Context, q installQueries, p RegisterParams) (string, error) {
 	if !p.BridgeID.Valid {
-		return db.ChannelInstallation{}, ErrInvalidBridgeID
+		return "", ErrInvalidBridgeID
 	}
 	robotID := strings.TrimSpace(p.RobotID)
 	if robotID == "" {
-		return db.ChannelInstallation{}, ErrInvalidRobotID
+		return "", ErrInvalidRobotID
 	}
-	bridge, err := s.q.GetPopoBridgeInWorkspace(ctx, db.GetPopoBridgeInWorkspaceParams{
+	bridge, err := q.GetPopoBridgeInWorkspace(ctx, db.GetPopoBridgeInWorkspaceParams{
 		ID:          p.BridgeID,
 		WorkspaceID: p.WorkspaceID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return db.ChannelInstallation{}, ErrBridgeNotFound
+			return "", ErrBridgeNotFound
 		}
-		return db.ChannelInstallation{}, err
+		return "", err
 	}
 	if bridge.Status != BridgeStatusActive {
-		return db.ChannelInstallation{}, ErrBridgeRevoked
+		return "", ErrBridgeRevoked
 	}
-	return s.writeInstall(ctx, p, robotID)
+	return robotID, nil
 }
 
 func (s *InstallService) writeInstall(ctx context.Context, p RegisterParams, robotID string) (db.ChannelInstallation, error) {
+	persist, err := newInstallPersist(p, robotID)
+	if err != nil {
+		return db.ChannelInstallation{}, err
+	}
+	return s.persistInstall(ctx, persist)
+}
+
+func newInstallPersist(p RegisterParams, robotID string) (installPersist, error) {
 	cfg := installConfig{
 		AppID:     robotID,
 		RobotName: strings.TrimSpace(p.RobotName),
@@ -148,15 +178,15 @@ func (s *InstallService) writeInstall(ctx context.Context, p RegisterParams, rob
 	}
 	cfgJSON, err := json.Marshal(cfg)
 	if err != nil {
-		return db.ChannelInstallation{}, fmt.Errorf("encode popo installation config: %w", err)
+		return installPersist{}, fmt.Errorf("encode popo installation config: %w", err)
 	}
-	return s.persistInstall(ctx, installPersist{
+	return installPersist{
 		wsID:        p.WorkspaceID,
 		agentID:     p.AgentID,
 		installerID: p.InitiatorID,
 		appIDKey:    robotID,
 		configJSON:  cfgJSON,
-	})
+	}, nil
 }
 
 type installPersist struct {
@@ -173,9 +203,18 @@ func (s *InstallService) persistInstall(ctx context.Context, p installPersist) (
 		return db.ChannelInstallation{}, fmt.Errorf("begin install tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	qtx := s.q.WithTx(tx)
+	inst, err := s.persistInstallWithQueries(ctx, s.q.WithTx(tx), p)
+	if err != nil {
+		return db.ChannelInstallation{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.ChannelInstallation{}, fmt.Errorf("commit popo install: %w", err)
+	}
+	return inst, nil
+}
 
-	if _, err := qtx.ReclaimDeadChannelInstallationByAppID(ctx, db.ReclaimDeadChannelInstallationByAppIDParams{
+func (s *InstallService) persistInstallWithQueries(ctx context.Context, q installQueries, p installPersist) (db.ChannelInstallation, error) {
+	if _, err := q.ReclaimDeadChannelInstallationByAppID(ctx, db.ReclaimDeadChannelInstallationByAppIDParams{
 		ChannelType: string(TypePopo),
 		AppID:       p.appIDKey,
 		WorkspaceID: p.wsID,
@@ -184,7 +223,7 @@ func (s *InstallService) persistInstall(ctx context.Context, p installPersist) (
 		return db.ChannelInstallation{}, fmt.Errorf("reclaim dead popo installation: %w", err)
 	}
 
-	inst, err := qtx.UpsertChannelInstallation(ctx, db.UpsertChannelInstallationParams{
+	inst, err := q.UpsertChannelInstallation(ctx, db.UpsertChannelInstallationParams{
 		WorkspaceID:     p.wsID,
 		AgentID:         p.agentID,
 		ChannelType:     string(TypePopo),
@@ -197,9 +236,6 @@ func (s *InstallService) persistInstall(ctx context.Context, p installPersist) (
 			return db.ChannelInstallation{}, s.liveOwnerConflictErr(ctx, p.wsID, p.appIDKey)
 		}
 		return db.ChannelInstallation{}, fmt.Errorf("upsert popo installation: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return db.ChannelInstallation{}, fmt.Errorf("commit popo install: %w", err)
 	}
 	return inst, nil
 }

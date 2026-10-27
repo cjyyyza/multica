@@ -108,7 +108,7 @@ func (o *Outbound) enqueueTaskReply(ctx context.Context, e events.Event) {
 		return
 	}
 	task, err := o.q.GetAgentTask(ctx, id)
-	if err != nil || !task.ID.Valid {
+	if err != nil || !task.ID.Valid || task.RequirementID.Valid {
 		return
 	}
 	status, kind := "running", "task_progress"

@@ -313,7 +313,7 @@ func (r *Router) followIssueResult(inst ResolvedInstallation, msg channel.Inboun
 	return res
 }
 
-func (r *Router) recoverDuplicateCommand(ctx context.Context, set ResolverSet, inst ResolvedInstallation, msg channel.InboundMessage) (Result, bool, error) {
+func (r *Router) recoverDuplicateCommand(ctx context.Context, set ResolverSet, inst ResolvedInstallation, msg channel.InboundMessage, startChat bool) (Result, bool, error) {
 	if strings.TrimSpace(msg.MessageID) == "" || (r.follow == nil && set.Commands == nil) {
 		return Result{}, false, nil
 	}
@@ -346,11 +346,11 @@ func (r *Router) recoverDuplicateCommand(ctx context.Context, set ResolverSet, i
 		}, true, nil
 	}
 	if set.Commands != nil {
-		if result, handled, err := set.Commands.HandleMemberCommand(ctx, inst, identity, msg); handled {
+		if result, handled, err := set.Commands.HandleMemberCommand(ctx, inst, identity, msg, startChat); handled {
 			return result, err == nil, nil
 		}
 	}
-	if r.follow == nil {
+	if r.follow == nil || startChat {
 		return Result{}, false, nil
 	}
 
