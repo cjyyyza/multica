@@ -216,6 +216,7 @@ func daemonCommonCapabilities() []string {
 		protocol.DaemonCapabilityPerforceSyncV1,
 		protocol.DaemonCapabilityPerforceMutateV1,
 		protocol.DaemonCapabilityJoinedWakeupsV1,
+		protocol.DaemonCapabilityPlanModeV1,
 	}
 }
 
@@ -1363,6 +1364,10 @@ func (c *Client) getJSONWithToken(ctx context.Context, path, token string, respB
 // postJSONWithToken is getJSONWithToken's write counterpart, for the daemon's
 // task-scoped calls that carry a body.
 func (c *Client) postJSONWithToken(ctx context.Context, path, token string, reqBody, respBody any) error {
+	return c.postJSONWithTokenAndKey(ctx, path, token, "", reqBody, respBody)
+}
+
+func (c *Client) postJSONWithTokenAndKey(ctx context.Context, path, token, key string, reqBody, respBody any) error {
 	encoded, err := json.Marshal(reqBody)
 	if err != nil {
 		return err
@@ -1372,6 +1377,9 @@ func (c *Client) postJSONWithToken(ctx context.Context, path, token string, reqB
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if key != "" {
+		req.Header.Set("Idempotency-Key", key)
+	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

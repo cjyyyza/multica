@@ -74,6 +74,10 @@ type ExecOptions struct {
 	// HandshakeTimeout; when both are zero Codex uses separate built-in defaults.
 	ThreadHandshakeTimeout time.Duration
 	ResumeSessionID        string // if non-empty, resume a previous agent session
+	// PermissionMode selects a provider-native tool permission policy. The daemon
+	// admits Plan Mode only for providers in SupportsPlanMode and rejects every
+	// other provider before Execute rather than allowing a full-access fallback.
+	PermissionMode string
 	// ResumeExpected records that this task intended to continue a prior
 	// conversation, independent of ResumeSessionID (which a fallback retry may
 	// clear). When it is true but the backend ends up on a fresh thread — the
@@ -102,6 +106,10 @@ type ExecOptions struct {
 	CustomArgs       []string        // per-agent CLI arguments appended after ExtraArgs
 	QwenpawWorkspace string          // per-task QwenPaw workspace directory (passed as --workspace to qwenpaw acp); empty when not applicable
 	McpConfig        json.RawMessage // if non-nil, MCP server config to pass via --mcp-config
+	// OutputSchema requests a provider-validated structured result. Callers must
+	// check Result.StructuredOutput before using it; a completed text turn alone
+	// does not establish that the requested structured result was produced.
+	OutputSchema json.RawMessage
 	// ThinkingLevel is the runtime-native reasoning/effort value (e.g.
 	// Claude's "low|medium|high|xhigh|max", Codex's "none|minimal|low|
 	// medium|high|xhigh", OpenCode's model variant names). Empty means
@@ -261,12 +269,13 @@ const CostUSDTicksPerUSD = 10_000_000_000
 
 // Result is the final outcome after an agent session completes.
 type Result struct {
-	Status     string // "completed", "failed", "aborted", "timeout", "cancelled"
-	Output     string // final user-facing output selected by the backend
-	Error      string // error message if failed
-	DurationMs int64
-	SessionID  string
-	Usage      map[string]TokenUsage // keyed by model name
+	Status           string          // "completed", "failed", "aborted", "timeout", "cancelled"
+	Output           string          // final user-facing output selected by the backend
+	StructuredOutput json.RawMessage // provider result data, distinct from user-facing prose
+	Error            string          // error message if failed
+	DurationMs       int64
+	SessionID        string
+	Usage            map[string]TokenUsage // keyed by model name
 	// ResumeRejected is positive evidence that this run's requested resume
 	// was permanently refused — the transcript is gone, the session belongs to
 	// another provider account, OR the session still exists but its history

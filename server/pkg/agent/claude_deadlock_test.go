@@ -75,6 +75,9 @@ func TestMain(m *testing.M) {
 	case "control_request":
 		runFakeClaudeControlRequest()
 		os.Exit(0)
+	case "plan_permissions":
+		runFakeClaudePlanPermissions()
+		os.Exit(0)
 	case "background_control_request":
 		runFakeClaudeBackgroundControlRequest()
 		os.Exit(0)

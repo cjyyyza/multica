@@ -7772,6 +7772,44 @@ func qualifyTaskModel(
 	return qualified
 }
 
+// resolveTaskEffectiveMcpConfig builds the MCP configuration a claimed task
+// launches with. Runtime MCP servers are the base layer and the agent's entries
+// win on a same-name collision (see mergeRuntimeAndAgentMcpConfig); a running
+// Remote MCP broker overlay is merged on top.
+//
+// Plan Mode never consults either layer. prepareClaimedTaskMode has already
+// stripped the task to `{"mcpServers":{}}`, and merging the host runtime config
+// would undo that: loadRuntimeMcpServerConfigs reads the user's ~/.claude.json
+// and every enabled Claude plugin's .mcp.json, which is precisely the external
+// tool surface the plan task is not allowed to reach. The empty managed config
+// is the whole point, so it is returned untouched.
+func resolveTaskEffectiveMcpConfig(
+	provider, permissionMode string,
+	agentMcpConfig, runtimeMcpConfig json.RawMessage,
+	taskLog *slog.Logger,
+) (json.RawMessage, error) {
+	effectiveMcpConfig := agentMcpConfig
+	if permissionMode == agent.PermissionModePlan {
+		return effectiveMcpConfig, nil
+	}
+	if merged, mergeErr := mergeRuntimeAndAgentMcpConfig(provider, agentMcpConfig); mergeErr != nil {
+		taskLog.Warn("mcp_config: runtime merge failed; using agent configuration only",
+			"provider", provider,
+			"error", mergeErr,
+		)
+	} else {
+		effectiveMcpConfig = merged
+	}
+	if len(runtimeMcpConfig) > 0 {
+		merged, mergeErr := mergeTaskRemoteMCPConfig(effectiveMcpConfig, runtimeMcpConfig)
+		if mergeErr != nil {
+			return nil, fmt.Errorf("merge Remote MCP broker configuration: %w", mergeErr)
+		}
+		effectiveMcpConfig = merged
+	}
+	return effectiveMcpConfig, nil
+}
+
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (taskResult TaskResult, returnErr error) {
 	phaseRecorder := taskPhaseRecorderFromContext(ctx)
 	phaseRecorder.Mark(taskPhasePrepareStarted)
@@ -7780,6 +7818,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// because it is also bound into the task-scoped token. Never prepare or
 	// reuse a workdir when the two identities disagree.
 	if err := validateTaskIdentity(task); err != nil {
+		return TaskResult{}, err
+	}
+	task, permissionMode, err := prepareClaimedTaskMode(task, provider)
+	if err != nil {
 		return TaskResult{}, err
 	}
 
@@ -7885,6 +7927,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// via `multica repo checkout <url>`.
 	taskCtx := execenv.TaskContextForEnv{
 		IssueID:             task.IssueID,
+		RequirementID:       task.RequirementID,
 		TriggerCommentID:    task.TriggerCommentID,
 		TriggerThreadID:     task.TriggerThreadID,
 		CommentReplyTargets: commentReplyThreads(task),
@@ -7896,6 +7939,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// absent). Seed the brief's continuity disclosure from it; the local
 		// resume gates below only ever OR it to true, so the signal is monotonic.
 		PriorSessionResumeUnavailable:    task.PriorSessionResumeUnavailable,
+		PlanMode:                         permissionMode == agent.PermissionModePlan,
 		AgentID:                          task.AgentID,
 		AgentName:                        agentName,
 		AgentInstructions:                instructions,
@@ -8022,6 +8066,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// LocalWorkDir into execenv. handleTask already validated + locked the
 	// path for worker tasks; leader tasks intentionally skip the assignment.
 	localAssignment, _ := localDirectoryAssignmentForTask(task, d.cfg.DaemonID)
+	if err := validatePlanExecutionRuntime(task, usesCustomProfileCommand, localAssignment); err != nil {
+		return TaskResult{}, err
+	}
+	if permissionMode == agent.PermissionModePlan {
+		profileFixedArgs = nil
+	}
 	if err := requireInPlaceDirectoryForP4(task, localAssignment); err != nil {
 		return TaskResult{}, asEnvironmentSetupFailure(err)
 	}
@@ -8081,22 +8131,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	if task.Agent != nil {
 		agentMcpConfig = task.Agent.McpConfig
-		effectiveMcpConfig = agentMcpConfig
-		if merged, mergeErr := mergeRuntimeAndAgentMcpConfig(provider, agentMcpConfig); mergeErr != nil {
-			taskLog.Warn("mcp_config: runtime merge failed; using agent configuration only",
-				"provider", provider,
-				"error", mergeErr,
-			)
-		} else {
-			effectiveMcpConfig = merged
+		merged, mcpMergeErr := resolveTaskEffectiveMcpConfig(provider, permissionMode, agentMcpConfig, remoteMCPConfig, taskLog)
+		if mcpMergeErr != nil {
+			return TaskResult{}, mcpMergeErr
 		}
-		if len(remoteMCPConfig) > 0 {
-			merged, mergeErr := mergeTaskRemoteMCPConfig(effectiveMcpConfig, remoteMCPConfig)
-			if mergeErr != nil {
-				return TaskResult{}, fmt.Errorf("merge Remote MCP broker configuration: %w", mergeErr)
-			}
-			effectiveMcpConfig = merged
-		}
+		effectiveMcpConfig = merged
 		if provider == "cursor" {
 			cursorMcpAuthSource = strings.TrimSpace(task.Agent.CustomEnv[execenv.CursorMcpAuthSourceEnv])
 		}
@@ -8570,6 +8609,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		stopPrepareLease()
 		return TaskResult{}, fmt.Errorf("start task failed: %w", err)
 	}
+	// Task-scoped Requirement reads require the committed running state.
+	// Capture the revision after StartTask acknowledges, before model launch.
+	planContext, err := d.client.loadRequirementPlanContext(prepareCtx, task)
+	if err != nil {
+		return TaskResult{}, err
+	}
 	if taskSupplementNegotiated {
 		// Register before provider launch so a hint cannot arrive in the gap
 		// between the committed server transition and turn/started. The row is
@@ -8613,6 +8658,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// is the one thing it cannot work out from its own context — tell it.
 	// Worktree mode is excluded: there the tree is this task's private checkout.
 	var promptOptions []PromptOption
+	if planContext != nil {
+		promptOptions = append(promptOptions, WithRequirementPlanSnapshot(planContext.Snapshot))
+	}
 	if localAssignment != nil && !localAssignment.UsesWorktree() && localDirectoryLockExempt(task) {
 		promptOptions = append(promptOptions, WithSharedLocalDirectory())
 	}
@@ -8639,6 +8687,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		return TaskResult{}, err
 	}
 	agentEnv := taskMulticaEnvironment(task, provider, agentName, agentToken, env.MulticaConfigRoot, d.cfg.WorkspacesRoot, d.cfg.ServerBaseURL, d.cfg.HealthPort, slot, taskTempDir, d.p4Binding(task.ID) != nil)
+	for key, value := range planModeEnvironment(task) {
+		agentEnv[key] = value
+	}
 	if checkoutMode := repoCheckoutModeFor(provider, runtime.GOOS); checkoutMode != "" {
 		agentEnv[repoCheckoutModeEnv] = checkoutMode
 	}
@@ -8817,6 +8868,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// the ones that do — so a wrapper's subcommand was either dropped on the
 	// floor or spliced in behind `-p` (GH #7046).
 	extraArgs := defaultArgsForProvider(d.cfg, provider)
+	if permissionMode == agent.PermissionModePlan {
+		extraArgs = nil
+	}
 	var mcpConfig json.RawMessage
 	if task.Agent != nil {
 		customArgs = task.Agent.CustomArgs
@@ -8854,6 +8908,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		HandshakeTimeout:           d.cfg.CodexHandshakeTimeout,
 		TurnInterruptTimeout:       d.cfg.CodexTurnInterruptTimeout,
 		ThreadHandshakeTimeout:     d.cfg.CodexThreadHandshakeTimeout,
+		PermissionMode:             permissionMode,
 		ResumeSessionID:            task.PriorSessionID,
 		// Post-gate intent: PriorSessionID here already reflects the pre-flight
 		// resume gates (a dropped resume is surfaced via the prompt instead). If it
@@ -8876,6 +8931,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		OpenclawMode:           openclawMode,
 		ClaudeSettingsPath:     env.ClaudeSettingsPath,
 		QwenpawWorkspace:       env.QwenpawWorkspace,
+	}
+	if planContext != nil {
+		execOpts.OutputSchema = json.RawMessage(protocol.RequirementPlanOutputSchema)
 	}
 	// Some providers do not reliably load the per-task runtime config files we
 	// write into the task workdir:
@@ -8929,6 +8987,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AgentID:     task.AgentID,
 		AgentName:   task.Agent.Name,
 		WorkDir:     env.WorkDir,
+		Mode:        task.Mode,
 	})
 	defer d.clearActiveRepoCheckoutTask(agentToken)
 
@@ -9079,6 +9138,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	switch result.Status {
 	case "completed":
+		if planContext != nil {
+			reply, planErr := d.client.submitRequirementPlanOutput(ctx, task, planContext, result.StructuredOutput)
+			if planErr != nil {
+				return TaskResult{
+					Status: "blocked", Comment: planErr.Error(), FailureReason: "plan_output_failed",
+					SessionID: result.SessionID, WorkDir: env.WorkDir, EnvRoot: env.RootDir, Usage: usageEntries,
+				}, nil
+			}
+			result.Output = reply
+		}
 		if result.Output == "" {
 			// The agent completed successfully but produced no text output.
 			// This is valid — the agent may have done all its work via tool
