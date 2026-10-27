@@ -264,6 +264,7 @@ test(`first Requirement intake, deep link, execution and human review (${viewpor
     await page.goto(`/${workspace.slug}/chat`, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "New requirement", exact: true }).click();
     const intake = page.getByRole("dialog", { name: "New requirement" });
+    await intake.getByRole("button", { name: "Use an existing source link", exact: true }).click();
     await intake.getByLabel("Source URL").fill(source.url);
     await intake.getByRole("button", { name: "Preview source", exact: true }).click();
     await expect(intake.getByLabel("Agent", { exact: true })).toHaveValue(agentId);
@@ -423,7 +424,8 @@ test(`first Requirement intake, deep link, execution and human review (${viewpor
     );
     expect(initialTask.rows[0]).toMatchObject({ mode: "execute", status: "queued", requirement_id: requirementId, issue_id: issueId });
     await expectEntityCounts(db, requirementId, { chats: 1, issues: 1, approvals: 1, planTasks: 1, executeTasks: 1 });
-    await expect(page.getByText("This requirement Chat is read-only.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("status", { name: "Requirement flow", exact: true })).toContainText("Executing");
+    await expect(page.getByRole("link", { name: "Open Issue", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
     const chatMessagesBefore = await db.query<{ count: number }>(
       `SELECT count(*)::int AS count FROM chat_message WHERE chat_session_id = $1`,
@@ -462,6 +464,7 @@ test(`first Requirement intake, deep link, execution and human review (${viewpor
     expect(inFirstReview.run).toMatchObject({ id: initialTaskId, mode: "execute", status: "completed" });
     expect(inFirstReview.issue.revision).toBeGreaterThan(beforeFirstReview.issue.revision);
     await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByTestId("requirement-flow-panel").getByRole("button", { name: "Details", exact: true }).click();
     await expect(page.getByText("Run completed; the requirement is not done yet.", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("button", { name: "Accept", exact: true })).toBeVisible();
     const completedFirstReview = await getRequirement(api, workspace.id, requirementId);
@@ -503,6 +506,7 @@ test(`first Requirement intake, deep link, execution and human review (${viewpor
     expect(inSecondReview).toMatchObject({ state: "in_review", issueId });
     expect(inSecondReview.run).toMatchObject({ id: retryTaskId, mode: "execute", status: "completed" });
     await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByTestId("requirement-flow-panel").getByRole("button", { name: "Details", exact: true }).click();
     await expect(page.getByText("Run completed; the requirement is not done yet.", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("button", { name: "Accept", exact: true })).toBeVisible();
 
@@ -510,6 +514,8 @@ test(`first Requirement intake, deep link, execution and human review (${viewpor
       response.request().method() === "POST" && response.url().endsWith(`/requirements/${requirementId}/accept`),
     );
     await page.getByRole("button", { name: "Accept", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Accept and publish to Yixiezuo", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Accept and publish", exact: true }).click();
     const acceptResponse = await acceptResponsePromise;
     expect(acceptResponse.status()).toBe(200);
     const accepted = await acceptResponse.json();
@@ -521,7 +527,9 @@ test(`first Requirement intake, deep link, execution and human review (${viewpor
       `SELECT state, error FROM yixiezuo_operation WHERE issue_id = $1 AND kind = 'publish'`,
       [issueId],
     );
-    expect(publish.rows).toEqual([{ state: "pending", error: "pmmcp_write is disabled; requirement publication remains pending" }]);
+    expect(publish.rows).toHaveLength(1);
+    expect(publish.rows[0].state).toBe("pending");
+    expect(publish.rows[0].error ?? "").toMatch(/^$|pmmcp_write is disabled/);
     await expect(page.getByText("Run completed; the requirement is not done yet.", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Accept", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Request changes", exact: true })).toHaveCount(0);

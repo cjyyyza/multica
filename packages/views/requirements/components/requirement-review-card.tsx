@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createSafeId } from "@multica/core/utils";
 import {
   useAcceptRequirement,
@@ -23,16 +23,101 @@ import {
 } from "@multica/ui/components/ui/alert-dialog";
 import { useT } from "../../i18n";
 
-export function RequirementReviewCard({ wsId, detail }: { wsId: string; detail: RequirementDetail }) {
+/**
+ * Cancellation confirmation shared by the review card and the stage rail's
+ * overflow menu. The dialog owns the revision selection and idempotency key so
+ * both entry points keep the existing cancel contract.
+ */
+export function RequirementCancelDialog({
+  wsId,
+  detail,
+  open,
+  onOpenChange,
+}: {
+  wsId: string;
+  detail: RequirementDetail;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { t } = useT("requirements");
+  const cancel = useCancelRequirement(wsId, detail.id);
+  const cancelKey = useRef<string | null>(null);
+  const resetCancelRef = useRef(cancel.reset);
+  resetCancelRef.current = cancel.reset;
+  const issueRevision = detail.issue?.revision;
+
+  useEffect(() => {
+    if (!open) return;
+    cancelKey.current = createSafeId();
+    resetCancelRef.current();
+  }, [open]);
+
+  const confirmCancel = async () => {
+    const revision = detail.issueId
+      ? issueRevision !== undefined
+        ? { expectedIssueRevision: issueRevision }
+        : null
+      : detail.revision !== undefined
+        ? { expectedRevision: detail.revision }
+        : null;
+    if (!revision) return;
+    const key = cancelKey.current ?? createSafeId();
+    cancelKey.current = key;
+    try {
+      await cancel.mutateAsync({
+        ...revision,
+        idempotencyKey: key,
+      });
+      cancelKey.current = null;
+      onOpenChange(false);
+    } catch {
+      // Cancellation stays open until the server confirms it; a retry reuses the key.
+    }
+  };
+
+  return (
+    <AlertDialog open={open} onOpenChange={(next) => { if (!next && cancel.isPending) return; onOpenChange(next); }}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t(($) => $.review.cancel_title)}</AlertDialogTitle>
+          <AlertDialogDescription>{t(($) => $.review.cancel_consequence)}</AlertDialogDescription>
+        </AlertDialogHeader>
+        {cancel.error && <p role="alert" className="text-caption text-destructive">{cancel.error.message}</p>}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={cancel.isPending}>{t(($) => $.review.close)}</AlertDialogCancel>
+          <Button type="button" variant="destructive" disabled={cancel.isPending} aria-busy={cancel.isPending} onClick={() => void confirmCancel()}>
+            {t(($) => $.review.cancel_confirm)}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+function cancelRevisionUnavailable(detail: RequirementDetail): boolean {
+  return detail.issueId ? detail.issue?.revision === undefined : detail.revision === undefined;
+}
+
+export function RequirementReviewCard({
+  wsId,
+  detail,
+  variant = "card",
+  trailing,
+}: {
+  wsId: string;
+  detail: RequirementDetail;
+  /** `rail` drops the card chrome and moves cancellation to the rail menu. */
+  variant?: "card" | "rail";
+  /** Extra controls rendered after the review actions, used by the rail menu. */
+  trailing?: ReactNode;
+}) {
   const { t } = useT("requirements");
   const accept = useAcceptRequirement(wsId, detail.id);
   const reject = useRejectRequirement(wsId, detail.id);
-  const cancel = useCancelRequirement(wsId, detail.id);
   const acceptAttempt = useRef<{ requirementId: string; issueRevision: number; summary: string; statusName: string; key: string } | null>(null);
   const [acceptReview, setAcceptReview] = useState<{ issueRevision: number; summary: string; statusName: string } | null>(null);
   const acceptFormId = useId();
   const rejectKey = useRef<string | null>(null);
-  const cancelKey = useRef<string | null>(null);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
   const [reasonError, setReasonError] = useState(false);
@@ -40,9 +125,6 @@ export function RequirementReviewCard({ wsId, detail }: { wsId: string; detail: 
   const issueRevision = detail.issue?.revision;
   const inReview = detail.state === "in_review";
   const cancelled = detail.state === "cancelled" || !!detail.cancelledAt;
-  const cancelRevisionUnavailable = detail.issueId
-    ? issueRevision === undefined
-    : detail.revision === undefined;
   const error = reject.error;
   const source = parseYixiezuoRequirementSnapshot(detail.sourceSnapshot);
   const acceptStale = !!acceptReview && issueRevision !== acceptReview.issueRevision;
@@ -97,32 +179,8 @@ export function RequirementReviewCard({ wsId, detail }: { wsId: string; detail: 
     }
   };
 
-  const confirmCancel = async () => {
-    const revision = detail.issueId
-      ? issueRevision !== undefined
-        ? { expectedIssueRevision: issueRevision }
-        : null
-      : detail.revision !== undefined
-        ? { expectedRevision: detail.revision }
-        : null;
-    if (!revision) return;
-    const key = cancelKey.current ?? createSafeId();
-    cancelKey.current = key;
-    try {
-      await cancel.mutateAsync({
-        ...revision,
-        idempotencyKey: key,
-      });
-      cancelKey.current = null;
-      setCancelOpen(false);
-    } catch {
-      // Cancellation stays open until the server confirms it; a retry reuses the key.
-    }
-  };
-
-  return (
-    <section aria-label={t(($) => $.review.title)} className="space-y-3 rounded-lg border border-border p-3">
-      <h3 className="text-body font-medium">{t(($) => $.review.title)}</h3>
+  const body = (
+    <>
       <div className="flex flex-wrap gap-2">
         {inReview && detail.permissions.canAccept && (
           <Button
@@ -143,15 +201,14 @@ export function RequirementReviewCard({ wsId, detail }: { wsId: string; detail: 
             {t(($) => $.review.reject)}
           </Button>
         )}
-        {!cancelled && detail.permissions.canCancel && (
-          <Button type="button" variant="outline" disabled={cancelRevisionUnavailable} onClick={() => {
-            cancelKey.current = createSafeId();
-            cancel.reset();
+        {variant === "card" && !cancelled && detail.permissions.canCancel && (
+          <Button type="button" variant="outline" disabled={cancelRevisionUnavailable(detail)} onClick={() => {
             setCancelOpen(true);
           }}>
             {t(($) => $.review.cancel)}
           </Button>
         )}
+        {trailing}
       </div>
       {rejecting && (
         <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); void submitReject(); }}>
@@ -209,21 +266,20 @@ export function RequirementReviewCard({ wsId, detail }: { wsId: string; detail: 
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <AlertDialog open={cancelOpen} onOpenChange={(open) => { if (!open && !cancel.isPending) setCancelOpen(false); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t(($) => $.review.cancel_title)}</AlertDialogTitle>
-            <AlertDialogDescription>{t(($) => $.review.cancel_consequence)}</AlertDialogDescription>
-          </AlertDialogHeader>
-          {cancel.error && <p role="alert" className="text-caption text-destructive">{cancel.error.message}</p>}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={cancel.isPending}>{t(($) => $.review.close)}</AlertDialogCancel>
-            <Button type="button" variant="destructive" disabled={cancel.isPending} aria-busy={cancel.isPending} onClick={() => void confirmCancel()}>
-              {t(($) => $.review.cancel_confirm)}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {variant === "card" && (
+        <RequirementCancelDialog wsId={wsId} detail={detail} open={cancelOpen} onOpenChange={setCancelOpen} />
+      )}
+    </>
+  );
+
+  if (variant === "rail") {
+    return <div className="space-y-2">{body}</div>;
+  }
+
+  return (
+    <section aria-label={t(($) => $.review.title)} className="space-y-3 rounded-lg border border-border p-3">
+      <h3 className="text-body font-medium">{t(($) => $.review.title)}</h3>
+      {body}
     </section>
   );
 }

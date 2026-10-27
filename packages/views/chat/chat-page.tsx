@@ -72,6 +72,7 @@ export function ChatPage() {
 
 function ChatPageContent({ requirementFlowEnabled }: { requirementFlowEnabled: boolean }) {
   const { t } = useT("chat");
+  const { t: tRequirement } = useT("requirements");
   const { pathname, searchParams, replace } = useNavigation();
   const workspaceSlug = useRequiredWorkspaceSlug();
   const wsPaths = useWorkspacePaths();
@@ -122,6 +123,9 @@ function ChatPageContent({ requirementFlowEnabled }: { requirementFlowEnabled: b
     },
   });
   const canCompose = requirementSurface.canCompose && !requirementOpen.isPending;
+  const requirementClarifying = canCompose &&
+    !!requirementSurface.detail &&
+    (requirementSurface.detail.state === "intake_pending" || requirementSurface.detail.state === "clarifying");
   const handleSend: typeof c.handleSend = (...args) =>
     canCompose ? c.handleSend(...args) : Promise.resolve(false);
 
@@ -284,7 +288,7 @@ function ChatPageContent({ requirementFlowEnabled }: { requirementFlowEnabled: b
         {newChatButton}
       </PageHeader>
       {requirementFlowEnabled && (
-        <div className="shrink-0 px-3 pb-2">
+        <div className="shrink-0 px-2 pt-1">
           <RequirementIntakeTrigger />
         </div>
       )}
@@ -323,6 +327,7 @@ function ChatPageContent({ requirementFlowEnabled }: { requirementFlowEnabled: b
         wsId={c.wsId}
         surface={requirementSurface}
         className="mx-3 mt-3 max-h-[45vh] overflow-y-auto"
+        isRunning={!!c.pendingTaskId}
       />
       {requirementOpen.error && (
         <p role="alert" className="mx-3 text-caption text-destructive">{requirementOpen.error.message}</p>
@@ -402,6 +407,7 @@ function ChatPageContent({ requirementFlowEnabled }: { requirementFlowEnabled: b
         uploadEnabled={c.uploadEnabled && !c.isAgentAccessRevoked && canCompose}
         onStop={c.handleStop}
         isRunning={!!c.pendingTaskId}
+        requirementClarifying={requirementClarifying}
         allowSubmitWhileRunning={c.pendingTask?.supports_queue === true}
         disabled={
           c.isSessionArchived ||
@@ -411,6 +417,9 @@ function ChatPageContent({ requirementFlowEnabled }: { requirementFlowEnabled: b
           !canCompose
         }
         noAgent={c.noAgent}
+        readOnlyReason={!requirementSurface.canCompose && requirementSurface.detail
+          ? tRequirement(($) => requirementSurface.detail?.issueId || requirementSurface.detail?.cancelledAt || requirementSurface.detail?.state === "cancelled" ? $.flow.closed : $.flow.viewer)
+          : undefined}
         agentArchived={c.isAgentArchived}
         agentAccessRevoked={c.isAgentAccessRevoked}
         agentRuntimeRequired={!c.isAgentRuntimeBound}

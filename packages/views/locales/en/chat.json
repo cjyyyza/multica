@@ -18,6 +18,7 @@
     "placeholder_access_revoked": "You no longer have permission to run this agent",
     "placeholder_named": "Message {{name}}…",
     "placeholder_default": "Start a message…",
+    "placeholder_requirement_clarifying": "Answer the questions above, or ask for a candidate using one of the options",
     "send_tooltip": "Send",
     "queue_send_tooltip": "Queue message",
     "stop_tooltip": "Stop",

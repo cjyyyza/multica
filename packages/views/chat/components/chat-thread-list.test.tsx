@@ -4,6 +4,7 @@ import { I18nProvider } from "@multica/core/i18n/react";
 import type { Agent, ChatSession } from "@multica/core/types";
 import enChat from "../../locales/en/chat.json";
 import enIssues from "../../locales/en/issues.json";
+import enRequirements from "../../locales/en/requirements.json";
 
 // --- Mocks ------------------------------------------------------------------
 // The list no longer owns the archive-advance behavior — the parent (ChatPage)
@@ -58,7 +59,7 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
 
 import { ChatThreadList } from "./chat-thread-list";
 
-const TEST_RESOURCES = { en: { chat: enChat, issues: enIssues } };
+const TEST_RESOURCES = { en: { chat: enChat, issues: enIssues, requirements: enRequirements } };
 
 function makeSession(overrides: Partial<ChatSession> & Pick<ChatSession, "id">): ChatSession {
   return {
@@ -113,6 +114,10 @@ function renderList(
 const ARCHIVE_LABEL = enChat.list.archive;
 
 describe("ChatThreadList archive delegation", () => {
+  it("marks requirement sessions while keeping ordinary chats distinct", () => {
+    renderList("s1", { renderedSessions: [makeSession({ id: "s1", requirement_id: "req-1" }), makeSession({ id: "s2", requirement_id: null })] });
+    expect(screen.getAllByText("Requirement")).toHaveLength(1);
+  });
   beforeEach(() => {
     setActiveSession.mockClear();
     archiveMutate.mockClear();

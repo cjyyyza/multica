@@ -473,6 +473,20 @@ describe("ChatInput new-chat draft identity", () => {
   });
 });
 
+describe("ChatInput requirement clarifying placeholder", () => {
+  it("uses the clarifying prompt only when requested", () => {
+    const { unmount } = renderInput({ requirementClarifying: true });
+    expect(screen.getByTestId("editor")).toHaveAttribute(
+      "placeholder",
+      "Answer the questions above, or ask for a candidate using one of the options",
+    );
+    unmount();
+
+    renderInput();
+    expect(screen.getByTestId("editor")).toHaveAttribute("placeholder", "Message Multica…");
+  });
+});
+
 describe("ChatInput focusRequest", () => {
   it("focuses the editor when focusRequest becomes a non-zero value (new chat)", () => {
     const { rerender } = render(
@@ -1636,6 +1650,10 @@ describe("ChatInput send keeps composer focus", () => {
 // agent is the one this user may no longer run — and "create an agent" would then
 // send them to build a second agent they do not need.
 describe("ChatInput revoked-access placeholder", () => {
+  it("explains workflow read-only state without calling an active chat archived", () => {
+    renderInput({ disabled: true, readOnlyReason: "Chat is read-only" });
+    expect(editorProps.last?.placeholder).toBe("Chat is read-only");
+  });
   it("names the revoked permission rather than the archived-session reason", () => {
     renderInput({ disabled: true, agentAccessRevoked: true });
 

@@ -96,6 +96,7 @@ export function ChatThreadList({
   onArchive: (session: ChatSession) => void;
 }) {
   const { t } = useT("chat");
+  const { t: tRequirement } = useT("requirements");
   const locale = useLocale();
   const wsId = useWorkspaceId();
   // Null-safe slug (not useWorkspacePaths, which throws): the list renders in
@@ -386,6 +387,7 @@ export function ChatThreadList({
             <span className={cn("min-w-0 flex-1 truncate text-body", unread > 0 ? "font-semibold text-foreground" : "font-medium")}>
               {titleText}
             </span>
+            {session.requirement_id && <span className="shrink-0 rounded border border-border px-1 text-micro text-muted-foreground">{tRequirement(($) => $.card.title)}</span>}
             <span className="ml-auto shrink-0 text-micro text-muted-foreground">{timeText}</span>
           </div>
 

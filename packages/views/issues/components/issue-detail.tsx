@@ -2669,7 +2669,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
 
   const sidebarContent = (
     <div className="space-y-5">
-      {isRequirementIssue && <RequirementFlowPanel wsId={wsId} surface={requirementSurface} />}
+      {isRequirementIssue && <RequirementFlowPanel wsId={wsId} surface={requirementSurface} context="issue" isRunning={false} />}
       {/* Properties */}
       <div>
         <button

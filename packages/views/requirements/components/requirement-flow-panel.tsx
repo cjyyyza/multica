@@ -1,18 +1,16 @@
 "use client";
 
+import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { ChevronRight } from "lucide-react";
 import { requirementKeys } from "@multica/core/requirements";
-import { AppLink } from "../../navigation";
-import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
+import { cn } from "@multica/ui/lib/utils";
 import { RequirementCard } from "./requirement-card";
-import { RequirementApprovalCard } from "./requirement-approval-card";
-import { RequirementReviewCard } from "./requirement-review-card";
 import { RequirementSyncStatus } from "./requirement-sync-status";
-import { RequirementIntakeDialog } from "./requirement-intake-dialog";
+import { RequirementStageRail, type RequirementFlowContext } from "./requirement-stage-rail";
 import type { RequirementSurfaceState } from "../use-requirement-surface";
 import { useT } from "../../i18n";
-import { cn } from "@multica/ui/lib/utils";
 
 type RequirementFlowPanelSurface = RequirementSurfaceState & {
   /**
@@ -27,15 +25,20 @@ export function RequirementFlowPanel({
   wsId,
   surface,
   className,
+  context = "chat",
+  isRunning = false,
 }: {
   wsId: string;
   surface: RequirementFlowPanelSurface;
   className?: string;
+  context?: RequirementFlowContext;
+  /** A plan turn is running on this Requirement chat. Issue surfaces pass false. */
+  isRunning?: boolean;
 }) {
   const { t } = useT("requirements");
   const { t: tUi } = useT("ui");
   const qc = useQueryClient();
-  const paths = useWorkspacePaths();
+  const [detailsOpen, setDetailsOpen] = useState(false);
   if (surface.isLoading) return null;
   if (surface.error) {
     const retry = () => {
@@ -56,28 +59,33 @@ export function RequirementFlowPanel({
   }
   const detail = surface.detail;
   if (!detail) return null;
-  const cancelled = detail.state === "cancelled" || !!detail.cancelledAt;
-  const closed = cancelled || !!detail.issueId;
 
   return (
     <div className={cn("space-y-3", className)} data-testid="requirement-flow-panel">
-      <RequirementCard wsId={wsId} detail={detail} />
-      {!closed && detail.latestCandidate && <RequirementApprovalCard wsId={wsId} detail={detail} />}
-      <RequirementReviewCard wsId={wsId} detail={detail} />
-      <RequirementSyncStatus wsId={wsId} detail={detail} />
-      {closed && (
-        <div className="space-y-2 rounded-lg border border-border p-3">
-          <p className="text-caption text-muted-foreground">{t(($) => $.panel.closed)}</p>
-          <div className="flex flex-wrap gap-2">
-            {detail.issueId && (
-              <AppLink href={paths.issueDetail(detail.issueId)} className="text-caption underline">
-                {t(($) => $.panel.open_issue)}
-              </AppLink>
-            )}
-            <RequirementIntakeDialog />
+      <RequirementStageRail
+        wsId={wsId}
+        detail={detail}
+        canCompose={surface.canCompose}
+        isRunning={isRunning}
+        context={context}
+      />
+      <section className="rounded-lg border border-border bg-background">
+        <button
+          type="button"
+          aria-expanded={detailsOpen}
+          onClick={() => setDetailsOpen((open) => !open)}
+          className="flex w-full items-center gap-1 px-3 py-2 text-caption font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <ChevronRight className={cn("size-3.5 transition-transform", detailsOpen && "rotate-90")} />
+          {t(($) => $.flow.details)}
+        </button>
+        {detailsOpen && (
+          <div className="space-y-3 border-t border-border p-3">
+            <RequirementCard wsId={wsId} detail={detail} />
+            <RequirementSyncStatus wsId={wsId} detail={detail} />
           </div>
-        </div>
-      )}
+        )}
+      </section>
     </div>
   );
 }

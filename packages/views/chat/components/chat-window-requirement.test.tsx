@@ -111,11 +111,12 @@ vi.mock("./chat-window-messages", () => ({
   ),
 }));
 vi.mock("./chat-input", () => ({
-  ChatInput: ({ disabled, projectLocked, agentRuntimeRequired, agentAccessRevoked }: {
+  ChatInput: ({ disabled, projectLocked, agentRuntimeRequired, agentAccessRevoked, requirementClarifying }: {
     disabled?: boolean;
     projectLocked?: boolean;
     agentRuntimeRequired?: boolean;
     agentAccessRevoked?: boolean;
+    requirementClarifying?: boolean;
   }) => (
     <div
       data-testid="window-input"
@@ -123,6 +124,7 @@ vi.mock("./chat-input", () => ({
       data-project-locked={projectLocked ? "true" : "false"}
       data-runtime-required={agentRuntimeRequired ? "true" : "false"}
       data-access-revoked={agentAccessRevoked ? "true" : "false"}
+      data-requirement-clarifying={requirementClarifying ? "true" : "false"}
     />
   ),
 }));
@@ -248,6 +250,7 @@ describe("ChatWindow Requirement surface", () => {
       expect(screen.getByTestId("window-input")).toHaveAttribute("data-disabled", "false"),
     );
     expect(screen.getByTestId("window-input")).toHaveAttribute("data-project-locked", "false");
+    expect(screen.getByTestId("window-input")).toHaveAttribute("data-requirement-clarifying", "false");
     expect(screen.getByTestId("window-messages")).toHaveAttribute("data-quick-actions-disabled", "false");
     // The additive projection (null) replaced the old chat-scoped probe.
     expect(getRequirementByChat).not.toHaveBeenCalled();
@@ -273,6 +276,34 @@ describe("ChatWindow Requirement surface", () => {
     expect(screen.getByTestId("window-input")).toHaveAttribute("data-disabled", "true");
     expect(screen.getByTestId("window-input")).toHaveAttribute("data-project-locked", "true");
     expect(screen.getByTestId("window-messages")).toHaveAttribute("data-quick-actions-disabled", "true");
+  });
+
+  it("passes the requirement clarifying prompt flag only for a clarifying Requirement chat", async () => {
+    const detail = makeDetail({ state: "clarifying", issueId: null });
+    const getRequirement = vi.fn().mockResolvedValue(detail);
+    renderWindow({
+      session: makeSession({ requirement_id: "req-1" }),
+      getRequirement,
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("window-input")).toHaveAttribute("data-requirement-clarifying", "true"),
+    );
+    expect(screen.getByTestId("requirement-panel")).toHaveTextContent("req-1");
+  });
+
+  it("keeps the ordinary prompt for a bound Requirement that is past clarification", async () => {
+    const detail = makeDetail({ state: "executing" });
+    const getRequirement = vi.fn().mockResolvedValue(detail);
+    renderWindow({
+      session: makeSession({ requirement_id: "req-1" }),
+      getRequirement,
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("requirement-panel")).toHaveTextContent("req-1"),
+    );
+    expect(screen.getByTestId("window-input")).toHaveAttribute("data-requirement-clarifying", "false");
   });
 
   it("keeps the legacy chat-scoped probe for a server without the projection", async () => {

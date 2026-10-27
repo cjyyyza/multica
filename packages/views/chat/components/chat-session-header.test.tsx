@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { ChatSession } from "@multica/core/types";
 import enChat from "../../locales/en/chat.json";
+import enRequirements from "../../locales/en/requirements.json";
 
 const updateMutate = vi.hoisted(() => vi.fn());
 
@@ -31,7 +32,7 @@ vi.mock("../../navigation", () => ({
 
 import { ChatSessionHeader } from "./chat-session-header";
 
-const TEST_RESOURCES = { en: { chat: enChat } };
+const TEST_RESOURCES = { en: { chat: enChat, requirements: enRequirements } };
 const RENAME_LABEL = enChat.header.rename;
 const OUTSIDE_LABEL = "Outside control";
 
@@ -64,6 +65,20 @@ function startRename(): HTMLInputElement {
 }
 
 describe("ChatSessionHeader rename keyboard behavior", () => {
+  it("identifies a requirement session without relying on its editable title", () => {
+    render(<I18nProvider locale="en" resources={TEST_RESOURCES}>
+      <ChatSessionHeader session={{ ...session, requirement_id: "requirement-1" }} agent={null} />
+    </I18nProvider>);
+    expect(screen.getByText("Requirement flow")).toBeInTheDocument();
+    expect(screen.queryByText("Ordinary chat")).not.toBeInTheDocument();
+  });
+
+  it("identifies an ordinary session on the same agent", () => {
+    render(<I18nProvider locale="en" resources={TEST_RESOURCES}>
+      <ChatSessionHeader session={{ ...session, requirement_id: null }} agent={null} />
+    </I18nProvider>);
+    expect(screen.getByText("Ordinary chat")).toBeInTheDocument();
+  });
   beforeEach(() => {
     updateMutate.mockReset();
   });

@@ -42,9 +42,11 @@ const (
 	// through the server again without a client release.
 	LocalSearchIndex = "local_search_index"
 	// RequirementFlow gates new requirement intake, open and candidate writes.
-	// Existing records, idempotent replays and Plan Mode safety policies stay on.
+	// On by default. FF_REQUIREMENT_FLOW=off stops new intake; existing records,
+	// idempotent replays and Plan Mode safety policies stay on.
 	RequirementFlow = "requirement_flow"
-	// PMMCPWrite gates only Requirement-originated external writes. Readback,
+	// PMMCPWrite gates only Requirement-originated external writes. On by
+	// default. FF_PMMCP_WRITE=off leaves those writes pending. Readback,
 	// preview, import, and ordinary manually-owned operations remain available.
 	PMMCPWrite = "pmmcp_write"
 	// agentBuilderCompat is no longer a release flag. Keep publishing the key
@@ -95,7 +97,7 @@ func LocalSearchIndexEnabled(ctx context.Context, flags *featureflag.Service) bo
 func EvaluateFrontendPublicFlags(ctx context.Context, flags *featureflag.Service) map[string]bool {
 	out := make(map[string]bool, len(frontendPublicFlags)+3)
 	for _, key := range frontendPublicFlags {
-		out[key] = flags.IsEnabled(ctx, key, false)
+		out[key] = flags.IsEnabled(ctx, key, key == RequirementFlow)
 	}
 	out[agentBuilderCompat] = true
 	out[agentSkillTogglesCompat] = true
@@ -108,9 +110,9 @@ func ProjectWorkflowsV1Enabled(ctx context.Context, flags *featureflag.Service) 
 }
 
 func RequirementFlowEnabled(ctx context.Context, flags *featureflag.Service) bool {
-	return flags.IsEnabled(ctx, RequirementFlow, false)
+	return flags.IsEnabled(ctx, RequirementFlow, true)
 }
 
 func PMMCPWriteEnabled(ctx context.Context, flags *featureflag.Service) bool {
-	return flags.IsEnabled(ctx, PMMCPWrite, false)
+	return flags.IsEnabled(ctx, PMMCPWrite, true)
 }

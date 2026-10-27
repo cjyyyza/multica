@@ -35,6 +35,9 @@ func (h *Handler) queueRequirementDraft(ctx context.Context, ws, actor pgtype.UU
 	if !featureflags.PMMCPWriteEnabled(ctx, h.FeatureFlags) {
 		return db.YixiezuoOperation{}, sourceError(403, "pmmcp_write is disabled")
 	}
+	if strings.TrimSpace(input.TemplateURL) == "" {
+		input.TemplateURL = yixiezuo.DefaultRequirementTemplateURL
+	}
 	template, err := yixiezuo.ParseSource(input.TemplateURL)
 	if err != nil {
 		return db.YixiezuoOperation{}, sourceError(400, err.Error())

@@ -34,8 +34,14 @@ vi.mock("./components/chat-message-list", () => ({
   ChatMessageSkeleton: () => <div>chat-message-skeleton</div>,
 }));
 vi.mock("./components/chat-input", () => ({
-  ChatInput: ({ disabled, projectLocked }: { disabled?: boolean; projectLocked?: boolean }) => (
-    <div data-disabled={disabled ? "true" : "false"} data-project-locked={projectLocked ? "true" : "false"}>chat-input</div>
+  ChatInput: ({ disabled, projectLocked, requirementClarifying }: { disabled?: boolean; projectLocked?: boolean; requirementClarifying?: boolean }) => (
+    <div
+      data-disabled={disabled ? "true" : "false"}
+      data-project-locked={projectLocked ? "true" : "false"}
+      data-requirement-clarifying={requirementClarifying ? "true" : "false"}
+    >
+      chat-input
+    </div>
   ),
 }));
 vi.mock("./components/chat-thread-list", () => ({
@@ -696,6 +702,7 @@ describe("ChatPage Requirement flow", () => {
     await waitFor(() => expect(storeRef.current.activeSessionId).toBe("chat-1"));
     expect(replace).toHaveBeenCalledWith("/acme/chat?session=chat-1&requirement=req-1");
     expect(openRequirementMutationRef.current.mutateAsync).not.toHaveBeenCalled();
+    expect(screen.getByText("chat-input")).toHaveAttribute("data-requirement-clarifying", "true");
 
     replace.mockClear();
     rerender({ search: "session=chat-1&requirement=req-1" });

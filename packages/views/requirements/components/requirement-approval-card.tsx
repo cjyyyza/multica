@@ -27,7 +27,20 @@ interface ReviewSnapshot {
   requirementRevision: number;
 }
 
-export function RequirementApprovalCard({ wsId, detail }: { wsId: string; detail: RequirementDetail }) {
+/**
+ * The single approval trigger and its confirmation dialog. The Requirement
+ * stage rail and the standalone approval card both mount this component so the
+ * reviewed candidate, digest, revision and idempotency key have one owner.
+ */
+export function RequirementApprovalAction({
+  wsId,
+  detail,
+  variant = "default",
+}: {
+  wsId: string;
+  detail: RequirementDetail;
+  variant?: "default" | "outline";
+}) {
   const { t } = useT("requirements");
   const approve = useApproveRequirement(wsId, detail.id);
   const approveKey = useRef<string | null>(null);
@@ -72,17 +85,9 @@ export function RequirementApprovalCard({ wsId, detail }: { wsId: string; detail
   };
 
   return (
-    <section aria-label={t(($) => $.approval.title)} className="space-y-3 rounded-lg border border-border p-3">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-body font-medium">{t(($) => $.approval.title)}</h3>
-        <span className="text-caption text-muted-foreground">
-          {t(($) => $.approval.candidate_revision, { revision: candidate.revision ?? "—" })}
-          {" · "}
-          <code title={candidate.digest}>{candidate.digest.replace(/^sha256:/, "").slice(0, 12)}</code>
-        </span>
-      </div>
+    <>
       {detail.permissions.canApprove && (
-        <Button type="button" variant="outline" onClick={beginReview} disabled={detail.revision === undefined}>
+        <Button type="button" variant={variant} onClick={beginReview} disabled={detail.revision === undefined}>
           {t(($) => $.approval.review)}
         </Button>
       )}
@@ -116,6 +121,26 @@ export function RequirementApprovalCard({ wsId, detail }: { wsId: string; detail
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </>
+  );
+}
+
+export function RequirementApprovalCard({ wsId, detail }: { wsId: string; detail: RequirementDetail }) {
+  const { t } = useT("requirements");
+  const candidate = detail.latestCandidate;
+  if (!candidate) return null;
+
+  return (
+    <section aria-label={t(($) => $.approval.title)} className="space-y-3 rounded-lg border border-border p-3">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-body font-medium">{t(($) => $.approval.title)}</h3>
+        <span className="text-caption text-muted-foreground">
+          {t(($) => $.approval.candidate_revision, { revision: candidate.revision ?? "—" })}
+          {" · "}
+          <code title={candidate.digest}>{candidate.digest.replace(/^sha256:/, "").slice(0, 12)}</code>
+        </span>
+      </div>
+      <RequirementApprovalAction wsId={wsId} detail={detail} variant="outline" />
     </section>
   );
 }

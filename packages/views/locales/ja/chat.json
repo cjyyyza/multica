@@ -17,6 +17,7 @@
     "placeholder_access_revoked": "このエージェントを実行する権限がありません",
     "placeholder_named": "{{name}} にメッセージ…",
     "placeholder_default": "メッセージを入力…",
+    "placeholder_requirement_clarifying": "上の質問に回答するか、案を指定して候補の作成を依頼してください",
     "send_tooltip": "送信",
     "queue_send_tooltip": "キューに追加",
     "stop_tooltip": "停止",

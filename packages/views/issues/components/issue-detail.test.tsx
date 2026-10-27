@@ -135,8 +135,8 @@ vi.mock("../../navigation", () => ({
 
 vi.mock("../../requirements", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../requirements")>()),
-  RequirementFlowPanel: ({ surface }: { surface: { detail: { id: string } | null } }) => (
-    <div data-testid="requirement-panel">{surface.detail?.id ?? ""}</div>
+  RequirementFlowPanel: ({ surface, context }: { surface: { detail: { id: string } | null }; context?: string }) => (
+    <div data-testid="requirement-panel" data-context={context}>{surface.detail?.id ?? ""}</div>
   ),
 }));
 
@@ -3684,6 +3684,7 @@ describe("IssueDetail requirement origin", () => {
     renderWithDone();
 
     expect(await screen.findByTestId("requirement-panel")).toHaveTextContent("req-1");
+    expect(screen.getByTestId("requirement-panel")).toHaveAttribute("data-context", "issue");
     expect(mockApiObj.getRequirement).toHaveBeenCalledWith("ws-1", "req-1");
     expect(mockApiObj.getRequirementByChat).not.toHaveBeenCalled();
     expect(screen.getByTestId("requirement-issue-status")).toBeInTheDocument();

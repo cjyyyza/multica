@@ -17,6 +17,7 @@
     "placeholder_access_revoked": "이 에이전트를 실행할 권한이 없습니다",
     "placeholder_named": "{{name}}에게 메시지 보내기…",
     "placeholder_default": "메시지 입력…",
+    "placeholder_requirement_clarifying": "위 질문에 답하거나 특정 안으로 후보 작성을 요청하세요",
     "send_tooltip": "보내기",
     "queue_send_tooltip": "대기열에 추가",
     "stop_tooltip": "중지",

@@ -597,7 +597,7 @@ describe("RequirementCard and FlowPanel projections", () => {
     expect(screen.getByText("Run completed; the requirement is not done yet.")).toBeInTheDocument();
   });
 
-  it("keeps existing review, cancel, and reconcile visible when new intake is unavailable", () => {
+  it("keeps review, cancel, and reconcile reachable from the rail and details", async () => {
     const detail = makeDetail({
       state: "in_review",
       issue,
@@ -614,9 +614,15 @@ describe("RequirementCard and FlowPanel projections", () => {
     );
 
     expect(screen.getByRole("button", { name: "Accept" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Cancel requirement" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Request changes" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel requirement" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByRole("button", { name: "Read back operation" })).toBeInTheDocument();
     expect(screen.getByText("Run completed; the requirement is not done yet.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    expect(await screen.findByRole("menuitem", { name: "Cancel requirement" })).toBeInTheDocument();
   });
 });
 
@@ -650,5 +656,148 @@ describe("RequirementFlowPanel load failure", () => {
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: requirementKeys.all("ws-1") });
+  });
+});
+
+describe("Requirement stage rail", () => {
+  function renderPanel(detail: RequirementDetail, options: {
+    canCompose?: boolean;
+    isRunning?: boolean;
+    context?: "chat" | "issue";
+  } = {}) {
+    return renderCard(
+      <RequirementFlowPanel
+        wsId="ws-1"
+        surface={{ detail, error: null, isLoading: false, canCompose: options.canCompose ?? false, projectLocked: true }}
+        context={options.context}
+        isRunning={options.isRunning}
+      />,
+    );
+  }
+
+  it("shows the clarifying next action with no approve, accept, or cancel primary action", async () => {
+    const detail = makeDetail({ state: "clarifying", latestCandidate: null });
+    renderPanel(detail, { canCompose: true });
+
+    const status = screen.getByRole("status", { name: "Requirement flow" });
+    expect(status).toHaveTextContent("Clarifying");
+    expect(status).toHaveTextContent("Add the missing goals, scope, and acceptance criteria below.");
+    expect(screen.getByText("Clarify").closest("li")).toHaveAttribute("aria-current", "step");
+    expect(screen.queryByRole("button", { name: "Review and approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Request changes" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel requirement" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    expect(await screen.findByRole("menuitem", { name: "Cancel requirement" })).toBeInTheDocument();
+  });
+
+  it("tells the user to wait while a plan turn is running", () => {
+    const detail = makeDetail({ state: "clarifying", latestCandidate: null });
+    renderPanel(detail, { canCompose: true, isRunning: true });
+
+    expect(screen.getByRole("status", { name: "Requirement flow" }))
+      .toHaveTextContent("Working on it — wait before looking for approval.");
+    expect(screen.queryByRole("button", { name: "Review and approve" })).not.toBeInTheDocument();
+  });
+
+  it("offers approval only to an approver with a candidate and keeps the existing mutation contract", async () => {
+    const approveRequirement = vi.fn().mockResolvedValue({
+      requirement: makeDetail({ state: "executing" }),
+      issue,
+    });
+    renderCard(
+      <RequirementFlowPanel
+        wsId="ws-1"
+        surface={{ detail: makeDetail(), error: null, isLoading: false, canCompose: false, projectLocked: true }}
+      />,
+      { approveRequirement },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Review and approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create Issue and start agent" }));
+
+    await waitFor(() => expect(approveRequirement).toHaveBeenCalledWith("ws-1", "req-1", {
+      expectedRevision: 4,
+      candidateId: "candidate-1",
+      candidateDigest: "digest-1",
+      idempotencyKey: expect.any(String),
+    }));
+  });
+
+  it("waits for an approver without offering the approval button", () => {
+    const detail = makeDetail({ permissions: { ...permissions, canApprove: false } });
+    renderPanel(detail);
+
+    expect(screen.getByRole("status", { name: "Requirement flow" })).toHaveTextContent("Waiting for an approver.");
+    expect(screen.queryByRole("button", { name: "Review and approve" })).not.toBeInTheDocument();
+  });
+
+  it("keeps cancellation behind More with the existing revision contract", async () => {
+    const cancelRequirement = vi.fn().mockResolvedValue(makeDetail({ state: "cancelled" }));
+    renderCard(
+      <RequirementFlowPanel
+        wsId="ws-1"
+        surface={{
+          detail: makeDetail({ state: "clarifying", latestCandidate: null }),
+          error: null,
+          isLoading: false,
+          canCompose: true,
+          projectLocked: true,
+        }}
+      />,
+      { cancelRequirement },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Cancel requirement" }));
+    expect(await screen.findByRole("heading", { name: "Cancel this requirement?" })).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Cancel requirement" }).at(-1)!);
+
+    await waitFor(() => expect(cancelRequirement).toHaveBeenCalledWith("ws-1", "req-1", {
+      expectedRevision: 4,
+      idempotencyKey: expect.any(String),
+    }));
+  });
+
+  it("shows accept and request changes only in review", () => {
+    const inReview = makeDetail({ state: "in_review", issue, issueId: issue.id });
+    const { unmount } = renderPanel(inReview);
+    expect(screen.getByRole("button", { name: "Accept" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Request changes" })).toBeInTheDocument();
+    unmount();
+
+    renderPanel(makeDetail({ state: "clarifying", latestCandidate: null }), { canCompose: true });
+    expect(screen.queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Request changes" })).not.toBeInTheDocument();
+  });
+
+  it("shows a failed sync on the rail but keeps a succeeded hash inside Details", () => {
+    const failed = makeDetail({
+      operations: [{ id: "operation-1", kind: "draft", state: "failed", error: "source unavailable", requestHash: "hash-failed" }],
+    });
+    const failedView = renderPanel(failed);
+    expect(screen.getByTestId("requirement-sync-alert")).toHaveTextContent("source unavailable");
+    expect(screen.queryByText(/hash-failed/)).not.toBeInTheDocument();
+    failedView.unmount();
+
+    const succeeded = makeDetail({
+      operations: [{ id: "operation-2", kind: "draft", state: "succeeded", requestHash: "hash-succeeded" }],
+    });
+    renderPanel(succeeded);
+    expect(screen.queryByTestId("requirement-sync-alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(/hash-succeeded/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.getByText(/hash-succeeded/)).toBeInTheDocument();
+  });
+
+  it("does not offer Open Issue on the Issue surface", () => {
+    const detail = makeDetail({ state: "executing", issue, issueId: issue.id });
+    renderPanel(detail, { context: "issue" });
+    expect(screen.queryByRole("link", { name: "Open Issue" })).not.toBeInTheDocument();
+
+    renderPanel(detail, { context: "chat" });
+    expect(screen.getByRole("link", { name: "Open Issue" })).toHaveAttribute("href", "/acme/issues/issue-1");
   });
 });

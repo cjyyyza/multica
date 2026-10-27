@@ -53,6 +53,7 @@ export function ChatSessionHeader({
   onArchive?: (session: ChatSession) => void;
 }) {
   const { t } = useT("chat");
+  const { t: tRequirement } = useT("requirements");
   const { t: tCommon } = useT("common");
   const wsPaths = useWorkspacePaths();
   const updateSession = useUpdateChatSession();
@@ -210,6 +211,9 @@ export function ChatSessionHeader({
         )}
       </div>
 
+      <span className="shrink-0 rounded-md border border-border px-2 py-0.5 text-micro text-muted-foreground">
+        {session.requirement_id ? tRequirement(($) => $.flow.title) : tRequirement(($) => $.flow.chat)}
+      </span>
       <DropdownMenu>
         <DropdownMenuTrigger
           render={

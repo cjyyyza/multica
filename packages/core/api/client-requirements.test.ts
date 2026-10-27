@@ -244,12 +244,50 @@ describe("ApiClient Requirement HTTP contract", () => {
       (idempotencyKey: string) => client.rejectRequirement("ws-1", "req-1", { ...rejectInput, idempotencyKey }),
       (idempotencyKey: string) => client.cancelRequirement("ws-1", "req-1", { ...cancelInput, idempotencyKey }),
       (idempotencyKey: string) => client.reconcileRequirement("ws-1", "req-1", { ...reconcileInput, idempotencyKey }),
+      (idempotencyKey: string) => client.createRequirementDraft("ws-1", { title: "Idea", body: "Idea", agentId: "agent-1", idempotencyKey }),
+      (idempotencyKey: string) => client.reconcileRequirementDraft("ws-1", "op-1", { url: "https://source.example/42", idempotencyKey }),
     ];
 
     for (const write of writes) {
       await expect(write(" \t ")).rejects.toThrow(/non-empty Idempotency-Key/);
     }
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("queues an idea draft with the caller key and omits the default template", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      id: "draft-1",
+      kind: "draft",
+      state: "pending",
+      error: "",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    const created = await client.createRequirementDraft("ws-1", {
+      title: "Remember me",
+      body: "Remember me\nKeep the session",
+      agentId: "agent-1",
+      idempotencyKey: "draft-key",
+    });
+    expect(created).toMatchObject({ id: "draft-1", kind: "draft", state: "pending" });
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://api.example.test/api/workspaces/ws-1/yixiezuo/drafts");
+    expect((init as RequestInit).method).toBe("POST");
+    expect(requestHeaders(init as RequestInit)["Idempotency-Key"]).toBe("draft-key");
+    expect(JSON.parse(String((init as RequestInit).body))).toEqual({
+      title: "Remember me",
+      body: "Remember me\nKeep the session",
+      agent_id: "agent-1",
+    });
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ state: "pending" }));
+    await expect(client.createRequirementDraft("ws-1", {
+      title: "Remember me",
+      body: "Remember me",
+      agentId: "agent-1",
+      idempotencyKey: "draft-key",
+    })).rejects.toThrow(/Invalid 易协作 operation response/);
   });
 });
 

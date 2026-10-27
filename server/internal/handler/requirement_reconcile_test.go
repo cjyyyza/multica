@@ -164,6 +164,7 @@ func TestRequirementOperationReadbackOutcomesAndDuplicateReceipt(t *testing.T) {
 			enableRequirementFlowForTest(t)
 			f := newRequirementReviewFixture(t, tc.externalID)
 			acceptRequirementForTest(t, f, "readback-accept-"+tc.externalID)
+			withReconcileFlags(t, false)
 			originalID := requirementPublishOperationForTest(t, f)
 			detail := reconcileRequirementForTest(t, testUserID, f.Detail.ID,
 				service.ReconcileRequirementRequest{OperationID: ptr(originalID)}, "readback-reconcile-"+tc.externalID)
@@ -212,6 +213,7 @@ func TestRequirementReconcileRejectsAppliedWithoutSnapshot(t *testing.T) {
 	enableRequirementFlowForTest(t)
 	f := newRequirementReviewFixture(t, "98242")
 	acceptRequirementForTest(t, f, "snapshot-accept-98242")
+	withReconcileFlags(t, false)
 	originalID := requirementPublishOperationForTest(t, f)
 	detail := reconcileRequirementForTest(t, testUserID, f.Detail.ID,
 		service.ReconcileRequirementRequest{OperationID: ptr(originalID)}, "snapshot-reconcile-98242")
@@ -332,6 +334,7 @@ func TestRequirementSyncMetricsCountsAndOldestAge(t *testing.T) {
 	wirePopo(t)
 	f := newRequirementReviewFixture(t, "98241")
 	acceptRequirementForTest(t, f, "metrics-accept-98241")
+	withReconcileFlags(t, false)
 	originalID := requirementPublishOperationForTest(t, f)
 	detail := reconcileRequirementForTest(t, testUserID, f.Detail.ID,
 		service.ReconcileRequirementRequest{OperationID: ptr(originalID)}, "metrics-reconcile-98241")

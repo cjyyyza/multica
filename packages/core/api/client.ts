@@ -5707,9 +5707,49 @@ export class ApiClient {
     return this.yixiezuoOperationRequest(wsId, "/operations/" + id);
   }
 
-  private async yixiezuoOperationRequest(wsId: string, suffix: string, body?: unknown): Promise<YixiezuoOperation> {
+  // Same draft the /requirement idea command queues. Omit template_url so the
+  // server applies its default template; an explicit URL is an override.
+  async createRequirementDraft(
+    wsId: string,
+    input: { title: string; body: string; agentId: string; templateUrl?: string; idempotencyKey: string },
+  ): Promise<YixiezuoOperation> {
+    this.requireIdempotencyKey(input.idempotencyKey);
+    return this.yixiezuoOperationRequest(wsId, "/drafts", {
+      title: input.title,
+      body: input.body,
+      agent_id: input.agentId,
+      ...(input.templateUrl?.trim() ? { template_url: input.templateUrl.trim() } : {}),
+    }, { "Idempotency-Key": input.idempotencyKey });
+  }
+
+  async reconcileRequirementDraft(
+    wsId: string,
+    operationId: string,
+    input: { url: string; idempotencyKey: string },
+  ): Promise<YixiezuoOperation> {
+    this.requireIdempotencyKey(input.idempotencyKey);
+    return this.yixiezuoOperationRequest(
+      wsId,
+      "/drafts/" + encodeURIComponent(operationId) + "/reconcile",
+      { url: input.url },
+      { "Idempotency-Key": input.idempotencyKey },
+    );
+  }
+
+  private requireIdempotencyKey(idempotencyKey: string) {
+    if (!idempotencyKey.trim()) {
+      throw new Error("A non-empty Idempotency-Key is required");
+    }
+  }
+
+  private async yixiezuoOperationRequest(
+    wsId: string,
+    suffix: string,
+    body?: unknown,
+    headers?: Record<string, string>,
+  ): Promise<YixiezuoOperation> {
     const endpoint = "/api/workspaces/" + wsId + "/yixiezuo" + suffix;
-    const raw = await this.fetch<unknown>(endpoint, body === undefined ? undefined : { method: "POST", body: JSON.stringify(body) });
+    const raw = await this.fetch<unknown>(endpoint, body === undefined ? undefined : { method: "POST", headers, body: JSON.stringify(body) });
     const parsed = parseWithFallback<YixiezuoOperation | null>(raw, YixiezuoOperationSchema, null, { endpoint });
     if (!parsed) throw new Error("Invalid 易协作 operation response");
     return parsed;

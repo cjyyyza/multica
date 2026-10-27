@@ -99,9 +99,14 @@ interface ChatInputProps {
   uploadEnabled?: boolean;
   onStop?: () => void;
   isRunning?: boolean;
+  /** True on a Requirement Chat that is still clarifying and accepts composition.
+   *  Swaps the ordinary agent placeholder for the clarifying prompt. */
+  requirementClarifying?: boolean;
   /** Enabled only after the server explicitly advertises follow-up queues. */
   allowSubmitWhileRunning?: boolean;
   disabled?: boolean;
+  /** Workflow-owned reason for a read-only composer. */
+  readOnlyReason?: string;
   /** True when the user has no agent available — disables the editor and
    *  surfaces a distinct placeholder. Kept separate from `disabled` so
    *  archived-session copy stays untouched. */
@@ -158,8 +163,10 @@ export function ChatInput({
   uploadEnabled: uploadAllowed,
   onStop,
   isRunning,
+  requirementClarifying,
   allowSubmitWhileRunning,
   disabled,
+  readOnlyReason,
   noAgent,
   agentArchived,
   agentAccessRevoked,
@@ -615,7 +622,9 @@ export function ChatInput({
         ? t(($) => $.input.placeholder_archived_agent)
         : agentRuntimeRequired
           ? t(($) => $.input.placeholder_runtime_required)
-        : t(($) => $.input.placeholder_archived)
+        : readOnlyReason ?? t(($) => $.input.placeholder_archived)
+      : requirementClarifying
+        ? t(($) => $.input.placeholder_requirement_clarifying)
       : agentName
         ? t(($) => $.input.placeholder_named, { name: agentName })
         : t(($) => $.input.placeholder_default);

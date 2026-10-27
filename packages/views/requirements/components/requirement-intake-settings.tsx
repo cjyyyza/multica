@@ -44,6 +44,7 @@ function RequirementIntakeForm({ wsId, installation }: {
       <Label htmlFor={inputId}>{t(($) => $.intake_settings.template)}</Label>
       <div className="flex flex-wrap items-start gap-2">
         <Input id={inputId} type="url" value={template} aria-describedby={hintId}
+          placeholder="https://dj01.pm.netease.com/issues/108402"
           className="min-w-0 flex-1" disabled={mutation.isPending}
           onChange={(event) => { setTemplate(event.target.value); mutation.reset(); }} />
         <Button type="submit" size="sm" disabled={mutation.isPending || template.trim() === (installation.requirement_template_url ?? "")}

@@ -101,6 +101,7 @@ const apiLogger = createLogger("chat.api");
 
 export function ChatWindow() {
   const { t } = useT("chat");
+  const { t: tRequirement } = useT("requirements");
   const wsId = useWorkspaceId();
   const isOpen = useChatStore((s) => s.isOpen);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
@@ -212,6 +213,9 @@ export function ChatWindow() {
     // stays "no projection yet" rather than the omitted-payload legacy probe.
     chatSession: currentSession ?? null,
   });
+  const requirementClarifying = requirementSurface.canCompose &&
+    !!requirementSurface.detail &&
+    (requirementSurface.detail.state === "intake_pending" || requirementSurface.detail.state === "clarifying");
 
   useEffect(() => {
     if (!projectsLoaded || !selectedProjectId) return;
@@ -921,6 +925,7 @@ export function ChatWindow() {
         wsId={wsId}
         surface={requirementSurface}
         className="mx-3 mt-3 max-h-[45vh] overflow-y-auto"
+        isRunning={!!pendingTaskId}
       />
 
       {/* Messages / skeleton / empty state */}
@@ -999,6 +1004,7 @@ export function ChatWindow() {
         uploadEnabled={!!activeAgent && !isAgentAccessRevoked && requirementSurface.canCompose}
         onStop={handleStop}
         isRunning={!!pendingTaskId}
+        requirementClarifying={requirementClarifying}
         allowSubmitWhileRunning={pendingTask?.supports_queue === true}
         disabled={
           isSessionArchived ||
@@ -1008,6 +1014,9 @@ export function ChatWindow() {
           !requirementSurface.canCompose
         }
         noAgent={noAgent}
+        readOnlyReason={!requirementSurface.canCompose && requirementSurface.detail
+          ? tRequirement(($) => requirementSurface.detail?.issueId || requirementSurface.detail?.cancelledAt || requirementSurface.detail?.state === "cancelled" ? $.flow.closed : $.flow.viewer)
+          : undefined}
         agentArchived={isAgentArchived}
         agentAccessRevoked={isAgentAccessRevoked}
         agentRuntimeRequired={!activeAgentRuntimeBound}
