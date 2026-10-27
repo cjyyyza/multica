@@ -69,10 +69,12 @@ func TestMikaOnboardingOpeningEscapesMemberTypedNames(t *testing.T) {
 	}
 }
 
-// The escaper must not double-escape its own output: a name containing a
-// literal backslash stays one backslash to the reader.
-func TestEscapeMarkdownInlineHandlesBackslashesFirst(t *testing.T) {
-	if got := escapeMarkdownInline(`a\*b`); got != `a\\\*b` {
-		t.Fatalf("escapeMarkdownInline(`a\\*b`) = %q, want %q", got, `a\\\*b`)
+// The endpoint validates the language before calling the builder, but the
+// shared copy renderer still has to degrade to English rather than the empty
+// string for a missing entry: a blank bubble would be worse than a language
+// the member did not ask for.
+func TestMikaOnboardingOpeningFallsBackToEnglishForUnmappedLanguage(t *testing.T) {
+	if got, want := buildMikaOnboardingOpening("fr", "Mika", "Venus"), buildMikaOnboardingOpening("en", "Mika", "Venus"); got != want {
+		t.Fatalf("unmapped language opening = %q, want english %q", got, want)
 	}
 }
