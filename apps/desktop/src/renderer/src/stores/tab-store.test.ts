@@ -63,6 +63,21 @@ describe("resourceKeyForUrl", () => {
     expect(resourceKeyForUrl("/acme/issues#anchor")).toBe("/acme/issues");
     expect(resourceKeyForUrl("/acme/issues?filter=a#x")).toBe("/acme/issues");
   });
+
+  it("keeps each Chat Requirement as its own resource", () => {
+    const requirement = "01a08a00-0000-7000-8000-000000000001";
+    expect(resourceKeyForUrl(`/acme/chat?requirement=${requirement}`)).toBe(
+      `/acme/chat?requirement=${requirement}`,
+    );
+    // Other view state and a hash do not create yet another resource.
+    expect(
+      resourceKeyForUrl(`/acme/chat?session=s1&requirement=${requirement}#bottom`),
+    ).toBe(`/acme/chat?requirement=${requirement}`);
+    // Missing, malformed, or empty params keep the pathname-only identity.
+    expect(resourceKeyForUrl("/acme/chat?requirement=not-a-uuid")).toBe("/acme/chat");
+    expect(resourceKeyForUrl("/acme/chat?requirement=")).toBe("/acme/chat");
+    expect(resourceKeyForUrl("/acme/chat?session=a")).toBe("/acme/chat");
+  });
 });
 
 describe("browsingHistoryKeyForUrl", () => {
@@ -264,6 +279,160 @@ describe("useTabStore actions", () => {
     // The existing tab's own view state (url) wins; the incoming filter does
     // not overwrite it.
     expect(s.byWorkspace.acme.tabs[0].url).toBe("/acme/issues");
+  });
+
+  describe("Chat requirement deep links", () => {
+    const oldChatPath = "/acme/chat?session=old";
+    const requirementA = "01a08a00-0000-7000-8000-000000000001";
+    const requirementB = "01a08a00-0000-7000-8000-000000000002";
+    const requirementPath = `/acme/chat?requirement=${requirementA}`;
+
+    function seedChat() {
+      const store = useTabStore.getState();
+      store.switchWorkspace("acme");
+      const chatId = store.addTab(oldChatPath, "Chat");
+      return { store, chatId };
+    }
+
+    function chatTabUrls() {
+      return useTabStore
+        .getState()
+        .byWorkspace.acme.tabs.map((tab) => tab.url)
+        .filter((url) => url.startsWith("/acme/chat"));
+    }
+
+    it("openTab opens a separate Chat tab per Requirement instead of reusing the ordinary Chat", () => {
+      const { store } = seedChat();
+
+      const openedId = store.openTab(requirementPath, "Chat");
+
+      const state = useTabStore.getState();
+      const opened = state.byWorkspace.acme.tabs.find((tab) => tab.id === openedId);
+      expect(opened?.url).toBe(requirementPath);
+      expect(opened?.resourceKey).toBe(requirementPath);
+      expect(opened?.history).toEqual({ stack: [requirementPath], index: 0 });
+      expect(chatTabUrls()).toEqual([requirementPath, oldChatPath]);
+    });
+
+    it("openTab keeps one tab per Requirement and reuses it on reopen", () => {
+      const { store } = seedChat();
+      const firstId = store.openTab(requirementPath, "Chat");
+      const secondId = store.openTab(`/acme/chat?requirement=${requirementB}`, "Chat");
+
+      expect(secondId).not.toBe(firstId);
+      expect(store.openTab(`/acme/chat?session=s1&requirement=${requirementA}`, "Chat")).toBe(firstId);
+      expect(chatTabUrls()).toEqual([
+        `/acme/chat?requirement=${requirementB}`,
+        requirementPath,
+        oldChatPath,
+      ]);
+    });
+
+    it("reuses a Requirement tab after its session URL is resolved", () => {
+      const { store, chatId } = seedChat();
+      const openedId = store.openTab(requirementPath, "Chat", { activate: true });
+      const sessionPath = `/acme/chat?session=s1&requirement=${requirementA}`;
+
+      store.navigateActiveSession(sessionPath, { replace: true });
+
+      expect(store.openTab(requirementPath, "Chat", { activate: true })).toBe(openedId);
+      expect(chatTabUrls()).toEqual([sessionPath, oldChatPath]);
+      expect(store.openTab(oldChatPath, "Chat", { activate: true })).toBe(chatId);
+    });
+
+    it("switchWorkspace opens the Requirement Chat tab instead of reusing the ordinary Chat", () => {
+      const { store, chatId } = seedChat();
+      store.switchWorkspace("butter");
+
+      store.switchWorkspace("acme", requirementPath);
+
+      const state = useTabStore.getState();
+      const active = getActiveTab(state);
+      expect(state.activeWorkspaceSlug).toBe("acme");
+      expect(active?.id).not.toBe(chatId);
+      expect(active?.url).toBe(requirementPath);
+      expect(active?.history).toEqual({ stack: [requirementPath], index: 0 });
+      expect(chatTabUrls()).toEqual([oldChatPath, requirementPath]);
+    });
+
+    it("switchWorkspace focuses an existing tab for the same Requirement", () => {
+      const { store } = seedChat();
+      const requirementTabId = store.openTab(requirementPath, "Chat");
+      store.switchWorkspace("butter");
+
+      store.switchWorkspace("acme", requirementPath);
+
+      expect(getActiveTab(useTabStore.getState())?.id).toBe(requirementTabId);
+      expect(chatTabUrls()).toEqual([requirementPath, oldChatPath]);
+    });
+
+    it.each(["filter=mine", "session=new"])(
+      "openTab preserves the existing Chat URL for ordinary %s changes",
+      (query) => {
+        const { store, chatId } = seedChat();
+
+        const openedId = store.openTab(`/acme/chat?${query}`, "Chat");
+
+        const active = getActiveTab(useTabStore.getState());
+        expect(openedId).toBe(chatId);
+        expect(active?.url).toBe(oldChatPath);
+        expect(active?.history).toEqual({ stack: [oldChatPath], index: 0 });
+      },
+    );
+
+    it.each(["filter=mine", "session=new"])(
+      "switchWorkspace preserves the existing Chat URL for ordinary %s changes",
+      (query) => {
+        const { store, chatId } = seedChat();
+        store.switchWorkspace("butter");
+
+        store.switchWorkspace("acme", `/acme/chat?${query}`);
+
+        const state = useTabStore.getState();
+        const active = getActiveTab(state);
+        expect(state.activeWorkspaceSlug).toBe("acme");
+        expect(active?.id).toBe(chatId);
+        expect(active?.url).toBe(oldChatPath);
+        expect(active?.history).toEqual({ stack: [oldChatPath], index: 0 });
+      },
+    );
+
+    it.each(["not-a-uuid", ""])(
+      "openTab does not treat an invalid or empty requirement (%s) as navigation",
+      (requirement) => {
+        const { store, chatId } = seedChat();
+
+        const openedId = store.openTab(
+          `/acme/chat?requirement=${requirement}`,
+          "Chat",
+        );
+
+        const active = getActiveTab(useTabStore.getState());
+        expect(openedId).toBe(chatId);
+        expect(active?.url).toBe(oldChatPath);
+        expect(active?.history).toEqual({ stack: [oldChatPath], index: 0 });
+      },
+    );
+
+    it.each(["not-a-uuid", ""])(
+      "switchWorkspace does not treat an invalid or empty requirement (%s) as navigation",
+      (requirement) => {
+        const { store, chatId } = seedChat();
+        store.switchWorkspace("butter");
+
+        store.switchWorkspace(
+          "acme",
+          `/acme/chat?requirement=${requirement}`,
+        );
+
+        const state = useTabStore.getState();
+        const active = getActiveTab(state);
+        expect(state.activeWorkspaceSlug).toBe("acme");
+        expect(active?.id).toBe(chatId);
+        expect(active?.url).toBe(oldChatPath);
+        expect(active?.history).toEqual({ stack: [oldChatPath], index: 0 });
+      },
+    );
   });
 
   describe("openTab insertion position (MUL-5860)", () => {

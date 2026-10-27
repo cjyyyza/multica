@@ -1,0 +1,119 @@
+{
+  "card": {
+    "title": "需求",
+    "source": "来源",
+    "source_preview": "来源预览",
+    "participants": "参与者",
+    "run": "最近运行",
+    "run_completed_not_done": "运行已完成，但需求尚未完成。"
+  },
+  "states": {
+    "intake_pending": "待开始",
+    "clarifying": "澄清中",
+    "awaiting_approval": "待批准",
+    "executing": "执行中",
+    "blocked": "已阻塞",
+    "in_review": "待验收",
+    "done": "已完成",
+    "cancelled": "已取消",
+    "unknown": "未知"
+  },
+  "participants": {
+    "edit": "编辑参与者",
+    "stale": "参与者已变化。请先查看最新版本再保存。",
+    "remove": "移除",
+    "roles": {
+      "requester": "requester",
+      "approver": "approver",
+      "viewer": "viewer"
+    },
+    "add_member": "添加成员",
+    "approver_required": "至少保留一个 approver。",
+    "cancel": "取消",
+    "save": "保存参与者"
+  },
+  "candidate": {
+    "project": "项目",
+    "agent": "执行智能体",
+    "goal": "目标",
+    "non_goals": "非目标",
+    "scope": "范围",
+    "constraints": "约束",
+    "acceptance_criteria": "验收标准",
+    "no_project": "无项目",
+    "unknown_project": "未知项目（{{id}}）",
+    "unknown_agent": "未知智能体（{{id}}）",
+    "empty": "无",
+    "attachments": "附件",
+    "file": "文件",
+    "unknown_attachment": "未知附件（{{id}}）",
+    "attachments_unavailable": "部分所选附件不在来源预览中，无法批准。"
+  },
+  "approval": {
+    "title": "批准需求",
+    "candidate_revision": "候选版本 v{{revision}}",
+    "review": "审查并批准",
+    "confirm_title": "批准并创建任务",
+    "consequence": "将创建唯一的任务并启动智能体。后续变更在原任务中重新确认，独立新需求另开聊天。",
+    "stale": "候选内容或版本已变化。请重新审查最新候选后再批准。",
+    "review_latest": "审查最新候选",
+    "cancel": "取消",
+    "confirm": "创建任务并启动智能体"
+  },
+  "review": {
+    "title": "验收",
+    "accept": "验收通过",
+    "reject": "打回修改",
+    "cancel": "取消需求",
+    "close": "关闭",
+    "reject_reason": "打回原因",
+    "reject_placeholder": "说明需要修改的内容...",
+    "reject_required": "请填写打回原因。",
+    "reject_confirm": "确认打回",
+    "cancel_title": "取消此需求？",
+    "cancel_consequence": "将停止执行，并保留现有 Chat 和任务链接。",
+    "cancel_confirm": "确认取消",
+    "accept_title": "验收并回写易协作",
+    "accept_consequence": "确认后任务标记完成，并将以下摘要、任务链接和所选状态回写易协作。",
+    "result_summary": "交付摘要与链接",
+    "result_placeholder": "交付内容、验证结论和产物链接...",
+    "source_status": "易协作状态",
+    "keep_source_status": "保留当前状态",
+    "accept_stale": "任务已变化，请关闭后重新审查最新版本。",
+    "accept_confirm": "验收通过并回写"
+  },
+  "sync": {
+    "title": "同步状态",
+    "operations": "操作",
+    "deliveries": "投递",
+    "reconcile": "重新核对",
+    "reconcile_operation": "回读操作",
+    "reconcile_delivery": "对账投递",
+    "no_auto_retry": "结果未知时不会自动重发。",
+    "request_hash": "request_hash"
+  },
+  "panel": {
+    "load_failed": "无法加载需求。",
+    "closed": "此需求 Chat 已只读。",
+    "open_issue": "打开任务"
+  },
+  "intake": {
+    "title": "新建需求",
+    "source_url": "来源 URL",
+    "preview": "预览来源",
+    "previewing": "正在加载来源预览...",
+    "agent": "智能体",
+    "project": "项目",
+    "no_project": "无项目",
+    "create": "创建需求",
+    "creating": "正在创建..."
+  },
+  "intake_settings": {
+    "template": "POPO 需求模板",
+    "consequence": "设置后，向此机器人发送想法会在易协作新建待澄清单据，沿用模板的项目、类型和表单必填默认值。澄清与批准在 Multica Chat 中进行；留空可关闭。",
+    "save": "保存",
+    "saving": "保存中...",
+    "saved": "已保存",
+    "save_failed": "需求入口保存失败。"
+  }
+}

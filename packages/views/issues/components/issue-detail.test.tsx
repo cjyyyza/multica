@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AgentTask, Attachment, Issue, IssueStatusEntry, Label, TimelineEntry } from "@multica/core/types";
 import { issueKeys } from "@multica/core/issues/queries";
+import { RequirementDetailSchema } from "@multica/core/requirements";
 import { issueStatusKeys } from "@multica/core/issue-statuses";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { toast } from "sonner";
@@ -130,6 +131,13 @@ vi.mock("../../navigation", () => ({
   }),
   useBackOrReplace: () => vi.fn(),
   NavigationProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
+vi.mock("../../requirements", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../requirements")>()),
+  RequirementFlowPanel: ({ surface }: { surface: { detail: { id: string } | null } }) => (
+    <div data-testid="requirement-panel">{surface.detail?.id ?? ""}</div>
+  ),
 }));
 
 // Mock editor components (Tiptap requires real DOM)
@@ -307,6 +315,8 @@ vi.mock("../../projects/components/project-picker", () => ({
 // Mock api
 const mockApiObj = vi.hoisted(() => ({
   getIssue: vi.fn(),
+  getRequirement: vi.fn(),
+  getRequirementByChat: vi.fn(),
   listTimeline: vi.fn().mockResolvedValue([]),
   listComments: vi.fn().mockResolvedValue([]),
   createComment: vi.fn(),
@@ -718,6 +728,8 @@ describe("IssueDetail (shared)", () => {
     mockViewport.isMobile = false;
     // Default: issue loads successfully
     mockApiObj.getIssue.mockResolvedValue(mockIssue);
+    mockApiObj.getRequirement.mockResolvedValue(null);
+    mockApiObj.getRequirementByChat.mockResolvedValue(null);
     // /timeline returns the entries flat in chronological order (oldest first).
     mockApiObj.listTimeline.mockResolvedValue(mockTimeline);
     mockApiObj.listIssueReactions.mockResolvedValue([]);
@@ -3621,5 +3633,87 @@ describe("groupSubIssuesByStage", () => {
   it("omits the unstaged group when every child is staged", () => {
     const groups = groupSubIssuesByStage([child("s1", 1), child("s2", 2)]);
     expect(groups.map((g) => g.stage)).toEqual([1, 2]);
+  });
+});
+
+describe("IssueDetail requirement origin", () => {
+  beforeEach(() => {
+    mockApiObj.getIssue.mockReset().mockResolvedValue(mockIssue);
+    mockApiObj.getRequirement.mockReset().mockResolvedValue(null);
+    mockApiObj.getRequirementByChat.mockReset().mockResolvedValue(null);
+  });
+
+  function renderWithDone() {
+    const queryClient = createTestQueryClient();
+    return render(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail issueId="issue-1" onDone={vi.fn()} />
+        </QueryClientProvider>
+      </I18nProvider>,
+    );
+  }
+
+  it("keeps ordinary Issue controls and skips the requirement lookup", async () => {
+    renderWithDone();
+
+    expect(await screen.findByText("Implement authentication")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mark as done" })).toBeInTheDocument();
+    expect(screen.queryByTestId("requirement-issue-status")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("requirement-panel")).not.toBeInTheDocument();
+    expect(mockApiObj.getRequirement).not.toHaveBeenCalled();
+    expect(mockApiObj.getRequirementByChat).not.toHaveBeenCalled();
+  });
+
+  it("queries by requirement_id directly and routes lifecycle controls away from generic actions", async () => {
+    mockApiObj.getIssue.mockResolvedValue({
+      ...mockIssue,
+      status: "in_review",
+      origin_type: "requirement_chat",
+      origin_id: "chat-1",
+      requirement_id: "req-1",
+    });
+    mockApiObj.getRequirement.mockResolvedValue(RequirementDetailSchema.parse({
+      id: "req-1",
+      workspaceId: "ws-1",
+      requesterId: "user-1",
+      chatSessionId: "chat-1",
+      issueId: "issue-1",
+      state: "in_review",
+    }));
+    renderWithDone();
+
+    expect(await screen.findByTestId("requirement-panel")).toHaveTextContent("req-1");
+    expect(mockApiObj.getRequirement).toHaveBeenCalledWith("ws-1", "req-1");
+    expect(mockApiObj.getRequirementByChat).not.toHaveBeenCalled();
+    expect(screen.getByTestId("requirement-issue-status")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mark as done" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.queryByRole("menuitem", { name: "Status" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Delete issue" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Priority" })).toBeInTheDocument();
+  });
+
+  it("falls back to origin_id only when an old backend omits requirement_id", async () => {
+    mockApiObj.getIssue.mockResolvedValue({
+      ...mockIssue,
+      status: "in_review",
+      origin_type: "requirement_chat",
+      origin_id: "chat-1",
+    });
+    mockApiObj.getRequirementByChat.mockResolvedValue(RequirementDetailSchema.parse({
+      id: "req-legacy",
+      workspaceId: "ws-1",
+      requesterId: "user-1",
+      chatSessionId: "chat-1",
+      issueId: "issue-1",
+      state: "in_review",
+    }));
+    renderWithDone();
+
+    expect(await screen.findByTestId("requirement-panel")).toHaveTextContent("req-legacy");
+    expect(mockApiObj.getRequirementByChat).toHaveBeenCalledWith("ws-1", "chat-1");
+    expect(mockApiObj.getRequirement).not.toHaveBeenCalled();
   });
 });

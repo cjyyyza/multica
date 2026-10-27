@@ -47,6 +47,10 @@ import { ArchivedAgentBanner } from "./archived-agent-banner";
 import { AgentAccessRevokedBanner } from "./agent-access-revoked-banner";
 import { RuntimeRequiredBanner } from "./runtime-required-banner";
 import {
+  RequirementFlowPanel,
+  useRequirementSurface,
+} from "../../requirements";
+import {
   chatSessionsOptions,
   pendingChatTaskOptions,
   pendingChatTasksOptions,
@@ -84,6 +88,7 @@ import {
   isStillOnComposeTarget,
   planProjectContextChange,
   seedAcceptedPendingTask,
+  shouldKeepUnlistedChatSession,
 } from "./use-chat-controller";
 import { useChatProjectContextSupport } from "./use-chat-project-context-support";
 import { createLogger } from "@multica/core/logger";
@@ -118,9 +123,10 @@ export function ChatWindow() {
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   // Single sessions cache — eliminates the separate active/all queries
   // that used to drift during the WS-invalidate window.
-  const { data: sessions = [], isSuccess: sessionsLoaded } = useQuery(
-    chatSessionsOptions(wsId),
-  );
+  const {
+    data: sessions = [],
+    isSuccess: sessionsLoaded,
+  } = useQuery(chatSessionsOptions(wsId));
   const { data: projects = [], isSuccess: projectsLoaded } = useQuery(
     projectListOptions(wsId),
   );
@@ -194,6 +200,18 @@ export function ChatWindow() {
     (!projectsLoaded || projects.some((project) => project.id === candidateProjectId))
     ? candidateProjectId
     : null;
+
+  // The loaded ChatSession carries the additive `requirement_id` projection:
+  // an ordinary Chat is definitely unbound (zero Requirement requests), and a
+  // bound one is fetched by id. Only an old backend's missing projection keeps
+  // the legacy chat-scoped probe.
+  const requirementSurface = useRequirementSurface({
+    wsId,
+    chatSessionId: activeSessionId,
+    // `undefined` from the lookup means no loaded row; normalize to null so it
+    // stays "no projection yet" rather than the omitted-payload legacy probe.
+    chatSession: currentSession ?? null,
+  });
 
   useEffect(() => {
     if (!projectsLoaded || !selectedProjectId) return;
@@ -288,11 +306,12 @@ export function ChatWindow() {
 
   // Self-heal a dangling `activeSessionId` (persisted / restored from storage)
   // that points at a session which was deleted or lost access: once the
-  // sessions list has loaded and doesn't contain it — with no in-flight
-  // pending task exempting a just-created session — clear it so the
-  // floating window shows the new-chat state instead of an editable empty chat
-  // whose send would POST into a nonexistent session. Same fix the shared
-  // controller applies for the tab (kept in sync via `hasInFlightPendingTask`).
+  // sessions list has loaded and doesn't contain it — with no in-flight pending
+  // task exempting a just-created session — clear it so the floating window
+  // shows the new-chat state instead of an editable empty chat whose send would
+  // POST into a nonexistent session. The exemption is shared with the chat
+  // tab's controller (`shouldKeepUnlistedChatSession`), so the two surfaces
+  // cannot drift.
   // The earlier "no self-heal" note was about a naive version keyed on stale
   // `allSessions`; the in-flight-pending-task signal here exempts the
   // freshly-created session (handleSend seeds its pending task from the send
@@ -300,10 +319,16 @@ export function ChatWindow() {
   useEffect(() => {
     if (!activeSessionId || !sessionsLoaded) return;
     if (sessions.some((s) => s.id === activeSessionId)) return;
-    if (hasInFlightPendingTask(qc, activeSessionId)) return;
+    if (shouldKeepUnlistedChatSession(qc, activeSessionId)) return;
     uiLogger.info("clearing dangling activeSessionId (floating)", { sessionId: activeSessionId });
     setActiveSession(null);
-  }, [activeSessionId, sessionsLoaded, sessions, qc, setActiveSession]);
+  }, [
+    activeSessionId,
+    sessionsLoaded,
+    sessions,
+    qc,
+    setActiveSession,
+  ]);
 
   // WS events are handled globally in useRealtimeSync — the query cache
   // stays current even when this window is closed. See packages/core/realtime/.
@@ -406,6 +431,12 @@ export function ChatWindow() {
       commitInput?: (options?: { extraDraftKeys?: string[]; clearEditor?: boolean }) => void,
       draftAttachments: Attachment[] = [],
     ): Promise<boolean> => {
+      if (!requirementSurface.canCompose) {
+        apiLogger.warn("sendChatMessage skipped: requirement composer is read-only", {
+          sessionId: activeSessionId,
+        });
+        return false;
+      }
       if (!activeAgent) {
         apiLogger.warn("sendChatMessage skipped: no active agent");
         return false;
@@ -581,6 +612,7 @@ export function ChatWindow() {
       activeSessionId,
       activeAgent,
       activeAgentRuntimeBound,
+      requirementSurface.canCompose,
       isAgentArchived,
       isAgentAccessRevoked,
       pendingTask,
@@ -681,7 +713,7 @@ export function ChatWindow() {
 
   const handleProjectChange = useCallback(
     (projectId: string | null) => {
-      if (projectId === activeProjectId) return;
+      if (requirementSurface.projectLocked || projectId === activeProjectId) return;
       uiLogger.info("selectProjectContext", {
         from: activeProjectId,
         to: projectId,
@@ -711,6 +743,7 @@ export function ChatWindow() {
     }, [
       activeProjectId,
       activeSessionId,
+      requirementSurface.projectLocked,
       currentSession,
       setSessionProject,
       setSelectedAgentId,
@@ -884,6 +917,12 @@ export function ChatWindow() {
         </div>
       </div>
 
+      <RequirementFlowPanel
+        wsId={wsId}
+        surface={requirementSurface}
+        className="mx-3 mt-3 max-h-[45vh] overflow-y-auto"
+      />
+
       {/* Messages / skeleton / empty state */}
       <AnimatePresence initial={false}>
         {isOpen && (
@@ -899,7 +938,8 @@ export function ChatWindow() {
               isAgentArchived ||
               isAgentAccessRevoked ||
               !activeAgentRuntimeBound ||
-              noAgent
+              noAgent ||
+              !requirementSurface.canCompose
             }
             quickActionsPendingMessageId={quickActionsPending?.message_id ?? null}
           >
@@ -941,7 +981,7 @@ export function ChatWindow() {
         tasks={queuedTasks}
         headStatus={pendingTask?.status}
         onSendNow={handleSendQueuedTaskNow}
-        sendNowDisabled={isAgentAccessRevoked}
+        sendNowDisabled={isAgentAccessRevoked || !requirementSurface.canCompose}
         onEdit={handleEditQueuedTask}
         onRemove={handleRemoveQueuedTask}
         onClear={handleClearQueuedTasks}
@@ -956,7 +996,7 @@ export function ChatWindow() {
         conversationStarterRequest={conversationStarterRequest}
         onConversationStarterApplied={handleConversationStarterApplied}
         onRestoreDraftApplied={handleRestoreDraftApplied}
-        uploadEnabled={!!activeAgent && !isAgentAccessRevoked}
+        uploadEnabled={!!activeAgent && !isAgentAccessRevoked && requirementSurface.canCompose}
         onStop={handleStop}
         isRunning={!!pendingTaskId}
         allowSubmitWhileRunning={pendingTask?.supports_queue === true}
@@ -964,7 +1004,8 @@ export function ChatWindow() {
           isSessionArchived ||
           isAgentArchived ||
           isAgentAccessRevoked ||
-          !activeAgentRuntimeBound
+          !activeAgentRuntimeBound ||
+          !requirementSurface.canCompose
         }
         noAgent={noAgent}
         agentArchived={isAgentArchived}
@@ -974,6 +1015,7 @@ export function ChatWindow() {
         projects={projects}
         projectId={activeProjectId}
         onProjectChange={handleProjectChange}
+        projectLocked={requirementSurface.projectLocked}
         projectContextUnsupported={projectContextSupport === false}
         isProjectUpdating={
           setSessionProject.isPending || (!!activeSessionId && !currentSession)

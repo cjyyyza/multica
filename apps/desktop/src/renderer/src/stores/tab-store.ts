@@ -206,8 +206,7 @@ interface TabStore {
   updateTab: (tabId: string, patch: Partial<Pick<TabSession, "title">>) => void;
   /**
    * In-tab navigation: update the active session's url/resourceKey and its
-   * virtual history. This is the ONLY way a session's url changes; the
-   * Coordinator reconciles the router afterwards.
+   * virtual history. The Coordinator reconciles the router afterwards.
    */
   navigateActiveSession: (url: string, opts?: { replace?: boolean }) => void;
   /** Session-driven back/forward (there is no router history to pop). */
@@ -309,9 +308,34 @@ export function splitTabUrl(url: string): { pathname: string; suffix: string } {
   return { pathname: url.slice(0, cut), suffix: url.slice(cut) };
 }
 
-/** Dedup identity of a tab URL: its pathname (search/hash are view state). */
+/**
+ * Dedup identity of a tab URL.
+ *
+ * Normally the pathname: search/hash are view state. A Chat opened for a
+ * specific Requirement (`/<slug>/chat?requirement=<uuid>`) is the exception —
+ * each Requirement is its own resource, so different Requirements must not
+ * reuse one tab. The Requirement join keeps the same pathname-only semantics
+ * for every other route and for invalid/missing requirement params.
+ */
 export function resourceKeyForUrl(url: string): string {
-  return splitTabUrl(url).pathname;
+  return chatRequirementKeyForUrl(url) ?? splitTabUrl(url).pathname;
+}
+
+const CHAT_REQUIREMENT_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function chatRequirementKeyForUrl(url: string): string | null {
+  const { pathname, suffix } = splitTabUrl(url);
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments.length !== 2 || segments[1] !== "chat") return null;
+  if (!suffix.startsWith("?")) return null;
+
+  const hashIndex = suffix.indexOf("#");
+  const search = hashIndex === -1 ? suffix.slice(1) : suffix.slice(1, hashIndex);
+  const requirement = new URLSearchParams(search).get("requirement");
+  if (!requirement || !CHAT_REQUIREMENT_UUID_RE.test(requirement)) return null;
+
+  return `${pathname}?requirement=${encodeURIComponent(requirement)}`;
 }
 
 /**
@@ -525,6 +549,45 @@ function withBrowsingNavigation(
   });
 }
 
+function withSessionNavigation(
+  group: WorkspaceTabGroup,
+  slug: string,
+  tabId: string,
+  nextUrl: string,
+  replace: boolean,
+): WorkspaceTabGroup {
+  const index = group.tabs.findIndex((tab) => tab.id === tabId);
+  if (index < 0) return group;
+  const current = group.tabs[index];
+  if (current.url === nextUrl) return group;
+
+  const stack = replace
+    ? [
+        ...current.history.stack.slice(0, current.history.index),
+        nextUrl,
+        ...current.history.stack.slice(current.history.index + 1),
+      ]
+    : [...current.history.stack.slice(0, current.history.index + 1), nextUrl];
+  const historyIndex = replace
+    ? current.history.index
+    : current.history.index + 1;
+  const next: TabSession = {
+    ...current,
+    url: nextUrl,
+    resourceKey: resourceKeyForUrl(nextUrl),
+    history: { stack, index: historyIndex },
+  };
+  const nextTabs = [...group.tabs];
+  nextTabs[index] = next;
+  return withBrowsingNavigation(
+    { ...group, tabs: nextTabs },
+    slug,
+    current,
+    nextUrl,
+    replace,
+  );
+}
+
 function withBrowsingHistoryTitle(
   group: WorkspaceTabGroup,
   url: string,
@@ -733,8 +796,11 @@ export const useTabStore = create<TabStore>()(
           const clean = sanitizeTabPath(desiredPath);
           if (clean) {
             const key = resourceKeyForUrl(clean);
-            const match = existing.tabs.find((t) => t.resourceKey === key);
-            if (match) {
+            const matchIndex = existing.tabs.findIndex(
+              (t) => t.resourceKey === key,
+            );
+            if (matchIndex >= 0) {
+              const match = existing.tabs[matchIndex];
               const nextGroup = withBrowsingVisit(
                 reconcileGroup(existing, existing.tabs, match.id),
                 slug,
@@ -783,17 +849,19 @@ export const useTabStore = create<TabStore>()(
         const group = byWorkspace[activeWorkspaceSlug];
         if (!group) return "";
 
-        // Dedup by resourceKey: the existing tab keeps its own url (its
-        // filters/anchor are its view state); we only focus it.
+        // Dedup by resourceKey: the existing tab keeps its view-state URL.
         const key = resourceKeyForUrl(clean);
-        const existing = group.tabs.find((t) => t.resourceKey === key);
-        if (existing) {
+        const existingIndex = group.tabs.findIndex(
+          (t) => t.resourceKey === key,
+        );
+        if (existingIndex >= 0) {
+          const existing = group.tabs[existingIndex];
           const historyBase = withActiveSessionVisit(
             group,
             activeWorkspaceSlug,
           );
           const nextGroup = withBrowsingVisit(
-            reconcileGroup(historyBase, group.tabs, existing.id),
+            reconcileGroup(historyBase, historyBase.tabs, existing.id),
             activeWorkspaceSlug,
             existing.url,
             { title: existing.title },
@@ -981,32 +1049,12 @@ export const useTabStore = create<TabStore>()(
         const current = group.tabs[index];
         if (current.url === clean) return;
 
-        const replace = opts?.replace === true;
-        const stack = replace
-          ? [
-              ...current.history.stack.slice(0, current.history.index),
-              clean,
-              ...current.history.stack.slice(current.history.index + 1),
-            ]
-          : [...current.history.stack.slice(0, current.history.index + 1), clean];
-        const historyIndex = replace
-          ? current.history.index
-          : current.history.index + 1;
-
-        const next: TabSession = {
-          ...current,
-          url: clean,
-          resourceKey: resourceKeyForUrl(clean),
-          history: { stack, index: historyIndex },
-        };
-        const nextTabs = [...group.tabs];
-        nextTabs[index] = next;
-        const nextGroup = withBrowsingNavigation(
-          { ...group, tabs: nextTabs },
+        const nextGroup = withSessionNavigation(
+          group,
           activeWorkspaceSlug,
-          current,
+          current.id,
           clean,
-          replace,
+          opts?.replace === true,
         );
         set({
           byWorkspace: {

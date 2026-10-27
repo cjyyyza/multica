@@ -129,6 +129,7 @@ interface ChatInputProps {
   projectId?: string | null;
   onProjectChange?: (projectId: string | null) => void;
   isProjectUpdating?: boolean;
+  projectLocked?: boolean;
   /** True when the active agent's daemon is too old to inject the project
    *  description into the run brief. Soft signal: selection stays enabled,
    *  the composer only surfaces a warning next to the chip and in the
@@ -170,6 +171,7 @@ export function ChatInput({
   projectId,
   onProjectChange,
   isProjectUpdating,
+  projectLocked,
   projectContextUnsupported,
   focusRequest,
   draftKeyOverride,
@@ -627,7 +629,8 @@ export function ChatInput({
     !disabled &&
     !noAgent &&
     !submitting &&
-    !isProjectUpdating;
+    !isProjectUpdating &&
+    !projectLocked;
   const selectedProject = projects.find((project) => project.id === projectId);
 
   return (
