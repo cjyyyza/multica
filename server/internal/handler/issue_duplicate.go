@@ -143,7 +143,6 @@ func (h *Handler) ListIssueDuplicates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
-	fill := h.newStatusCategoryFiller(r.Context(), issue.WorkspaceID)
 
 	var duplicateOf *IssueResponse
 	if issue.Status == issuestatus.Cancelled && issue.DuplicateOfIssueID.Valid {
@@ -154,7 +153,6 @@ func (h *Handler) ListIssueDuplicates(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case err == nil:
 			resp := issueToResponse(original, prefix)
-			fill(&resp)
 			duplicateOf = &resp
 		case !isNotFound(err):
 			slog.Warn("load duplicate original failed", append(logger.RequestAttrs(r), "error", err, "issue_id", uuidToString(issue.ID))...)
@@ -172,6 +170,15 @@ func (h *Handler) ListIssueDuplicates(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list duplicates")
 		return
 	}
+	ids := make([]pgtype.UUID, 0, len(rows)+1)
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	if duplicateOf != nil {
+		ids = append(ids, parseUUID(duplicateOf.ID))
+	}
+	fill := h.newIssueResponseFiller(r.Context(), issue.WorkspaceID, ids)
+	fill(duplicateOf)
 	duplicates := make([]IssueResponse, 0, len(rows))
 	for _, row := range rows {
 		resp := issueToResponse(row, prefix)

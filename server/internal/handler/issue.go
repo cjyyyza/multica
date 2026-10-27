@@ -69,9 +69,15 @@ type IssueResponse struct {
 	CreatorType   string  `json:"creator_type"`
 	CreatorID     string  `json:"creator_id"`
 	ParentIssueID *string `json:"parent_issue_id"`
+	OriginType    *string `json:"origin_type,omitempty"`
+	OriginID      *string `json:"origin_id,omitempty"`
+	// RequirementID is the Requirement this issue was approved from (additive).
+	// A missing key means the binding is unknown (old backend or a hydration
+	// failure), never an authoritative "unbound" response.
+	RequirementID *string `json:"requirement_id,omitempty"`
 	// DuplicateOf is the original this issue duplicates (MUL-7349), set only
 	// while the mark counts: the issue is cancelled and the original still
-	// exists. newStatusCategoryFiller resolves it from duplicateOfIssueID;
+	// exists. newIssueResponseFiller resolves it from duplicateOfIssueID;
 	// an endpoint that skips the filler emits null rather than a bare pointer.
 	DuplicateOf *IssueRefResponse `json:"duplicate_of"`
 	ProjectID   *string           `json:"project_id"`
@@ -299,15 +305,22 @@ func (h *Handler) updateIssueWithStatusGuard(ctx context.Context, workspaceID pg
 // run it inside the status write's transaction and broadcast the returned runs
 // after commit.
 func updateIssueStoppingWakeups(ctx context.Context, q *db.Queries, params db.UpdateIssueParams) (db.Issue, []db.AgentTaskQueue, error) {
-	issue, err := q.UpdateIssue(ctx, params)
+	issue, err := service.UpdateIssueWithRequirementGate(ctx, q, params)
 	if err != nil || !params.Status.Valid {
 		return issue, nil, err
 	}
-	cancelled, err := service.StopClosedIssueWakeups(ctx, q, issue)
+	var cancelled []db.AgentTaskQueue
+	if issue.Status != "blocked" {
+		cancelled, err = service.DisableRequirementWakeupsForIssue(ctx, q, issue.WorkspaceID, issue.ID)
+		if err != nil {
+			return db.Issue{}, nil, fmt.Errorf("disable requirement wakeups: %w", err)
+		}
+	}
+	closed, err := service.StopClosedIssueWakeups(ctx, q, issue)
 	if err != nil {
 		return db.Issue{}, nil, fmt.Errorf("stop closed issue wakeups: %w", err)
 	}
-	return issue, cancelled, nil
+	return issue, append(cancelled, closed...), nil
 }
 
 func (h *Handler) broadcastCancelledWakeups(ctx context.Context, workspaceID pgtype.UUID, cancelled []db.AgentTaskQueue) {
@@ -347,33 +360,61 @@ func validateIssueEnum(w http.ResponseWriter, field, value string, allowed []str
 // Resolver includes ARCHIVED statuses, because an issue left on an archived
 // status still belongs in its category's column. (MUL-6243)
 func (h *Handler) fillStatusCategories(ctx context.Context, wsID pgtype.UUID, resps []IssueResponse) {
+	ids := make([]pgtype.UUID, 0, len(resps))
 	var originals []pgtype.UUID
 	for i := range resps {
+		if id, err := util.ParseUUID(resps[i].ID); err == nil {
+			ids = append(ids, id)
+		}
 		originals = appendDuplicateOriginal(originals, resps[i].Status, resps[i].duplicateOfIssueID)
 	}
-	fill := h.newStatusCategoryFiller(ctx, wsID, originals...)
+	fill := h.newIssueResponseFiller(ctx, wsID, ids, originals...)
 	for i := range resps {
 		fill(&resps[i])
 	}
 }
 
-// newStatusCategoryFiller returns a request-scoped filler backed by ONE
-// Resolver. Reuse it across every response a request builds: the Resolver reads
-// the catalog at most once, so a page of custom-status rows costs one query
-// rather than one per row. Creating a filler per row would reintroduce the N+1
-// this exists to avoid. (MUL-6243)
+// issueRequirementIDs resolves a page's bindings in one read, keyed by issue id.
+// A missing or failed hydration stays omitted from JSON rather than asserting
+// an authoritative empty binding.
+func (h *Handler) issueRequirementIDs(ctx context.Context, wsID pgtype.UUID, issueIDs []pgtype.UUID) map[string]string {
+	if len(issueIDs) == 0 {
+		return nil
+	}
+	rows, err := h.Queries.ListRequirementIDsForIssues(ctx, db.ListRequirementIDsForIssuesParams{
+		WorkspaceID: wsID,
+		IssueIds:    issueIDs,
+	})
+	if err != nil {
+		slog.Warn("resolve issue requirement ids failed", "error", err, "count", len(issueIDs))
+		return nil
+	}
+	byIssue := make(map[string]string, len(rows))
+	for _, row := range rows {
+		byIssue[uuidToString(row.IssueID)] = uuidToString(row.RequirementID)
+	}
+	return byIssue
+}
+
+// newIssueResponseFiller resolves bindings, duplicate originals and custom
+// statuses once per page. HTTP and event payloads use the same projections.
 //
 // originals are the duplicate originals the caller's rows point at, collected
 // with appendDuplicateOriginal. A page passes them so they resolve in one read
 // up front, the way labelsByIssue loads a page's labels; an original that was
 // not passed still resolves, one read per distinct original. (MUL-7349)
-func (h *Handler) newStatusCategoryFiller(ctx context.Context, wsID pgtype.UUID, originals ...pgtype.UUID) func(*IssueResponse) {
+func (h *Handler) newIssueResponseFiller(ctx context.Context, wsID pgtype.UUID, issueIDs []pgtype.UUID, originals ...pgtype.UUID) func(*IssueResponse) {
+	requirements := h.issueRequirementIDs(ctx, wsID, issueIDs)
 	resolver := issuestatus.NewResolver(wsID)
 	refs := duplicateOriginals{}
 	h.loadDuplicateOriginals(ctx, wsID, refs, originals)
 	return func(resp *IssueResponse) {
 		if resp == nil {
 			return
+		}
+		resp.RequirementID = nil
+		if requirementID, ok := requirements[resp.ID]; ok {
+			resp.RequirementID = &requirementID
 		}
 		// Every response that resolves its status also resolves its duplicate
 		// mark, so the two never disagree about which endpoints carry them.
@@ -389,9 +430,14 @@ func (h *Handler) newStatusCategoryFiller(ctx context.Context, wsID pgtype.UUID,
 }
 
 // fillStatusCategory is the single-response form. Only for endpoints that build
-// exactly ONE response; anything looping must use newStatusCategoryFiller.
+// exactly ONE response; anything looping must use newIssueResponseFiller.
 func (h *Handler) fillStatusCategory(ctx context.Context, wsID pgtype.UUID, resp *IssueResponse) {
-	h.newStatusCategoryFiller(ctx, wsID)(resp)
+	if resp == nil {
+		return
+	}
+	resps := []IssueResponse{*resp}
+	h.fillStatusCategories(ctx, wsID, resps)
+	*resp = resps[0]
 }
 
 // duplicateOfPointer keeps a duplicate mark only while the issue is
@@ -446,7 +492,7 @@ func (h *Handler) loadDuplicateOriginals(ctx context.Context, wsID pgtype.UUID, 
 
 // fillDuplicateOf resolves a duplicate mark to its original (MUL-7349),
 // through refs so a page's originals cost one read (see
-// newStatusCategoryFiller). A missing original leaves DuplicateOf unset.
+// newIssueResponseFiller). A missing original leaves DuplicateOf unset.
 func (h *Handler) fillDuplicateOf(ctx context.Context, wsID pgtype.UUID, resp *IssueResponse, refs duplicateOriginals) {
 	id := resp.duplicateOfIssueID
 	if !id.Valid {
@@ -491,6 +537,8 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		CreatorType:        i.CreatorType,
 		CreatorID:          uuidToString(i.CreatorID),
 		ParentIssueID:      uuidToPtr(i.ParentIssueID),
+		OriginType:         textToPtr(i.OriginType),
+		OriginID:           uuidToPtr(i.OriginID),
 		duplicateOfIssueID: duplicateOfPointer(i.Status, i.DuplicateOfIssueID),
 		ProjectID:          uuidToPtr(i.ProjectID),
 		Position:           i.Position,
@@ -1228,11 +1276,13 @@ func (h *Handler) SearchIssues(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prefix := h.getIssuePrefix(ctx, wsUUID)
+	ids := make([]pgtype.UUID, 0, len(results))
 	var originals []pgtype.UUID
 	for _, sr := range results {
+		ids = append(ids, sr.issue.ID)
 		originals = appendDuplicateOriginal(originals, sr.issue.Status, sr.issue.DuplicateOfIssueID)
 	}
-	fillSearch := h.newStatusCategoryFiller(ctx, wsUUID, originals...)
+	fillSearch := h.newIssueResponseFiller(ctx, wsUUID, ids, originals...)
 	resp := make([]SearchIssueResponse, len(results))
 	for i, sr := range results {
 		sir := SearchIssueResponse{
@@ -1409,7 +1459,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 			originals = appendDuplicateOriginal(originals, issue.Status, issue.DuplicateOfIssueID)
 		}
 		labelsMap := h.labelsByIssue(ctx, wsUUID, ids)
-		fillOpen := h.newStatusCategoryFiller(ctx, wsUUID, originals...)
+		fillOpen := h.newIssueResponseFiller(ctx, wsUUID, ids, originals...)
 		resp := make([]IssueResponse, len(issues))
 		for i, issue := range issues {
 			resp[i] = openIssueRowToResponse(issue, prefix)
@@ -2442,7 +2492,7 @@ ORDER BY
 	prefix := h.getIssuePrefix(ctx, wsUUID)
 	// One Resolver for the whole page — a per-row filler would query the
 	// catalog once per custom-status row. (MUL-6243)
-	fillGrouped := h.newStatusCategoryFiller(ctx, wsUUID, originals...)
+	fillGrouped := h.newIssueResponseFiller(ctx, wsUUID, ids, originals...)
 
 	groups := []IssueAssigneeGroupResponse{}
 	groupIndex := map[string]int{}
@@ -3423,7 +3473,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	// One filler for this create, shared by the broadcast payload and the HTTP
 	// response below, so a custom-status create reads the catalog once per
 	// request rather than once per payload. (MUL-6243)
-	fillCreated := h.newStatusCategoryFiller(r.Context(), wsUUID)
+	fillCreated := h.newIssueResponseFiller(r.Context(), wsUUID, nil)
 
 	// Analytics agent ID: assignee agent when the issue is being assigned
 	// to an agent, otherwise the creator agent for agent-authored issues.
@@ -3492,6 +3542,9 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 
+	if writeRequirementChatExecutionError(w, err) {
+		return
+	}
 	if errors.Is(err, service.ErrActiveDuplicate) {
 		dup := *res.DuplicateIssue
 		existing := issueToResponse(dup, h.getIssuePrefix(r.Context(), dup.WorkspaceID))
@@ -4059,6 +4112,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		issue, err = h.updateIssueWithStatusGuard(writeCtx, prevIssue.WorkspaceID, statusKeyForGuard, params)
 	}
 	if err != nil {
+		if writeRequirementChatExecutionError(w, err) {
+			return
+		}
 		if writeIssueStatusRaceError(w, err) {
 			return
 		}
@@ -4458,11 +4514,17 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if writeRequirementChatExecutionError(w, service.GateRequirementIssueDeletion(r.Context(), h.Queries, issue.WorkspaceID, issue.ID)) {
+		return
+	}
 	h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 	// Fail any linked autopilot runs before delete (ON DELETE SET NULL clears issue_id).
 	_ = h.AutopilotService.FailAutopilotRunsByIssue(r.Context(), issue.ID)
 
 	deleteResult, err := h.deleteIssueAndCollectAttachmentURLs(r.Context(), issue, nil)
+	if writeRequirementChatExecutionError(w, err) {
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete issue")
 		return
@@ -4523,6 +4585,9 @@ func (h *Handler) deleteIssuesAndCollectAttachmentURLs(ctx context.Context, issu
 			ID: issue.ID, WorkspaceID: issue.WorkspaceID,
 		}); err != nil {
 			return issueDeleteResult{}, fmt.Errorf("lock issue for delete: %w", err)
+		}
+		if err := service.GateRequirementIssueDeletion(ctx, qtx, issue.WorkspaceID, issue.ID); err != nil {
+			return issueDeleteResult{}, err
 		}
 		detached, err := qtx.DetachDirectChildIssues(ctx, db.DetachDirectChildIssuesParams{
 			WorkspaceID: issue.WorkspaceID, ParentIssueID: issue.ID, ExcludedIssueIds: excludedIssueIDs,
@@ -4741,7 +4806,13 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 	updated := 0
 	// One Resolver for the whole batch — a per-issue filler would query the
 	// catalog once per custom-status row. (MUL-6243)
-	fillBatch := h.newStatusCategoryFiller(r.Context(), wsUUID)
+	issueIDs := make([]pgtype.UUID, 0, len(req.IssueIDs))
+	for _, rawID := range req.IssueIDs {
+		if id, err := util.ParseUUID(rawID); err == nil {
+			issueIDs = append(issueIDs, id)
+		}
+	}
+	fillBatch := h.newIssueResponseFiller(r.Context(), wsUUID, issueIDs)
 	// Parents whose sub-issues changed this batch. Their rules are evaluated
 	// once after the loop against the final state (MUL-4155), not per child
 	// against a mid-batch snapshot.
@@ -4931,6 +5002,9 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			issue, err = h.updateIssueWithStatusGuard(writeCtx, wsUUID, issueStatusGuard, params)
 		}
 		if err != nil {
+			if writeRequirementChatExecutionError(w, err) {
+				return
+			}
 			// The archive race is a property of the batch's shared target
 			// status, not of one issue, so every remaining item would fail the
 			// same way. Abort with 409 instead of reporting a partial update.
@@ -5063,12 +5137,20 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 		}
 
 		seenIssueIDs[issueUUID] = struct{}{}
+		if writeRequirementChatExecutionError(w, service.GateRequirementIssueDeletion(r.Context(), h.Queries, issue.WorkspaceID, issue.ID)) {
+			return
+		}
 		issues = append(issues, issue)
 		excludedIDs = append(excludedIDs, issue.ID)
+	}
+	for _, issue := range issues {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 		_ = h.AutopilotService.FailAutopilotRunsByIssue(r.Context(), issue.ID)
 	}
 	deleteResult, err := h.deleteIssuesAndCollectAttachmentURLs(r.Context(), issues, excludedIDs)
+	if writeRequirementChatExecutionError(w, err) {
+		return
+	}
 	if err != nil {
 		slog.Warn("batch delete issues failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to delete issues")

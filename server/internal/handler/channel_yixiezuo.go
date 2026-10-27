@@ -27,7 +27,13 @@ func sourceCommandKey(inst engine.ResolvedInstallation, actor pgtype.UUID, messa
 	return "channel:" + hex.EncodeToString(sum[:])
 }
 
-func (h *Handler) HandleMemberCommand(ctx context.Context, inst engine.ResolvedInstallation, identity engine.ResolvedIdentity, msg channel.InboundMessage) (engine.Result, bool, error) {
+func (h *Handler) HandleMemberCommand(ctx context.Context, inst engine.ResolvedInstallation, identity engine.ResolvedIdentity, msg channel.InboundMessage, startChat bool) (engine.Result, bool, error) {
+	if result, handled, err := h.handleRequirementIntake(ctx, inst, identity, msg, startChat); handled {
+		return result, true, err
+	}
+	if startChat {
+		return engine.Result{}, false, nil
+	}
 	command, handled, parseErr := yixiezuo.ParseCommand(msg.CommandText)
 	if !handled {
 		return engine.Result{}, false, nil

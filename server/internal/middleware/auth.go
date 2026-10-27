@@ -8,11 +8,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/taskpolicy"
 )
 
 func uuidToString(u pgtype.UUID) string { return util.UUIDToString(u) }
@@ -56,7 +58,7 @@ func rejectTemporarilyDisabledUser(w http.ResponseWriter, r *http.Request, userI
 // local DB. When nil (Fleet URL unset) mcn_ tokens are rejected at the
 // prefix branch — we don't fall through to the mul_ / JWT paths, since
 // an mcn_ string is by construction not a valid mul_ PAT or JWT.
-func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATVerifier, cfSigner *auth.CloudFrontSigner) func(http.Handler) http.Handler {
+func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATVerifier, cfSigner *auth.CloudFrontSigner, routes ...chi.Routes) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// X-Actor-Source is server-set only — any value supplied by
@@ -82,6 +84,9 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 			// fixed in #4313.
 			r.Header.Del("X-Agent-ID")
 			r.Header.Del("X-Task-ID")
+			r.Header.Del(taskpolicy.HeaderTaskMode)
+			r.Header.Del(taskpolicy.HeaderRequirementID)
+			r.Header.Del(taskpolicy.HeaderChatSessionID)
 
 			tokenString, fromCookie := extractToken(r)
 			if tokenString == "" {
@@ -119,6 +124,20 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 					return
 				}
+				mode, modeErr := taskpolicy.NormalizeMode(tt.Mode)
+				if modeErr != nil || !taskTokenModeScopeValid(tt, mode) {
+					slog.Warn("auth: task token mode or requirement scope is invalid", "path", r.URL.Path, "mode", tt.Mode, "error", modeErr)
+					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
+					return
+				}
+				if mode == taskpolicy.ModePlan && !planTaskRequestAllowed(r, routes) {
+					http.Error(w, `{"error":"plan mode tool is not allowed","code":"plan_mode_tool_denied"}`, http.StatusForbidden)
+					return
+				}
+				if mode == taskpolicy.ModeExecute && !requirementTaskWriteRequestAllowed(r, routes) {
+					http.Error(w, `{"error":"requirement task action is not allowed","code":"requirement_task_action_denied"}`, http.StatusForbidden)
+					return
+				}
 				userID := uuidToString(tt.UserID)
 				if rejectTemporarilyDisabledUser(w, r, userID, "", "task_token") {
 					return
@@ -127,6 +146,13 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				r.Header.Set("X-Agent-ID", uuidToString(tt.AgentID))
 				r.Header.Set("X-Task-ID", uuidToString(tt.TaskID))
 				r.Header.Set("X-Workspace-ID", uuidToString(tt.WorkspaceID))
+				r.Header.Set(taskpolicy.HeaderTaskMode, mode)
+				if tt.RequirementID.Valid {
+					r.Header.Set(taskpolicy.HeaderRequirementID, uuidToString(tt.RequirementID))
+				}
+				if tt.ChatSessionID.Valid {
+					r.Header.Set(taskpolicy.HeaderChatSessionID, uuidToString(tt.ChatSessionID))
+				}
 				// X-Actor-Source flags the auth path so resolveActor and
 				// any owner-only handler can deny without re-querying the
 				// token table. The value "task_token" is the only signal

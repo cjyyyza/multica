@@ -171,6 +171,11 @@ func (h *Handler) GetPopoStatus(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	syncMetrics, err := h.requirementSyncMetrics(r.Context(), wsUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load requirement sync metrics")
+		return
+	}
 	status, err := h.PopoBridge.Status(r.Context(), wsUUID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load popo status")
@@ -191,12 +196,14 @@ func (h *Handler) GetPopoStatus(w http.ResponseWriter, r *http.Request) {
 			UnknownDeliveries: row.UnknownDeliveries,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"configured":       true,
 		"protocol_version": popo.ProtocolVersion,
 		"bridges":          out,
 		"runtime_online":   status.RuntimeOnline,
-	})
+	}
+	mergeRequirementSyncMetrics(response, syncMetrics)
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *Handler) RevokePopoBridge(w http.ResponseWriter, r *http.Request) {
@@ -278,25 +285,33 @@ func (h *Handler) RegisterPopoBridge(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type popoHeartbeatRequest struct {
-	ProtocolVersion int                `json:"protocol_version"`
-	Robots          []popo.RobotReport `json:"robots"`
-}
-
 func (h *Handler) PopoBridgeHeartbeat(w http.ResponseWriter, r *http.Request) {
 	bridge, ok := h.popoBridgeFromRequest(w, r)
 	if !ok {
 		return
 	}
-	var body popoHeartbeatRequest
+	var body popo.HeartbeatRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		if errors.Is(err, popo.ErrInvalidProtocolVersions) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": err.Error(), "code": "UNSUPPORTED_OPTIONAL_FIELD", "field": "supported_protocol_versions",
+			})
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+		}
 		return
 	}
-	if _, err := h.PopoBridge.Heartbeat(r.Context(), bridge.ID, body.ProtocolVersion, body.Robots); err != nil {
+	result, err := h.PopoBridge.Heartbeat(r.Context(), bridge.ID, body)
+	if err != nil {
 		switch {
 		case errors.Is(err, popo.ErrUnknownProtocol):
 			writeError(w, http.StatusBadRequest, "unknown protocol version")
+		case errors.Is(err, popo.ErrInvalidProtocolVersions):
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": err.Error(), "code": "UNSUPPORTED_OPTIONAL_FIELD", "field": "supported_protocol_versions",
+			})
+		case errors.Is(err, popo.ErrInvalidProtocolHealth):
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "code": "INVALID_PROTOCOL_HEALTH"})
 		case errors.Is(err, popo.ErrBridgeRevoked):
 			writeError(w, http.StatusUnauthorized, "invalid or revoked bridge token")
 		default:
@@ -304,7 +319,17 @@ func (h *Handler) PopoBridgeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "revoked": false})
+	response := map[string]any{"ok": true, "revoked": false, "selected_protocol_version": result.Bridge.SelectedProtocolVersion}
+	if result.Bridge.SelectedProtocolVersion == 2 {
+		response["negotiated_protocol_version"] = 2
+		response["pending"] = result.Health.Pending
+		response["unknown"] = result.Health.Unknown
+		response["quarantine"] = result.Health.Quarantine
+		response["receipt_pending"] = result.Health.ReceiptPending
+		response["v2_pending"] = result.Health.V2Pending
+		response["binary_downgrade_safe"] = result.Health.BinaryDowngradeSafe
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *Handler) IngestPopoBridgeInbound(w http.ResponseWriter, r *http.Request) {
@@ -322,13 +347,17 @@ func (h *Handler) IngestPopoBridgeInbound(w http.ResponseWriter, r *http.Request
 		switch {
 		case errors.Is(err, popo.ErrUnknownProtocol):
 			writeError(w, http.StatusBadRequest, "unknown protocol version")
-		case errors.Is(err, popo.ErrMissingEventID), errors.Is(err, popo.ErrMissingSender), errors.Is(err, popo.ErrMissingChat):
+		case errors.Is(err, popo.ErrMissingEventID), errors.Is(err, popo.ErrMissingSender), errors.Is(err, popo.ErrMissingChat), errors.Is(err, popo.ErrInvalidInboundPayloadHash):
 			writeError(w, http.StatusBadRequest, err.Error())
 		case errors.Is(err, popo.ErrInstallationWrong):
 			writeError(w, http.StatusNotFound, "popo installation not found")
 		default:
 			writeError(w, http.StatusInternalServerError, "failed to ingest popo event")
 		}
+		return
+	}
+	if decision.Code != "" && !decision.Accepted {
+		writePopoInboundConflict(w, decision)
 		return
 	}
 	if !decision.Accepted {
@@ -341,6 +370,10 @@ func (h *Handler) IngestPopoBridgeInbound(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+	if decision.Code != "" {
+		writePopoInboundConflict(w, decision)
+		return
+	}
 	out := map[string]any{"accepted": true}
 	if decision.Duplicate {
 		out["duplicate"] = true
@@ -348,9 +381,43 @@ func (h *Handler) IngestPopoBridgeInbound(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, out)
 }
 
+func writePopoInboundConflict(w http.ResponseWriter, decision popo.InboundDecision) {
+	out := map[string]any{"accepted": decision.Accepted, "code": decision.Code}
+	if decision.PayloadHash != "" {
+		out["payload_hash"] = decision.PayloadHash
+	}
+	if decision.Duplicate {
+		out["duplicate"] = true
+	}
+	writeJSON(w, http.StatusConflict, out)
+}
+
 func (h *Handler) ListPopoBridgeCommands(w http.ResponseWriter, r *http.Request) {
 	bridge, ok := h.popoBridgeFromRequest(w, r)
 	if !ok {
+		return
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("protocol_version")); raw != "" {
+		version, err := strconv.Atoi(raw)
+		if err != nil || version != popo.ProtocolVersion {
+			writeError(w, http.StatusBadRequest, "unknown protocol version")
+			return
+		}
+	}
+	var declared *[]int
+	if raw, present := r.URL.Query()["supported_protocol_versions"]; present {
+		versions, err := popo.ParseProtocolVersionCSV(strings.Join(raw, ","))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": err.Error(), "code": "UNSUPPORTED_OPTIONAL_FIELD", "field": "supported_protocol_versions",
+			})
+			return
+		}
+		declared = &versions
+	}
+	bridge, err := h.PopoBridge.SelectBridgeProtocol(r.Context(), bridge.ID, declared)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to select bridge protocol")
 		return
 	}
 	wait := popo.DefaultCommandWait
@@ -365,7 +432,12 @@ func (h *Handler) ListPopoBridgeCommands(w http.ResponseWriter, r *http.Request)
 			wait = popo.MaxCommandWait
 		}
 	}
-	rows, err := h.PopoBridge.LeaseCommands(r.Context(), bridge.ID, wait)
+	rows := []db.PopoBridgeCommand{}
+	if wait <= 0 {
+		rows, err = h.PopoBridge.LeaseCommands(r.Context(), bridge.ID, 0)
+	} else {
+		rows, err = h.PopoBridge.LeaseCommands(r.Context(), bridge.ID, wait)
+	}
 	if err != nil {
 		if errors.Is(err, r.Context().Err()) {
 			return
@@ -373,7 +445,7 @@ func (h *Handler) ListPopoBridgeCommands(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to list commands")
 		return
 	}
-	commands := make([]map[string]any, 0, len(rows))
+	commands := make([]any, 0, len(rows))
 	for _, row := range rows {
 		payload := json.RawMessage(row.Payload)
 		if len(payload) == 0 {
@@ -383,16 +455,11 @@ func (h *Handler) ListPopoBridgeCommands(w http.ResponseWriter, r *http.Request)
 			"id":          uuidToString(row.ID),
 			"type":        row.Type,
 			"delivery_id": uuidToString(row.DeliveryID),
+			"attempt":     row.Attempt,
 			"payload":     payload,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"commands": commands})
-}
-
-type popoCommandReceiptRequest struct {
-	Status          string `json:"status"`
-	RemoteMessageID string `json:"remote_message_id"`
-	Error           string `json:"error"`
+	writeJSON(w, http.StatusOK, map[string]any{"commands": commands, "selected_protocol_version": bridge.SelectedProtocolVersion})
 }
 
 func (h *Handler) AuthorizePopoBridgeCommand(w http.ResponseWriter, r *http.Request) {
@@ -402,6 +469,18 @@ func (h *Handler) AuthorizePopoBridgeCommand(w http.ResponseWriter, r *http.Requ
 	}
 	id, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "command id")
 	if !ok {
+		return
+	}
+	var body struct {
+		ProtocolVersion int `json:"protocol_version"`
+	}
+	decodeErr := json.NewDecoder(r.Body).Decode(&body)
+	if decodeErr != nil && decodeErr != io.EOF {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.ProtocolVersion != 0 && body.ProtocolVersion != popo.ProtocolVersion {
+		writeError(w, http.StatusBadRequest, "unknown protocol version")
 		return
 	}
 	allowed, err := h.PopoBridge.CanDeliver(r.Context(), id, bridge.ID)
@@ -421,16 +500,20 @@ func (h *Handler) AckPopoBridgeCommand(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var body popoCommandReceiptRequest
+	var body popo.CommandReceipt
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if _, err := h.PopoBridge.RecordReceipt(r.Context(), commandUUID, bridge.ID, popo.CommandReceipt{
-		Status:          body.Status,
-		RemoteMessageID: body.RemoteMessageID,
-		Error:           body.Error,
-	}); err != nil {
+	if body.ProtocolVersion != 0 && body.ProtocolVersion != popo.ProtocolVersion {
+		writeError(w, http.StatusBadRequest, "unknown protocol version")
+		return
+	}
+	if body.CommandID != "" && body.CommandID != uuidToString(commandUUID) {
+		writeError(w, http.StatusConflict, "command receipt conflicts with a previous result")
+		return
+	}
+	if _, err := h.PopoBridge.RecordReceipt(r.Context(), commandUUID, bridge.ID, body); err != nil {
 		switch {
 		case errors.Is(err, popo.ErrInvalidReceipt):
 			writeError(w, http.StatusBadRequest, "invalid command receipt")

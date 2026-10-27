@@ -118,6 +118,36 @@ func TestYixiezuoBridgeReportsOnlyClaimedOperation(t *testing.T) {
 		t.Fatalf("processed=%v receipts=%d err=%v", processed, receipts, err)
 	}
 }
+func TestYixiezuoBridgeSkipsBlockedWrite(t *testing.T) {
+	source, _ := yixiezuo.ParseSource("https://dj01.pm.netease.com/issues/7")
+	completions := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/workspaces/ws/yixiezuo/bridge/claim":
+			json.NewEncoder(w).Encode(map[string]any{"operation": yixiezuo.Operation{
+				ID: "op", Kind: "publish", LeaseToken: "lease", WriteBlocked: true,
+				Payload: yixiezuo.OperationPayload{Source: source},
+			}})
+		case "/api/workspaces/ws/yixiezuo/operations/op/complete":
+			completions++
+			json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		default:
+			t.Errorf("unexpected route %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	client := cli.NewAPIClient(srv.URL, "ws", "test")
+	driver := yixiezuo.NewExecDriver(yixiezuo.ExecOptions{Bin: "fake", Run: func(_ context.Context, _ string, _ []string) ([]byte, error) {
+		t.Fatal("blocked write reached driver")
+		return nil, nil
+	}})
+	processed, err := processYixiezuoRequest(context.Background(), client, driver)
+	if err != nil || !processed || completions != 0 {
+		t.Fatalf("processed=%v completions=%d err=%v", processed, completions, err)
+	}
+}
+
 func writeYixiezuoFakeCLI(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

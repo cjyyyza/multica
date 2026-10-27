@@ -143,6 +143,9 @@ func processYixiezuoRequest(ctx context.Context, client *cli.APIClient, driver *
 	if claim.Operation == nil {
 		return false, nil
 	}
+	if claim.Operation.WriteBlocked {
+		return true, nil
+	}
 	completion := driver.Execute(ctx, *claim.Operation)
 	if completion.State == "succeeded" && claim.Operation.Kind == "preview" {
 		if err := mirrorYixiezuoAttachments(ctx, client, driver, completion.Snapshot, yixiezuoDownloadClient()); err != nil {

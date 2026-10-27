@@ -394,6 +394,9 @@ type AgentTaskResponse struct {
 	AgentID              string                 `json:"agent_id"`
 	RuntimeID            string                 `json:"runtime_id"`
 	IssueID              string                 `json:"issue_id"`
+	Mode                 string                 `json:"mode,omitempty"`
+	RequirementID        string                 `json:"requirement_id,omitempty"`
+	PlanPermission       string                 `json:"plan_permission,omitempty"`
 	WorkspaceID          string                 `json:"workspace_id"`
 	WorkspaceSlug        string                 `json:"workspace_slug,omitempty"`
 	IssueIdentifier      string                 `json:"issue_identifier,omitempty"`
@@ -875,6 +878,8 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 		AgentID:                uuidToString(t.AgentID),
 		RuntimeID:              uuidToString(t.RuntimeID),
 		IssueID:                uuidToString(t.IssueID),
+		Mode:                   t.Mode,
+		RequirementID:          uuidToString(t.RequirementID),
 		WorkspaceID:            workspaceID,
 		Status:                 t.Status,
 		Priority:               t.Priority,

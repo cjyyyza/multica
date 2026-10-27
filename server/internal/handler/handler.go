@@ -395,8 +395,9 @@ type Handler struct {
 	PopoBindingTokens *popo.BindingTokenService
 	// PopoBridge owns pairing, Windows-bridge tokens, inbound persist,
 	// and the send-command queue. Nil unless POPO is configured.
-	PopoBridge   *popo.BridgeService
-	PopoOutbound *popo.Outbound
+	PopoBridge            *popo.BridgeService
+	PopoOutbound          *popo.Outbound
+	PopoRequirementOutbox *popo.RequirementOutboxWorker
 
 	// channelFileDelivery names the channel types that can, IN THIS
 	// DEPLOYMENT, carry a file the agent produced the last hop into the
