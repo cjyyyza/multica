@@ -100,7 +100,11 @@ func (d *ExecDriver) ReadSnapshot(ctx context.Context, source Source) (Snapshot,
 		if !numericID.MatchString(attachmentID) || name == "" {
 			return Snapshot{}, fmt.Errorf("source attachment is missing its ID or filename")
 		}
-		snapshot.Attachments = append(snapshot.Attachments, Attachment{ID: attachmentID, Name: name, URL: "https://" + source.Host + "/attachments/" + attachmentID + "/" + url.PathEscape(name)})
+		contentType := rawString(row, "content_type")
+		if contentType == "" {
+			contentType = rawString(row, "mime_type")
+		}
+		snapshot.Attachments = append(snapshot.Attachments, Attachment{ID: attachmentID, Name: name, URL: "https://" + source.Host + "/attachments/" + attachmentID + "/" + url.PathEscape(name), ContentType: contentType})
 	}
 	// Inline screenshots are not included in get_issue_attachments on GCP.
 	seen := map[string]bool{}
@@ -230,6 +234,9 @@ func (d *ExecDriver) AttachmentDownloadURL(ctx context.Context, id string) (stri
 }
 
 func (d *ExecDriver) Execute(ctx context.Context, op Operation) Completion {
+	if op.Kind == "draft" {
+		return d.createDraft(ctx, op)
+	}
 	done := Completion{LeaseToken: op.LeaseToken, State: "failed"}
 	source, err := ParseSource(op.Payload.Source.URL)
 	if err != nil || source != op.Payload.Source {
@@ -238,8 +245,15 @@ func (d *ExecDriver) Execute(ctx context.Context, op Operation) Completion {
 	}
 	before, err := d.ReadSnapshot(ctx, source)
 	if err != nil {
+		if op.Kind == "reconcile" {
+			done.State = "unknown"
+			done.TargetState = "needs_reconcile"
+		}
 		done.Error = err.Error()
 		return done
+	}
+	if op.Kind == "reconcile" {
+		return reconcilePublication(op, before)
 	}
 	if op.Kind == "preview" || op.Kind == "refresh" {
 		done.State = "succeeded"
@@ -320,5 +334,43 @@ func (d *ExecDriver) Execute(ctx context.Context, op Operation) Completion {
 	}
 	done.State = "succeeded"
 	done.Snapshot = &after
+	return done
+}
+
+func reconcilePublication(op Operation, before Snapshot) Completion {
+	done := Completion{LeaseToken: op.LeaseToken, State: "succeeded", Snapshot: &before}
+	targetID := strings.TrimSpace(op.Payload.TargetOperationID)
+	if targetID == "" {
+		done.State = "failed"
+		done.TargetState = "needs_reconcile"
+		done.Error = "Reconcile target operation is missing"
+		return done
+	}
+	marker := "[Multica result " + targetID + "]"
+	markerFound := false
+	for _, comment := range before.Comments {
+		if strings.Contains(comment.Content, marker) {
+			markerFound = true
+			break
+		}
+	}
+	if markerFound {
+		if op.Payload.StatusName == "" || before.Status == op.Payload.StatusName {
+			done.TargetState = "succeeded"
+			return done
+		}
+		done.State = "unknown"
+		done.TargetState = "needs_reconcile"
+		done.Error = "Readback found the publication marker but not the requested status"
+		return done
+	}
+	if before.Digest == op.Payload.ExpectedDigest {
+		done.TargetState = "failed"
+		done.Error = "Readback confirmed the original operation was not applied"
+		return done
+	}
+	done.State = "unknown"
+	done.TargetState = "needs_reconcile"
+	done.Error = "Readback cannot determine whether the original operation was applied"
 	return done
 }
