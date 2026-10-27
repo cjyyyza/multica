@@ -127,15 +127,15 @@ describe("useRealtimeSync — ws instance change", () => {
     rerender({ ws: ws2 });
 
     // Should have called invalidateQueries for all workspace-scoped keys
-    // (17 workspace-scoped [incl. property definitions and workflows] + 6
+    // (18 workspace-scoped [incl. requirements, property definitions and workflows] + 6
     // per-issue prefixes + the workspace working-agents projection + 5
     // per-chat prefixes + 1 workspaceKeys.list() + 1 cross-workspace inbox
-    // unread summary = 32 calls).
+    // unread summary = 33 calls).
     //
     // Awaited rather than counted synchronously: the inbox unread summary
     // refresh cancels any in-flight request before invalidating (see
     // onInboxSummaryInvalidate), so that one lands after the synchronous ones.
-    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(32));
+    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(33));
   });
 
   it("does not re-invalidate when rerendered with the same ws instance", () => {
@@ -152,7 +152,7 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
-  it("invalidates chat, pins, labels, and invitations queries on ws instance change", () => {
+  it("invalidates chat, requirements, pins, labels, and invitations queries on ws instance change", () => {
     const ws1 = createMockWs();
     const { rerender } = renderHook(
       ({ ws }) => useRealtimeSync(ws, stores),
@@ -167,6 +167,7 @@ describe("useRealtimeSync — ws instance change", () => {
 
     const calls = invalidateSpy.mock.calls.map((call: [{ queryKey?: unknown }, ...unknown[]]) => call[0].queryKey);
     expect(calls).toContainEqual(["chat", "ws-1"]);
+    expect(calls).toContainEqual(["requirements", "ws-1"]);
     expect(calls).toContainEqual(["labels", "ws-1"]);
     expect(calls).toContainEqual(["workspaces", "ws-1", "invitations"]);
     // A catalog edit made while this client was disconnected is otherwise

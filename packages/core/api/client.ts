@@ -1,4 +1,24 @@
 import { YixiezuoOperationSchema, YixiezuoImportEnvelopeSchema, YixiezuoImportStatesSchema, type YixiezuoOperation, type YixiezuoImport, type YixiezuoImportState } from "../yixiezuo/schemas";
+import {
+  RequirementApproveResponseSchema,
+  RequirementDetailSchema,
+  RequirementOpenResponseSchema,
+  type RequirementApproveResponse,
+  type RequirementDetail,
+  type RequirementOpenResponse,
+} from "../requirements/schemas";
+import type {
+  AcceptRequirementRequest,
+  ApproveRequirementRequest,
+  CancelRequirementRequest,
+  CreateRequirementRequest,
+  OpenRequirementRequest,
+  ReconcileRequirementRequest,
+  RejectRequirementRequest,
+  RequirementMutationInput,
+  SubmitRequirementCandidateRequest,
+  UpdateRequirementParticipantsRequest,
+} from "../requirements/types";
 import type { ZodType } from "zod";
 import type { IssueWakeup, IssueWakeupInput, IssueWakeupSummaryRow, PausedWakeup, SystemWakeup, WakeupRun, WorkspaceSystemWakeup } from "../types/issue-wakeup";
 import type { WorkspaceWakeupPage, WorkspaceWakeupFilters } from "../types/issue-wakeup";
@@ -582,6 +602,12 @@ export interface LoginResponse {
 }
 
 function parseSearchIndexResponse<T>(raw: unknown, schema: ZodType, endpoint: string): T {
+  const parsed = parseWithFallback<T | null>(raw, schema, null, { endpoint });
+  if (parsed === null) throw new Error(`Malformed response from ${endpoint}`);
+  return parsed;
+}
+
+function parseRequirementResponse<T>(raw: unknown, schema: ZodType, endpoint: string): T {
   const parsed = parseWithFallback<T | null>(raw, schema, null, { endpoint });
   if (parsed === null) throw new Error(`Malformed response from ${endpoint}`);
   return parsed;
@@ -5511,6 +5537,167 @@ export class ApiClient {
     );
   }
 
+  private requirementPath(wsId: string, requirementId?: string): string {
+    const base = `/api/workspaces/${encodeURIComponent(wsId)}/requirements`;
+    return requirementId === undefined
+      ? base
+      : `${base}/${encodeURIComponent(requirementId)}`;
+  }
+
+  private async requirementPost<Response>(
+    endpoint: string,
+    input: { idempotencyKey: string },
+    schema: ZodType,
+  ): Promise<Response> {
+    const { idempotencyKey, ...body } = input;
+    if (!idempotencyKey.trim()) {
+      throw new Error("A non-empty Idempotency-Key is required");
+    }
+    const raw = await this.fetch<unknown>(endpoint, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(body),
+    });
+    return parseRequirementResponse<Response>(raw, schema, endpoint);
+  }
+
+  async createRequirement(
+    wsId: string,
+    input: RequirementMutationInput<CreateRequirementRequest>,
+  ): Promise<RequirementDetail> {
+    return this.requirementPost<RequirementDetail>(
+      this.requirementPath(wsId),
+      input,
+      RequirementDetailSchema,
+    );
+  }
+
+  async getRequirement(wsId: string, requirementId: string): Promise<RequirementDetail> {
+    const endpoint = this.requirementPath(wsId, requirementId);
+    const raw = await this.fetch<unknown>(endpoint);
+    return parseRequirementResponse<RequirementDetail>(raw, RequirementDetailSchema, endpoint);
+  }
+
+  async getRequirementByChat(
+    wsId: string,
+    chatSessionId: string,
+  ): Promise<RequirementDetail | null> {
+    const search = new URLSearchParams({ chat_session_id: chatSessionId });
+    const endpoint = `${this.requirementPath(wsId)}?${search.toString()}`;
+    let raw: unknown;
+    try {
+      raw = await this.fetch<unknown>(endpoint);
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 404 || error.status === 403)) {
+        return null;
+      }
+      throw error;
+    }
+    const parsed = parseWithFallback<RequirementDetail | null | undefined>(
+      raw,
+      RequirementDetailSchema.nullable(),
+      undefined,
+      { endpoint },
+    );
+    if (parsed === undefined) throw new Error(`Malformed response from ${endpoint}`);
+    return parsed;
+  }
+
+  async updateRequirementParticipants(
+    wsId: string,
+    requirementId: string,
+    input: RequirementMutationInput<UpdateRequirementParticipantsRequest>,
+  ): Promise<RequirementDetail> {
+    return this.requirementPost<RequirementDetail>(
+      `${this.requirementPath(wsId, requirementId)}/participants`,
+      input,
+      RequirementDetailSchema,
+    );
+  }
+
+  async openRequirement(
+    wsId: string,
+    requirementId: string,
+    input: RequirementMutationInput<OpenRequirementRequest>,
+  ): Promise<RequirementOpenResponse> {
+    return this.requirementPost<RequirementOpenResponse>(
+      `${this.requirementPath(wsId, requirementId)}/open`,
+      input,
+      RequirementOpenResponseSchema,
+    );
+  }
+
+  async submitRequirementCandidate(
+    wsId: string,
+    requirementId: string,
+    input: RequirementMutationInput<SubmitRequirementCandidateRequest>,
+  ): Promise<RequirementDetail> {
+    return this.requirementPost<RequirementDetail>(
+      `${this.requirementPath(wsId, requirementId)}/candidates`,
+      input,
+      RequirementDetailSchema,
+    );
+  }
+
+  async approveRequirement(
+    wsId: string,
+    requirementId: string,
+    input: RequirementMutationInput<ApproveRequirementRequest>,
+  ): Promise<RequirementApproveResponse> {
+    return this.requirementPost<RequirementApproveResponse>(
+      `${this.requirementPath(wsId, requirementId)}/approve`,
+      input,
+      RequirementApproveResponseSchema,
+    );
+  }
+
+  async acceptRequirement(
+    wsId: string,
+    requirementId: string,
+    input: RequirementMutationInput<AcceptRequirementRequest>,
+  ): Promise<RequirementDetail> {
+    return this.requirementPost<RequirementDetail>(
+      `${this.requirementPath(wsId, requirementId)}/accept`,
+      input,
+      RequirementDetailSchema,
+    );
+  }
+
+  async rejectRequirement(
+    wsId: string,
+    requirementId: string,
+    input: RequirementMutationInput<RejectRequirementRequest>,
+  ): Promise<RequirementDetail> {
+    return this.requirementPost<RequirementDetail>(
+      `${this.requirementPath(wsId, requirementId)}/reject`,
+      input,
+      RequirementDetailSchema,
+    );
+  }
+
+  async cancelRequirement(
+    wsId: string,
+    requirementId: string,
+    input: RequirementMutationInput<CancelRequirementRequest>,
+  ): Promise<RequirementDetail> {
+    return this.requirementPost<RequirementDetail>(
+      `${this.requirementPath(wsId, requirementId)}/cancel`,
+      input,
+      RequirementDetailSchema,
+    );
+  }
+
+  async reconcileRequirement(
+    wsId: string,
+    requirementId: string,
+    input: RequirementMutationInput<ReconcileRequirementRequest>,
+  ): Promise<RequirementDetail> {
+    return this.requirementPost<RequirementDetail>(
+      `${this.requirementPath(wsId, requirementId)}/reconcile`,
+      input,
+      RequirementDetailSchema,
+    );
+  }
 
   async previewYixiezuoIssue(wsId: string, url: string): Promise<YixiezuoOperation> {
     return this.yixiezuoOperationRequest(wsId, "/preview", { url });
@@ -5635,6 +5822,20 @@ export class ApiClient {
   async deletePopoInstallation(workspaceId: string, installationId: string): Promise<void> {
     await this.fetch(`/api/workspaces/${workspaceId}/popo/installations/${installationId}`, {
       method: "DELETE",
+    });
+  }
+
+  async setPopoRequirementIntake(
+    workspaceId: string,
+    installationId: string,
+    templateUrl: string,
+  ): Promise<PopoInstallation> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/popo/installations/${encodeURIComponent(installationId)}/requirement-intake`,
+      { method: "PATCH", body: JSON.stringify({ template_url: templateUrl }) },
+    );
+    return parseWithFallback(raw, PopoInstallationSchema, EMPTY_POPO_INSTALLATION, {
+      endpoint: "PATCH /api/workspaces/:id/popo/installations/:installationId/requirement-intake",
     });
   }
 

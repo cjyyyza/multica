@@ -10,7 +10,7 @@ export const YixiezuoSnapshotSchema = z.object({
   updated_at: z.string().default(""),
   lock_version: z.number().nullable().optional().default(null),
   digest: z.string().min(1),
-  attachments: z.array(z.object({ id: z.string(), name: z.string(), url: link, local_id: z.string().optional(), local_url: link.optional() })).default([]),
+  attachments: z.array(z.object({ id: z.string(), name: z.string(), url: link, local_id: z.string().optional(), local_url: link.or(z.string().startsWith("/uploads/")).optional(), content_type: z.string().optional() })).default([]),
   comments: z.array(z.object({ id: z.string(), author: z.string().default(""), content: z.string(), created_at: z.string().default("") })).default([]),
   statuses: z.array(z.object({ id: z.number(), name: z.string() })).default([]),
   warnings: z.array(z.string()).default([]),
@@ -19,10 +19,13 @@ export const YixiezuoSnapshotSchema = z.object({
 
 export const YixiezuoOperationSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(["preview", "refresh", "publish", "review"]).catch("preview"),
-  state: z.enum(["pending", "running", "succeeded", "failed", "conflict", "unknown"]).catch("unknown"),
+  kind: z.enum(["preview", "refresh", "publish", "review", "reconcile", "draft"]).catch("preview"),
+  state: z.enum(["pending", "running", "succeeded", "failed", "conflict", "unknown", "needs_reconcile"]).catch("unknown"),
   snapshot: YixiezuoSnapshotSchema.nullable().optional().default(null),
   error: z.string().default(""),
+  requirement_id: z.string().optional(),
+  target_operation_id: z.string().optional(),
+  request_hash: z.string().optional(),
 });
 
 export const YixiezuoImportSchema = z.object({

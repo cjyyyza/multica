@@ -170,6 +170,28 @@ describe("ChatSessionSchema", () => {
     })).toEqual(EMPTY_CHAT_SESSION);
   });
 
+  it("keeps the Requirement link's tri-state contract", () => {
+    // Missing key = server predates the projection; the client probes the
+    // legacy endpoint rather than assuming the Chat is unbound.
+    expect(ChatSessionSchema.parse(baseSession).requirement_id).toBeUndefined();
+    // Explicit null = current server, definitely unbound: no probe.
+    expect(
+      ChatSessionSchema.parse({ ...baseSession, requirement_id: null }).requirement_id,
+    ).toBeNull();
+    expect(
+      ChatSessionSchema.parse({ ...baseSession, requirement_id: "requirement-1" }).requirement_id,
+    ).toBe("requirement-1");
+  });
+
+  it("degrades a malformed Requirement link to the missing-key signal", () => {
+    // A malformed additive field must not drop the Chat from the list; falling
+    // back to `undefined` keeps the legacy probe, which is safe in either
+    // server generation.
+    const parsed = ChatSessionSchema.parse({ ...baseSession, requirement_id: 42 });
+    expect(parsed.requirement_id).toBeUndefined();
+    expect(parsed.id).toBe("chat-1");
+  });
+
   it("drops one malformed list item without hiding the other Chats", () => {
     const parsed = ChatSessionListSchema.parse([
       baseSession,
@@ -2106,8 +2128,15 @@ describe("POPO installation schemas", () => {
     expect(parsed.robot_id).toBe("");
     expect(parsed.bridge_id).toBe("");
     expect(parsed.webhook_url).toBe("");
+    expect(parsed.requirement_template_url).toBe("");
     const list = ListPopoInstallationsResponseSchema.parse({});
     expect(list).toEqual({ installations: [], configured: false });
+  });
+
+  it("rejects malformed requirement entry configuration without claiming a saved installation", () => {
+    expect(PopoInstallationSchema.safeParse({ id: "i1", requirement_template_url: 42 }).success).toBe(false);
+    expect(PopoInstallationSchema.parse({ id: "i1", requirement_template_url: "https://dj01.pm.netease.com/issues/108402" }).requirement_template_url)
+      .toBe("https://dj01.pm.netease.com/issues/108402");
   });
 
   it("falls back safely for malformed list, install, and redeem responses", () => {
@@ -2225,6 +2254,22 @@ describe("POPO status schemas", () => {
           unknown_deliveries: 1,
         },
       ],
+      requirement_operations: {
+        pending: 2,
+        unknown: 1,
+        needs_reconcile: 3,
+        oldest_pending_seconds: 11,
+        oldest_unknown_seconds: 12,
+        oldest_needs_reconcile_seconds: 13,
+      },
+      requirement_deliveries: {
+        pending: 4,
+        unknown: 2,
+        needs_reconcile: 1,
+        oldest_pending_seconds: 21,
+        oldest_unknown_seconds: 22,
+        oldest_needs_reconcile_seconds: 23,
+      },
     });
     expect(parsed.runtime_online).toBe(false);
     expect(parsed.bridges[0]?.online).toBe(true);
@@ -2232,6 +2277,8 @@ describe("POPO status schemas", () => {
     expect(parsed.bridges[0]?.inbound_backlog).toBe(2);
     expect(parsed.bridges[0]?.outbound_backlog).toBe(4);
     expect(parsed.bridges[0]?.unknown_deliveries).toBe(1);
+    expect(parsed.requirement_operations).toMatchObject({ pending: 2, unknown: 1, needs_reconcile: 3, oldest_needs_reconcile_seconds: 13 });
+    expect(parsed.requirement_deliveries).toMatchObject({ pending: 4, unknown: 2, needs_reconcile: 1, oldest_pending_seconds: 21 });
     expect(parsed).not.toHaveProperty("healthy");
   });
 
@@ -2247,6 +2294,8 @@ describe("POPO status schemas", () => {
     expect(parsed.bridges[0]?.inbound_backlog).toBe(0);
     expect(parsed.bridges[0]?.outbound_backlog).toBe(0);
     expect(parsed.bridges[0]?.unknown_deliveries).toBe(0);
+    expect(parsed.requirement_operations).toMatchObject({ pending: 0, unknown: 0, needs_reconcile: 0, oldest_pending_seconds: 0 });
+    expect(parsed.requirement_deliveries).toMatchObject({ pending: 0, unknown: 0, needs_reconcile: 0, oldest_pending_seconds: 0 });
   });
 
   it("falls back safely for a malformed status response", () => {
