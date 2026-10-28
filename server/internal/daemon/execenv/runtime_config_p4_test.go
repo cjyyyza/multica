@@ -132,6 +132,8 @@ func TestP4WorkspaceSectionNamesTheClientAndItsRules(t *testing.T) {
 		"never clear the read-only bit",
 		// The task changelist is implicit, and discoverable.
 		"multica p4 status",
+		"multica p4 opened -F \"%depotFile% %change%\"",
+		"do not run `p4 opened -a`",
 		// The three hard prohibitions.
 		"Never sync, never submit, and never touch a changelist other than this task's",
 		"Do not use raw `p4` to write",

@@ -143,6 +143,8 @@ multica p4 status --output json
 
 `checkout` is an alias of `edit`. `multica p4 add` still adds a depot to the workspace registry; `add-files` is `p4 add`. Other verbs: `delete`, `revert`, `opened`, `reconcile` (`rec`), `move --dest`, `reopen --changelist`, `describe`. Exclusive-lock (`+l`) files must be edited before they can be written.
 
+`opened` lists only this task's changelist. `multica p4 opened -F "%depotFile% %change%"` prints each file's depot path and changelist; `%change%` is the number or `default`, matching `p4 -ztag`, not the words `change N` from plain `p4 opened`. The flag may also precede the verb. `--output json` returns the same rows as `files`. Other p4 options are not forwarded, so `-a`, `-c`, and `-x` stay rejected.
+
 `multica p4 submit` submits only this task's changelist and requires `allow_submit` from a human workspace administrator. Machine credentials cannot edit workspace depot settings. Before submitting, the daemon re-reads the pending client, owner, task marker and `refs #` ticket, reverts unchanged files, rejects an empty changelist, and deletes the whole shelf. Whole-shelf deletion preserves the associated Swarm review's files and link; Multica does not approve or archive it. Turning the switch off cannot undo a submission. `multica p4 unshelve` restores only this task's own shelf and requires `allow_unshelve`.
 
 ## Helix Swarm

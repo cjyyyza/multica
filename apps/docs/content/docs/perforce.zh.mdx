@@ -143,6 +143,8 @@ multica p4 status --output json
 
 `checkout` 是 `edit` 的别名。`multica p4 add` 仍然是往工作区登记 depot；新增文件用 `add-files`（即 `p4 add`）。其他命令：`delete`、`revert`、`opened`、`reconcile`（`rec`）、`move --dest`、`reopen --changelist`、`describe`。独占锁定（`+l`）的文件必须先 edit 才能写。
 
+`opened` 只列出这条任务的 changelist。`multica p4 opened -F "%depotFile% %change%"` 打印每个文件的 depot 路径和 changelist 号；`%change%` 是数字或 `default`，和 `p4 -ztag` 一致，不是原生 `p4 opened` 文本里的 `change N`。这个 flag 也可以写在动词前面。`--output json` 的 `files` 是同一批记录。其他 p4 选项不会透传，`-a`、`-c`、`-x` 仍会被拒绝。
+
 `multica p4 submit` 只提交本次任务的 changelist，需要人类工作区管理员授予 `allow_submit`；机器凭证不能修改工作区 depot 设置。提交前会回读并核对 client、user、任务标记和 `refs #`，退回未改动文件，拒绝空 CL，再删除整份 shelf 后提交。整份 shelf 删除会保留关联 Swarm review 的文件与链接，不会自动批准或归档 review。关闭开关不能撤回已提交的修改。`multica p4 unshelve` 只恢复本次任务自己的 shelf，需要 `allow_unshelve`。
 
 ## Helix Swarm

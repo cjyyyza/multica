@@ -128,6 +128,25 @@ func init() {
 		p4Cmd.AddCommand(cmd)
 	}
 	p4Cmd.AddCommand(p4SwarmCmd)
+
+	// -F is a presentation flag, not a p4 passthrough. Persistent so both
+	// `p4 -F ... opened` and `p4 opened -F ...` parse; only opened and status honor it.
+	p4Cmd.PersistentFlags().StringVarP(&p4Format, "format", "F", "", "Format this task's opened files with p4 -ztag field names (depotFile, clientFile, action, change, type, client). Not passed through to p4")
+	p4Cmd.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
+		return rejectP4FormatFor(cmd.Name(), cmd)
+	}
+	setP4FlagError(p4Cmd)
+}
+
+func explainP4FlagError(_ *cobra.Command, err error) error {
+	return fmt.Errorf("%w\nmultica p4 does not pass options through to p4. List this task's opens with `multica p4 opened -F \"%%depotFile%% %%change%%\"` or `multica p4 opened --output json`", err)
+}
+
+func setP4FlagError(cmd *cobra.Command) {
+	cmd.SetFlagErrorFunc(explainP4FlagError)
+	for _, child := range cmd.Commands() {
+		setP4FlagError(child)
+	}
 }
 
 type p4WorkspaceResponse struct {
@@ -373,4 +392,5 @@ func resetP4Flags() {
 	p4Force = false
 	p4NoShelve = false
 	p4Reviewers = nil
+	p4Format = ""
 }

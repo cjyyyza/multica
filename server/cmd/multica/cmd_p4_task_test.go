@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,147 @@ import (
 
 	"github.com/spf13/cobra"
 )
+
+func TestP4OpenedFormatPrintsDepotAndChange(t *testing.T) {
+	payload := `{"action":"opened","client":"alice_DEV","path":"E:\\DJ","changelist":"1001","output":"//depot/A.cpp#edit\n//depot/B.cpp#add","files":[{"depot_file":"//depot/A.cpp","client_file":"E:\\DJ\\A.cpp","action":"edit","change":"1001","type":"text"},{"depot_file":"//depot/B.cpp","action":"add","change":"1001","type":"text"}]}`
+	for _, args := range [][]string{
+		{"-F", "%depotFile% %change%", "opened"},
+		{"opened", "-F", "%depotFile% %change%"},
+		{"opened", "--format", "%depotFile% %change%"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			body := runP4OpenedAgainst(t, args, payload)
+			if body["action"] != "opened" {
+				t.Fatalf("daemon action = %v", body["action"])
+			}
+			if _, ok := body["format"]; ok {
+				t.Fatalf("format was forwarded to the daemon: %+v", body)
+			}
+		})
+	}
+}
+
+func TestP4OpenedFormatDoesNotDumpJSONAndRejectsRawFlags(t *testing.T) {
+	out, err := runP4Command(t, []string{"opened", "-F", "%depotFile% %change%"}, `{"action":"opened","client":"alice_DEV","output":"","changelist":""}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(out) != "" || strings.Contains(out, "{") {
+		t.Fatalf("empty -F output = %q", out)
+	}
+
+	out, err = runP4Command(t, []string{"opened", "--output", "text"}, `{"action":"opened","client":"alice_DEV","path":"E:\\DJ","output":""}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "{") || strings.Contains(out, "action") {
+		t.Fatalf("--output text dumped the JSON envelope: %q", out)
+	}
+
+	_, err = runP4Command(t, []string{"opened", "-a"}, `{"action":"opened"}`)
+	if err == nil || !strings.Contains(err.Error(), "does not pass options through") {
+		t.Fatalf("raw p4 flag error = %v", err)
+	}
+	_, err = runP4Command(t, []string{"edit", "-F", "%depotFile%", "--", "A.cpp"}, `{"action":"edit"}`)
+	if err == nil || !strings.Contains(err.Error(), "does not support") {
+		t.Fatalf("edit -F error = %v", err)
+	}
+}
+
+func TestP4StatusFormatUsesTaskChange(t *testing.T) {
+	out, err := runP4Command(t, []string{"-F", "%depotFile% %change%", "status"}, `{"client":"alice_DEV","change":"1001","files":[{"depot_file":"//depot/A.cpp","action":"edit","type":"text"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "//depot/A.cpp 1001\n" {
+		t.Fatalf("stdout = %q", out)
+	}
+}
+
+func TestFormatP4Opened(t *testing.T) {
+	files := []p4OpenedLine{{
+		DepotFile:  "//depot/A.cpp",
+		ClientFile: `E:\DJ\A.cpp`,
+		Action:     "edit",
+		Change:     "1001",
+		Type:       "text",
+		Client:     "alice_DEV",
+	}, {
+		DepotFile: "//depot/B.cpp",
+		Action:    "add",
+		Change:    "default",
+		Client:    "alice_DEV",
+	}}
+	got, err := formatP4Opened("%depotFile% %change%", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "//depot/A.cpp 1001\n//depot/B.cpp default" {
+		t.Fatalf("format = %q", got)
+	}
+	got, err = formatP4Opened("%%change%%", files[:1])
+	if err != nil || got != "%change%" {
+		t.Fatalf("literal percent = %q, %v", got, err)
+	}
+	if _, err := formatP4Opened("%rev%", files); err == nil || !strings.Contains(err.Error(), "rev") {
+		t.Fatalf("unknown field = %v", err)
+	}
+	if _, err := formatP4Opened("%depotFile", files); err == nil {
+		t.Fatal("unmatched percent accepted")
+	}
+	// Older daemons only return depotFile#action lines. The task changelist still fills %change%.
+	got, err = formatP4OpenedPayload("%depotFile% %change%", []byte(`{"client":"alice_DEV","changelist":"1001","output":"//depot/A.cpp#edit"}`), "", "", "")
+	if err != nil || got != "//depot/A.cpp 1001" {
+		t.Fatalf("legacy output = %q, %v", got, err)
+	}
+}
+
+func runP4OpenedAgainst(t *testing.T, args []string, payload string) map[string]any {
+	t.Helper()
+	var body map[string]any
+	out, err := runP4Command(t, args, payload, func(r *http.Request) {
+		if r.URL.Path != "/p4/run" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "//depot/A.cpp 1001\n//depot/B.cpp 1001\n" {
+		t.Fatalf("stdout = %q", out)
+	}
+	return body
+}
+
+func runP4Command(t *testing.T, args []string, payload string, inspect ...func(*http.Request)) (string, error) {
+	t.Helper()
+	resetP4Flags()
+	t.Cleanup(resetP4Flags)
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, fn := range inspect {
+			fn(r)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+	t.Cleanup(daemon.Close)
+	t.Setenv("MULTICA_DAEMON_PORT", strings.TrimPrefix(daemon.URL, "http://127.0.0.1:"))
+	t.Setenv("MULTICA_TOKEN", "mat_test_p4")
+	t.Setenv("MULTICA_TASK_ID", "task")
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws")
+	rootCmd.SetArgs(append([]string{"p4"}, args...))
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+	})
+	return captureStdout(t, rootCmd.Execute)
+}
 
 func TestP4SwarmReportsEffectiveURLAndLinkFailure(t *testing.T) {
 	for _, tc := range []struct {

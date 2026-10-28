@@ -33,7 +33,18 @@ type p4Rejection struct {
 
 type p4WorkspaceResult struct {
 	p4cache.MutateResult
-	Warnings []p4Warning `json:"warnings,omitempty"`
+	Warnings []p4Warning    `json:"warnings,omitempty"`
+	Files    []p4OpenedFile `json:"files,omitempty"`
+}
+
+// p4OpenedFile is one file from this task's changelist. JSON is snake_case;
+// `multica p4 opened -F` addresses the same fields with p4 -ztag names.
+type p4OpenedFile struct {
+	DepotFile  string `json:"depot_file"`
+	ClientFile string `json:"client_file,omitempty"`
+	Action     string `json:"action"`
+	Change     string `json:"change"`
+	Type       string `json:"type,omitempty"`
 }
 
 const (
@@ -760,8 +771,20 @@ func (d *Daemon) workspaceOpened(ctx context.Context, b *p4TaskBinding) (*p4Work
 		return nil, nil, err
 	}
 	var lines []string
+	files := make([]p4OpenedFile, 0, len(states))
 	for _, state := range states {
 		lines = append(lines, state.DepotFile+"#"+state.Action)
+		fileChange := state.OpenChange
+		if fileChange == "" {
+			fileChange = change
+		}
+		files = append(files, p4OpenedFile{
+			DepotFile:  state.DepotFile,
+			ClientFile: state.LocalPath,
+			Action:     state.Action,
+			Change:     fileChange,
+			Type:       state.HeadType,
+		})
 	}
 	return &p4WorkspaceResult{
 		MutateResult: p4cache.MutateResult{
@@ -771,6 +794,7 @@ func (d *Daemon) workspaceOpened(ctx context.Context, b *p4TaskBinding) (*p4Work
 			Changelist: change,
 			Output:     strings.Join(lines, "\n"),
 		},
+		Files: files,
 	}, nil, nil
 }
 

@@ -134,7 +134,12 @@ Passing either flag is optional and, if you do pass it, must match that
 binding; a spelling that only looks equivalent is rejected. `--changelist`
 may only name the task changelist, so omit it too. `multica p4
 status --output json` reports the client, root, stream, ticket, changelist
-number, its files, and any warnings. Submit, sync, and unshelve are off
+number, its files, and any warnings. `multica p4 opened -F "%depotFile% %change%"`
+prints each file's depot path and changelist (`%change%` is the number or
+`default`, not the words `change N`). The same rows are `files` in
+`multica p4 opened --output json`. `multica p4` does not pass other p4 flags
+through: `-a`, `-c`, and `-x` are rejected, and `p4 opened -a` is not a
+substitute. Submit, sync, and unshelve are off
 unless that depot turns on `allow_submit`, `allow_sync`, or `allow_unshelve`
 in the admin-managed Settings → Code catalog (each defaults to off, and a
 disabled one answers `action_not_allowed`). Project resources cannot grant

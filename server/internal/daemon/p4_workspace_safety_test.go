@@ -201,8 +201,25 @@ func TestWorkspaceOpenedWithoutTaskChangeIsEmpty(t *testing.T) {
 	t.Setenv("P4_FAKE_OPENED", "... depotFile //depot/Other.cpp\n... change 999\n... action edit\n")
 	b := &p4TaskBinding{ws: &p4cache.Workspace{Client: "alice_DEV"}}
 	result, rej, err := (&Daemon{p4Cache: &p4cache.Cache{P4Path: bin}}).runWorkspaceP4(t.Context(), b, p4MutateRequest{Action: "opened"}, "")
-	if err != nil || rej != nil || result.Output != "" || result.Changelist != "" {
+	if err != nil || rej != nil || result.Output != "" || result.Changelist != "" || len(result.Files) != 0 {
 		t.Fatalf("unbound opened: result=%+v rejection=%+v error=%v", result, rej, err)
+	}
+}
+
+func TestWorkspaceOpenedReportsDepotFileAndChange(t *testing.T) {
+	bin := writeDaemonFakeP4(t)
+	root := t.TempDir()
+	t.Setenv("P4_FAKE_OPENED", "... depotFile //depot/main/A.cpp\n... clientFile "+filepath.Join(root, "A.cpp")+"\n... action edit\n... change 1001\n... type text\n")
+	b := &p4TaskBinding{ws: &p4cache.Workspace{Client: "alice_DEV", Dir: root, Root: root}, change: "1001"}
+	result, rej, err := (&Daemon{p4Cache: &p4cache.Cache{P4Path: bin}}).runWorkspaceP4(t.Context(), b, p4MutateRequest{Action: "opened"}, root)
+	if err != nil || rej != nil {
+		t.Fatalf("opened: result=%+v rejection=%+v error=%v", result, rej, err)
+	}
+	if result.Output != "//depot/main/A.cpp#edit" || result.Changelist != "1001" {
+		t.Fatalf("opened text = %+v", result.MutateResult)
+	}
+	if len(result.Files) != 1 || result.Files[0].DepotFile != "//depot/main/A.cpp" || result.Files[0].Action != "edit" || result.Files[0].Change != "1001" || result.Files[0].Type != "text" {
+		t.Fatalf("opened files = %+v", result.Files)
 	}
 }
 

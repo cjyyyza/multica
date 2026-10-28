@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +29,9 @@ var (
 	p4Force           bool
 	p4NoShelve        bool
 	p4Reviewers       []string
+	// p4Format formats this task's opened files in the CLI. It is not forwarded
+	// to p4: a passthrough would also accept -c, -a, and -x.
+	p4Format string
 )
 
 var p4EditCmd = &cobra.Command{
@@ -63,7 +67,8 @@ var p4RevertCmd = &cobra.Command{
 
 var p4OpenedCmd = &cobra.Command{
 	Use:   "opened",
-	Short: "List files opened in the task Perforce client",
+	Short: "List files opened in this task's changelist",
+	Long:  "Lists files opened in this task's changelist. -F/--format prints them with p4 -ztag field names (depotFile, clientFile, action, change, type, client). %change% is the number or default, not the words \"change N\". Other p4 flags are not accepted.",
 	Args:  cobra.NoArgs,
 	RunE:  runP4Mutate("opened"),
 }
@@ -174,6 +179,33 @@ var p4SwarmLinkCmd = &cobra.Command{
 	Long:  "Fetches the review and links it to MULTICA_ISSUE_ID (the issue this task is running on). Put the issue identifier in the review description to also auto-link.",
 	Args:  cobra.MaximumNArgs(1),
 	RunE:  runP4Swarm("link"),
+}
+
+func rejectP4FormatFor(action string, cmd *cobra.Command) error {
+	if strings.TrimSpace(p4Format) == "" {
+		return nil
+	}
+	switch action {
+	case "opened", "status":
+		return nil
+	default:
+		path := action
+		if cmd != nil && cmd.CommandPath() != "" {
+			path = cmd.CommandPath()
+		}
+		return fmt.Errorf("%s does not support -F/--format; it only formats this task's opened files (`multica p4 opened -F \"%%depotFile%% %%change%%\"`)", path)
+	}
+}
+
+func rejectP4FormatJSON(cmd *cobra.Command) error {
+	if strings.TrimSpace(p4Format) == "" || cmd == nil || !cmd.Flags().Changed("output") {
+		return nil
+	}
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		return fmt.Errorf("-F/--format prints text; drop it and read files from --output json, or drop --output json")
+	}
+	return nil
 }
 
 func addP4TaskFlags(cmd *cobra.Command, files bool) {
@@ -331,6 +363,12 @@ func printP4JSONOrText(cmd *cobra.Command, payload []byte, text string) error {
 
 func runP4Mutate(action string) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
+		if err := rejectP4FormatFor(action, cmd); err != nil {
+			return err
+		}
+		if err := rejectP4FormatJSON(cmd); err != nil {
+			return err
+		}
 		ref, err := optionalP4PortDepot()
 		if err != nil {
 			return err
@@ -379,6 +417,24 @@ func runP4Mutate(action string) func(*cobra.Command, []string) error {
 		for _, warning := range result.Warnings {
 			fmt.Fprintf(os.Stderr, "warning: %s: %s\n", warning.Kind, strings.Join(warning.Files, " "))
 		}
+		if strings.TrimSpace(p4Format) != "" {
+			text, err := formatP4OpenedPayload(p4Format, payload, result.Client, result.Changelist, result.Output)
+			if err != nil {
+				return err
+			}
+			if text != "" {
+				fmt.Fprintln(os.Stdout, text)
+			}
+			return nil
+		}
+		// Empty opened/describe text is a real result. Falling through would
+		// print the JSON envelope and look like --output text was ignored.
+		if (action == "opened" || action == "describe") && p4OutputText(cmd) {
+			if result.Output != "" {
+				fmt.Fprintln(os.Stdout, result.Output)
+			}
+			return nil
+		}
 		text := result.Output
 		if text == "" && result.Changelist != "" {
 			text = result.Changelist
@@ -387,7 +443,145 @@ func runP4Mutate(action string) func(*cobra.Command, []string) error {
 	}
 }
 
+func p4OutputText(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	output, _ := cmd.Flags().GetString("output")
+	return output == "text"
+}
+
+// p4OpenedLine is one opened file addressed by p4 -ztag field names.
+type p4OpenedLine struct {
+	DepotFile  string
+	ClientFile string
+	Action     string
+	Change     string
+	Type       string
+	Client     string
+}
+
+var p4FormatToken = regexp.MustCompile(`%(%)|%([A-Za-z][A-Za-z0-9]*)%`)
+
+func formatP4OpenedPayload(format string, payload []byte, client, change, output string) (string, error) {
+	var parsed struct {
+		Client     string `json:"client"`
+		Changelist string `json:"changelist"`
+		Output     string `json:"output"`
+		Files      []struct {
+			DepotFile  string `json:"depot_file"`
+			ClientFile string `json:"client_file"`
+			Action     string `json:"action"`
+			Change     string `json:"change"`
+			Type       string `json:"type"`
+		} `json:"files"`
+	}
+	_ = json.Unmarshal(payload, &parsed)
+	client = firstNonEmpty(parsed.Client, client)
+	change = firstNonEmpty(parsed.Changelist, change)
+	lines := make([]p4OpenedLine, 0, len(parsed.Files))
+	for _, file := range parsed.Files {
+		lines = append(lines, p4OpenedLine{
+			DepotFile:  file.DepotFile,
+			ClientFile: file.ClientFile,
+			Action:     file.Action,
+			Change:     firstNonEmpty(file.Change, change),
+			Type:       file.Type,
+			Client:     client,
+		})
+	}
+	if len(lines) == 0 {
+		raw := firstNonEmpty(parsed.Output, output)
+		for _, line := range strings.Split(raw, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			depot, action, _ := strings.Cut(line, "#")
+			lines = append(lines, p4OpenedLine{
+				DepotFile: depot,
+				Action:    action,
+				Change:    change,
+				Client:    client,
+			})
+		}
+	}
+	return formatP4Opened(format, lines)
+}
+
+func formatP4Opened(format string, files []p4OpenedLine) (string, error) {
+	format = strings.TrimSpace(format)
+	if format == "" {
+		return "", fmt.Errorf("-F/--format requires a format string")
+	}
+	if err := validateP4Format(format); err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for i, file := range files {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(p4FormatToken.ReplaceAllStringFunc(format, func(token string) string {
+			if token == "%%" {
+				return "%"
+			}
+			field := strings.Trim(token, "%")
+			switch field {
+			case "depotFile":
+				return file.DepotFile
+			case "clientFile":
+				return file.ClientFile
+			case "action":
+				return file.Action
+			case "change":
+				return file.Change
+			case "type":
+				return file.Type
+			case "client":
+				return file.Client
+			default:
+				return ""
+			}
+		}))
+	}
+	return b.String(), nil
+}
+
+func validateP4Format(format string) error {
+	withoutLiteral := strings.ReplaceAll(format, "%%", "")
+	if strings.Count(withoutLiteral, "%")%2 != 0 {
+		return fmt.Errorf("-F format has an unmatched %%")
+	}
+	var unknown []string
+	seen := map[string]bool{}
+	for _, match := range p4FormatToken.FindAllStringSubmatch(format, -1) {
+		if match[1] == "%" {
+			continue
+		}
+		field := match[2]
+		switch field {
+		case "depotFile", "clientFile", "action", "change", "type", "client":
+		default:
+			if !seen[field] {
+				seen[field] = true
+				unknown = append(unknown, field)
+			}
+		}
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("unsupported -F field %s; supported fields are depotFile, clientFile, action, change, type, client (%%change%% is the number or default, not \"change N\")", strings.Join(unknown, ", "))
+	}
+	return nil
+}
+
 func runP4Status(cmd *cobra.Command, _ []string) error {
+	if err := rejectP4FormatFor("status", cmd); err != nil {
+		return err
+	}
+	if err := rejectP4FormatJSON(cmd); err != nil {
+		return err
+	}
 	payload, err := p4DaemonCall(cmd.Context(), http.MethodGet, "/p4/status", nil, p4DaemonTimeout())
 	if err != nil {
 		return reportP4Failure("p4 status", err)
@@ -401,6 +595,7 @@ func runP4Status(cmd *cobra.Command, _ []string) error {
 		Files  []struct {
 			DepotFile string `json:"depot_file"`
 			Action    string `json:"action"`
+			Type      string `json:"type"`
 		} `json:"files"`
 		Warnings []struct {
 			Kind  string   `json:"kind"`
@@ -408,6 +603,26 @@ func runP4Status(cmd *cobra.Command, _ []string) error {
 		} `json:"warnings"`
 	}
 	_ = json.Unmarshal(payload, &status)
+	if strings.TrimSpace(p4Format) != "" {
+		lines := make([]p4OpenedLine, 0, len(status.Files))
+		for _, file := range status.Files {
+			lines = append(lines, p4OpenedLine{
+				DepotFile: file.DepotFile,
+				Action:    file.Action,
+				Change:    status.Change,
+				Type:      file.Type,
+				Client:    status.Client,
+			})
+		}
+		text, err := formatP4Opened(p4Format, lines)
+		if err != nil {
+			return err
+		}
+		if text != "" {
+			fmt.Fprintln(os.Stdout, text)
+		}
+		return nil
+	}
 	var text strings.Builder
 	fmt.Fprintf(&text, "client: %s\nroot: %s\n", status.Client, status.Root)
 	if status.Stream != "" {
