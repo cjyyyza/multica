@@ -34,6 +34,7 @@ export const REASONS = new Set([
   "api_invalid_request",
   "skill_bundle_unavailable",
   "runtime_cli_timeout",
+  "plan_mode_unavailable",
   "environment_prepare_failed",
   "invalid_task_identity",
   "runtime_access_denied",

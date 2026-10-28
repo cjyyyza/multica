@@ -53,6 +53,7 @@ export const FAILURE_REASON_I18N_KEYS = {
   codex_resume_oversized: "codex_resume_oversized",
   idle_watchdog: "idle_watchdog",
   local_directory_error: "local_directory_error",
+  plan_mode_unavailable: "plan_mode_unavailable",
   cancelled: "cancelled",
 
   // Pre-MUL-1949 coarse values, still present on historical rows.
@@ -137,6 +138,7 @@ const CANCELLATION_FAILURE_REASONS: ReadonlySet<string> = new Set([
 // non-retryable auth, quota, config, model, CLI, and runtime-ownership
 // reasons documented in server/pkg/taskfailure.
 const ACTION_REQUIRED_FAILURE_REASONS: ReadonlySet<string> = new Set([
+  "plan_mode_unavailable",
   "runtime_access_denied",
   "agent_error.provider_auth_or_access",
   "agent_error.provider_quota_limit",

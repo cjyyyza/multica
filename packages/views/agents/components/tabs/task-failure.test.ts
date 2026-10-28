@@ -107,7 +107,7 @@ describe("cancelReasonLabel", () => {
         },
         enT,
       ),
-    ).toBe("Local directory error");
+    ).toBe(enAgents.task_failure.reasons.local_directory_error);
   });
 
   it("localizes a generic system cancellation in every supported locale", () => {
@@ -147,6 +147,17 @@ describe("cancelReasonLabel", () => {
 });
 
 describe("failureReasonLabel", () => {
+  it("keeps unsupported Plan environments separate from P4 directory failures", () => {
+    expect(failureReasonLabel("plan_mode_unavailable", enT)).toMatch(/will not enter/);
+    expect(failureNeedsAction({ status: "failed", failure_reason: "plan_mode_unavailable" })).toBe(true);
+  });
+  it("gives directory binding, access and P4 recovery steps for an unusable workspace", () => {
+    const label = failureReasonLabel("local_directory_error", enT);
+    expect(label).toMatch(/project folder binding/i);
+    expect(label).toMatch(/read\/write/);
+    expect(label).toMatch(/P4/);
+    expect(failureReasonLabel("local_directory_error", fixedT("zh-Hans"))).toContain("绑定");
+  });
   it("renders every known reason through i18n in every supported locale", () => {
     for (const locale of Object.keys(AGENT_RESOURCES) as SupportedLocale[]) {
       const t = fixedT(locale);

@@ -23,8 +23,8 @@ func prepareClaimedTaskMode(task Task, provider string) (Task, string, error) {
 	if task.RequirementID == "" || task.ChatSessionID == "" || task.IssueID != "" {
 		return Task{}, "", fmt.Errorf("%w: plan task requirement/chat binding is missing", errPlanModeUnavailable)
 	}
-	if task.PlanPermission != taskpolicy.PlanPermissionClaude || !agent.SupportsPlanMode(provider) {
-		return Task{}, "", fmt.Errorf("%w: provider %q has no verified read-only plan permission", errPlanModeUnavailable, provider)
+	if !agent.SupportsPlanMode(provider) || task.PlanPermission != taskpolicy.PlanPermission(provider) {
+		return Task{}, "", fmt.Errorf("%w: provider %q has no supported native plan permission", errPlanModeUnavailable, provider)
 	}
 	task.RemoteMCPConnections = nil
 	task.RemoteMCPDaemonToken = ""
@@ -47,7 +47,7 @@ func validatePlanExecutionRuntime(task Task, usesCustomProfileCommand bool, loca
 		return fmt.Errorf("%w: custom runtime profiles are not verified", errPlanModeUnavailable)
 	}
 	if localAssignment != nil {
-		return fmt.Errorf("%w: local directories and worktree finalization are not read-only", errPlanModeUnavailable)
+		return fmt.Errorf("%w: planning will not enter the project's local directory; use a project without a local directory binding for Plan Mode", errPlanModeUnavailable)
 	}
 	return nil
 }

@@ -9,6 +9,8 @@ import type { SupportedLocale } from "@multica/core/i18n";
 import type { AgentRuntime, AgentTask } from "@multica/core/types/agent";
 import { useTranscriptViewStore } from "@multica/core/agents/stores";
 import { renderWithI18n } from "../../test/i18n";
+import enAgents from "../../locales/en/agents.json";
+import zhAgents from "../../locales/zh-Hans/agents.json";
 import { AgentTranscriptDialog } from "./agent-transcript-dialog";
 import type { TimelineItem } from "./build-timeline";
 
@@ -936,7 +938,7 @@ describe("AgentTranscriptDialog — cancel reason", () => {
       },
     });
 
-    expect(screen.getByText(/Local directory error/)).toBeInTheDocument();
+    expect(screen.getByText(enAgents.task_failure.reasons.local_directory_error, { exact: false })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Run details" }));
     expect(screen.getByText(gateError)).toBeInTheDocument();
@@ -953,9 +955,9 @@ describe("AgentTranscriptDialog — cancel reason", () => {
       },
     });
 
-    expect(screen.getByText(/本地目录出错/)).toBeInTheDocument();
+    expect(screen.getByText(zhAgents.task_failure.reasons.local_directory_error, { exact: false })).toBeInTheDocument();
     expect(
-      screen.queryByText(/Local directory error/),
+      screen.queryByText(enAgents.task_failure.reasons.local_directory_error, { exact: false }),
     ).not.toBeInTheDocument();
   });
 

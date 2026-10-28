@@ -806,6 +806,20 @@ describe("ChatMessageList failure copy (MUL-5370 regression)", () => {
 
   const FALLBACK = enChat.message_list.failure.fallback;
 
+  it("explains an unavailable workspace with directory binding and P4 recovery steps", async () => {
+    renderFailure("local_directory_error");
+    expect(await screen.findByText(/project folder binding/i)).toHaveClass("text-destructive");
+    expect(screen.getByText(/project folder binding/i)).toHaveTextContent(/P4/);
+    expect(screen.queryByText(FALLBACK)).not.toBeInTheDocument();
+  });
+
+  it("explains that an unsupported Plan environment was not entered", async () => {
+    renderFailure("plan_mode_unavailable");
+    expect(await screen.findByText(enChat.message_list.failure.plan_mode_unavailable)).toHaveTextContent(/will not enter/);
+    expect(screen.queryByText(FALLBACK)).not.toBeInTheDocument();
+    expect(screen.queryByText(enChat.message_list.failure.local_directory_error)).not.toBeInTheDocument();
+  });
+
   it("explains revoked access with a rebind action rather than a generic retry", async () => {
     renderFailure("runtime_access_revoked");
     expect(await screen.findByText(enChat.message_list.failure.runtime_access_revoked)).toBeInTheDocument();

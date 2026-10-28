@@ -1007,6 +1007,8 @@ function FailureBubble({
     skill_bundle_unavailable: t(($) => $.message_list.failure.skill_bundle_unavailable),
     runtime_cli_timeout: t(($) => $.message_list.failure.runtime_cli_timeout),
     environment_prepare_failed: t(($) => $.message_list.failure.environment_prepare_failed),
+    local_directory_error: t(($) => $.message_list.failure.local_directory_error),
+    plan_mode_unavailable: t(($) => $.message_list.failure.plan_mode_unavailable),
     "agent_error.provider_network": t(($) => $.message_list.failure.provider_network),
     "agent_error.provider_auth_or_access": t(($) => $.message_list.failure.provider_auth_or_access),
     "agent_error.provider_quota_limit": t(($) => $.message_list.failure.provider_quota_limit),

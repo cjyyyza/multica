@@ -67,6 +67,8 @@
       "skill_bundle_unavailable": "The agent's skills couldn't be downloaded, so it never got started. This is usually a connection problem — please try again.",
       "runtime_cli_timeout": "The local OpenClaw CLI didn't answer in time, so this run never started. It's a local startup timeout, not a network problem — retrying won't help until the CLI gets faster or the timeout is raised (MULTICA_OPENCLAW_CLI_TIMEOUT).",
       "environment_prepare_failed": "The machine running the agent couldn't set this run up, so it never started. The error below says what failed there — often disk space, a permission, a folder still in use, or a local config that couldn't be read. It isn't the agent or the model provider.",
+      "local_directory_error": "Work directory unavailable. Check the project folder binding and read/write access on the agent's machine. For P4, also check the client workspace and sign-in.",
+      "plan_mode_unavailable": "Plan Mode is unavailable in this execution environment. Planning will not enter the project's local folder. Use a built-in Claude or DSH runtime and a project without a local folder binding.",
       "provider_network": "The connection to the model provider dropped before the reply finished. Check your network and try again.",
       "provider_auth_or_access": "The agent's model account isn't signed in any more. Sign in again, then retry.",
       "provider_quota_limit": "The agent's model account has run out of credit. Top it up or switch accounts, then retry.",

@@ -66,6 +66,16 @@ func TestRequirementPlanBriefUsesCapturedContextAndStructuredOutput(t *testing.T
 	}
 }
 
+func TestDshRequirementPlanBriefUsesNativeSemantics(t *testing.T) {
+	out := buildMetaSkillContent("dsh", TaskContextForEnv{RequirementID: "req-1", ChatSessionID: "chat-1", PlanMode: true})
+	if !strings.Contains(out, "DSH's native Plan Mode") || !strings.Contains(out, "Approval happens only in Multica Chat") {
+		t.Fatal("DSH plan brief is missing native planning or the requirement approval boundary")
+	}
+	if strings.Contains(out, "Read, Glob and Grep only") {
+		t.Fatal("DSH plan brief inherited Claude's tool restrictions")
+	}
+}
+
 // TestPlanBriefOmitsDeniedWriteCommands locks the contradiction this mode used
 // to ship: the brief listed issue and p4 writes the task token refuses, and told
 // the agent to upload attachments through a route Plan Mode denies.

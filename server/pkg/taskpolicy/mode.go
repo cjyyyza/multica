@@ -16,7 +16,19 @@ const (
 	PlanModeToolDenied   = "plan_mode_tool_denied"
 	PlanModeUnavailable  = "plan_mode_unavailable"
 	PlanPermissionClaude = "claude-native-plan-v1"
+	PlanPermissionDsh    = "dsh-native-plan-v1"
 )
+
+func PlanPermission(provider string) string {
+	switch provider {
+	case "claude":
+		return PlanPermissionClaude
+	case "dsh":
+		return PlanPermissionDsh
+	default:
+		return ""
+	}
+}
 
 var ErrInvalidMode = errors.New("invalid task mode")
 

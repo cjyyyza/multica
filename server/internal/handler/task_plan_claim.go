@@ -44,7 +44,7 @@ func (h *Handler) validateTaskModeForClaim(r *http.Request, task *db.AgentTaskQu
 	}
 	if runtime.ProfileID.Valid || !agent.SupportsPlanMode(runtime.Provider) {
 		return "", h.failClaimedTaskBeforeLaunch(r.Context(), task,
-			fmt.Sprintf("Plan Mode is not available for runtime provider %q. Use the built-in Claude runtime; this task was not executed.", runtime.Provider),
+			fmt.Sprintf("Plan Mode is not available for runtime provider %q. Use a built-in Claude or DSH runtime; this task was not executed.", runtime.Provider),
 			taskfailure.ReasonInvalidTaskIdentity, "plan_provider_unsupported", http.StatusConflict, "runtime provider does not support Plan Mode")
 	}
 	return mode, nil

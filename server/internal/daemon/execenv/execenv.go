@@ -180,7 +180,7 @@ type TaskContextForEnv struct {
 	// into a user-visible one (MUL-4424). Distinct from an ordinary cold start,
 	// which never had a prior session to lose.
 	PriorSessionResumeUnavailable bool
-	PlanMode                      bool   // provider-native read-only planning; never an execute/full-access fallback
+	PlanMode                      bool   // provider-native planning; tool permissions follow the provider's semantics
 	AgentID                       string // unique ID of the dispatched agent
 	AgentName                     string
 	AgentInstructions             string // agent identity/persona instructions, injected into CLAUDE.md

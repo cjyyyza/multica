@@ -6085,6 +6085,9 @@ func taskRunFailureReason(err error) string {
 	if errors.Is(err, errInvalidTaskIdentity) {
 		return taskfailure.ReasonInvalidTaskIdentity.String()
 	}
+	if errors.Is(err, errPlanModeUnavailable) {
+		return taskfailure.ReasonPlanModeUnavailable.String()
+	}
 	if errors.Is(err, errTaskPrepareTimeout) {
 		return taskfailure.ReasonTimeout.String()
 	}

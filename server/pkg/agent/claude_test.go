@@ -1440,7 +1440,7 @@ func TestPlanModeSupportMatrix(t *testing.T) {
 		t.Fatal("built-in Claude must support native Plan Mode")
 	}
 	for _, provider := range SupportedTypes {
-		if provider != "claude" && SupportsPlanMode(provider) {
+		if provider != "claude" && provider != "dsh" && SupportsPlanMode(provider) {
 			t.Fatalf("provider %q must fail closed until it has a verified read-only implementation", provider)
 		}
 	}

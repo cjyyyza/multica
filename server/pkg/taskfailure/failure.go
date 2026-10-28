@@ -180,6 +180,10 @@ const (
 	// only repeat an isolation failure.
 	ReasonInvalidTaskIdentity Reason = "invalid_task_identity"
 
+	// ReasonPlanModeUnavailable: the selected execution environment cannot
+	// honor Plan Mode. No agent runs; configuration must change before retry.
+	ReasonPlanModeUnavailable Reason = "plan_mode_unavailable"
+
 	// ReasonRuntimeAccessDenied: the daemon refused a claimed task because
 	// a private runtime does not authorize the task's agent — the runtime
 	// owner and the agent owner differ, a private owned runtime was paired
@@ -295,6 +299,7 @@ var allReasons = []Reason{
 	ReasonRuntimeCLITimeout,
 	ReasonEnvironmentPrepareFailed,
 	ReasonInvalidTaskIdentity,
+	ReasonPlanModeUnavailable,
 	ReasonRuntimeAccessDenied,
 
 	// Agent process side: provider errors.

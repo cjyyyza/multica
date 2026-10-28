@@ -13,6 +13,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/multica-ai/multica/server/pkg/taskpolicy"
 )
 
 const (
@@ -61,6 +63,13 @@ type dshExecuteCommand struct {
 	Model           *dshModelSelection `json:"model,omitempty"`
 	ReasoningEffort string             `json:"reasoning_effort,omitempty"`
 	MCPServers      []dshMCPServer     `json:"mcp_servers"`
+	Mode            string             `json:"mode,omitempty"`
+	OutputSchema    json.RawMessage    `json:"output_schema,omitempty"`
+}
+
+type dshCapabilities struct {
+	PlanMode         string `json:"plan_mode"`
+	StructuredOutput bool   `json:"structured_output"`
 }
 
 type dshCancelCommand struct {
@@ -75,32 +84,34 @@ type dshWireError struct {
 }
 
 type dshFrame struct {
-	Version          int             `json:"v"`
-	Type             string          `json:"type"`
-	Runtime          string          `json:"runtime,omitempty"`
-	ProtocolVersion  int             `json:"protocol_version,omitempty"`
-	RequestID        string          `json:"request_id,omitempty"`
-	SessionID        string          `json:"session_id,omitempty"`
-	Resumed          bool            `json:"resumed,omitempty"`
-	Content          string          `json:"content,omitempty"`
-	CallID           string          `json:"call_id,omitempty"`
-	Name             string          `json:"name,omitempty"`
-	Arguments        string          `json:"arguments,omitempty"`
-	Output           string          `json:"output,omitempty"`
-	IsError          bool            `json:"is_error,omitempty"`
-	Provider         string          `json:"provider,omitempty"`
-	Model            string          `json:"model,omitempty"`
-	InputTokens      int64           `json:"input_tokens,omitempty"`
-	OutputTokens     int64           `json:"output_tokens,omitempty"`
-	CacheReadTokens  int64           `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int64           `json:"cache_write_tokens,omitempty"`
-	Status           string          `json:"status,omitempty"`
-	StopReason       string          `json:"stop_reason,omitempty"`
-	ResumeRejected   bool            `json:"resume_rejected,omitempty"`
-	Error            *dshWireError   `json:"error,omitempty"`
-	Code             string          `json:"code,omitempty"`
-	Message          string          `json:"message,omitempty"`
-	Models           []dshModelFrame `json:"models,omitempty"`
+	Version          int              `json:"v"`
+	Type             string           `json:"type"`
+	Runtime          string           `json:"runtime,omitempty"`
+	ProtocolVersion  int              `json:"protocol_version,omitempty"`
+	RequestID        string           `json:"request_id,omitempty"`
+	SessionID        string           `json:"session_id,omitempty"`
+	Resumed          bool             `json:"resumed,omitempty"`
+	Content          string           `json:"content,omitempty"`
+	CallID           string           `json:"call_id,omitempty"`
+	Name             string           `json:"name,omitempty"`
+	Arguments        string           `json:"arguments,omitempty"`
+	Output           string           `json:"output,omitempty"`
+	IsError          bool             `json:"is_error,omitempty"`
+	Provider         string           `json:"provider,omitempty"`
+	Model            string           `json:"model,omitempty"`
+	InputTokens      int64            `json:"input_tokens,omitempty"`
+	OutputTokens     int64            `json:"output_tokens,omitempty"`
+	CacheReadTokens  int64            `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64            `json:"cache_write_tokens,omitempty"`
+	Status           string           `json:"status,omitempty"`
+	StopReason       string           `json:"stop_reason,omitempty"`
+	ResumeRejected   bool             `json:"resume_rejected,omitempty"`
+	Error            *dshWireError    `json:"error,omitempty"`
+	Code             string           `json:"code,omitempty"`
+	Message          string           `json:"message,omitempty"`
+	Models           []dshModelFrame  `json:"models,omitempty"`
+	Capabilities     *dshCapabilities `json:"capabilities,omitempty"`
+	StructuredOutput json.RawMessage  `json:"structured_output,omitempty"`
 }
 
 type dshThinkingFrame struct {
@@ -205,6 +216,16 @@ func buildDshMCPServers(raw json.RawMessage, logger interface {
 }
 
 func (b *dshBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
+	plan := opts.PermissionMode == PermissionModePlan
+	if opts.PermissionMode != "" && opts.PermissionMode != PermissionModeExecute && !plan {
+		return nil, fmt.Errorf("dsh: unsupported permission mode %q", opts.PermissionMode)
+	}
+	if plan {
+		var schema map[string]any
+		if json.Unmarshal(opts.OutputSchema, &schema) != nil || schema["type"] != "object" {
+			return nil, errors.New("dsh: Plan Mode requires an object output schema")
+		}
+	}
 	execPath := b.cfg.ExecutablePath
 	if execPath == "" {
 		execPath = "dsh"
@@ -248,6 +269,42 @@ func (b *dshBackend) Execute(ctx context.Context, prompt string, opts ExecOption
 		cancel()
 		return nil, fmt.Errorf("start dsh: %w", err)
 	}
+	scanner := newAgentStreamScanner(stdout)
+	if plan {
+		// Negotiate before sending any prompt: an older bridge must never start
+		// an ordinary turn for a task the server authorized for native planning.
+		timeout := opts.HandshakeTimeout
+		if timeout <= 0 {
+			timeout = 30 * time.Second
+		}
+		abortHandshake := func() {
+			signalProcessGroup(cmd, syscall.SIGKILL)
+			_ = stdout.Close()
+		}
+		timer := time.AfterFunc(timeout, abortHandshake)
+		stopCancellation := context.AfterFunc(runCtx, abortHandshake)
+		var ready dshFrame
+		valid := scanner.Scan() && json.Unmarshal(scanner.Bytes(), &ready) == nil &&
+			ready.Version == DshProtocolVersion && ready.Type == "ready" && ready.Runtime == "dsh" &&
+			ready.Capabilities != nil && ready.Capabilities.PlanMode == taskpolicy.PlanPermissionDsh && ready.Capabilities.StructuredOutput
+		timedOut := !timer.Stop()
+		cancelled := !stopCancellation()
+		if timedOut || cancelled || !valid {
+			signalProcessGroup(cmd, syscall.SIGKILL)
+			_ = stdin.Close()
+			_ = cmd.Wait()
+			releaseProcessGroup(cmd)
+			contextErr := runCtx.Err()
+			cancel()
+			if contextErr != nil {
+				return nil, fmt.Errorf("dsh: Plan Mode handshake: %w", contextErr)
+			}
+			if timedOut {
+				return nil, fmt.Errorf("dsh: Plan Mode handshake timed out after %s", timeout)
+			}
+			return nil, errors.New(withAgentStderr("dsh: native Plan Mode and structured output are unavailable; update the Multica DSH runtime bridge", "dsh", stderrBuf.Tail()))
+		}
+	}
 
 	requestID := b.cfg.TaskID
 	if requestID == "" {
@@ -257,6 +314,10 @@ func (b *dshBackend) Execute(ctx context.Context, prompt string, opts ExecOption
 		Version: DshProtocolVersion, Type: "execute", RequestID: requestID,
 		Cwd: opts.Cwd, Prompt: prompt, ResumeSessionID: opts.ResumeSessionID,
 		Model: model, ReasoningEffort: opts.ThinkingLevel, MCPServers: mcpServers,
+	}
+	if plan {
+		command.Mode = taskpolicy.ModePlan
+		command.OutputSchema = opts.OutputSchema
 	}
 	var writeMu sync.Mutex
 	encoder := json.NewEncoder(stdin)
@@ -305,8 +366,7 @@ func (b *dshBackend) Execute(ctx context.Context, prompt string, opts ExecOption
 		defer close(resCh)
 		defer func() { _ = stdin.Close() }()
 		started := time.Now()
-		state := dshRunState{usage: make(map[string]TokenUsage)}
-		scanner := newAgentStreamScanner(stdout)
+		state := dshRunState{ready: plan, usage: make(map[string]TokenUsage)}
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
 			if line == "" {
@@ -348,6 +408,13 @@ func (b *dshBackend) Execute(ctx context.Context, prompt string, opts ExecOption
 				result.Error = fmt.Sprintf("dsh exited with error: %v", exitErr)
 			default:
 				result.Error = "dsh exited without a terminal result"
+			}
+		}
+		if plan && result.Status == "completed" {
+			var output map[string]json.RawMessage
+			if json.Unmarshal(result.StructuredOutput, &output) != nil || output == nil {
+				result.Status = "failed"
+				result.Error = "dsh: Plan Mode ended without structured output"
 			}
 		}
 		if result.Error != "" {
@@ -426,6 +493,7 @@ func handleDshFrame(frame dshFrame, requestID string, ch chan<- Message, state *
 		state.result = &Result{
 			Status: frame.Status, Output: frame.Output, Error: errorText,
 			SessionID: frame.SessionID, Usage: state.usage, ResumeRejected: frame.ResumeRejected,
+			StructuredOutput: frame.StructuredOutput,
 		}
 		if state.result.SessionID == "" {
 			state.result.SessionID = state.sessionID

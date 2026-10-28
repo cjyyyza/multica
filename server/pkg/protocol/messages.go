@@ -85,7 +85,7 @@ const (
 	// via POST /p4/run and POST /p4/swarm.
 	DaemonCapabilityPerforceMutateV1 = "perforce-mutate-v1"
 	// DaemonCapabilityPlanModeV1 advertises durable mode handling, task-tool
-	// stripping, and provider-native Plan Mode enforcement. Servers must not
+	// stripping, and provider-native Plan Mode selection. Servers must not
 	// deliver a plan task without it, regardless of the provider's capabilities.
 	DaemonCapabilityPlanModeV1 = "plan-mode-v1"
 

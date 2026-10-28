@@ -140,6 +140,7 @@
     "codex_resume_oversized": "Session too large to resume",
     "idle_watchdog": "Agent stopped after inactivity",
     "local_directory_error": "Local directory error",
+    "plan_mode_unavailable": "Plan Mode is unavailable in this execution environment. Planning will not enter the project's local folder. Use a built-in Claude or DSH runtime and a project without a local folder binding.",
     "cancelled": "Cancelled by the system",
     "agent_error": "Agent execution error",
     "codex_semantic_inactivity": "Codex semantic inactivity timeout",

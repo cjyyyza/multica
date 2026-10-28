@@ -8,6 +8,8 @@ import { runFailureBadgeLabel } from "./run-failure-badge";
 
 describe("failureReasonKey", () => {
   it("maps known reasons to i18n keys", () => {
+    expect(failureReasonKey("plan_mode_unavailable")).toBe("failure_reason.plan_mode_unavailable");
+    expect(runFailureBadgeLabel("plan_mode_unavailable")).toBe("Plan unavailable");
     expect(failureReasonKey("runtime_access_denied")).toBe(
       "failure_reason.runtime_access_denied",
     );

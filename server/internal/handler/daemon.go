@@ -2529,7 +2529,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	}
 	planTask := mode == taskpolicy.ModePlan
 	if planTask {
-		resp.PlanPermission = taskpolicy.PlanPermissionClaude
+		resp.PlanPermission = taskpolicy.PlanPermission(runtime.Provider)
 		resp.PluginHookTools = nil
 		resp.RemoteMCPConnections = nil
 		resp.ConnectedApps = nil

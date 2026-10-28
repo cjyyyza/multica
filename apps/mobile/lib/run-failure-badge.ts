@@ -30,6 +30,7 @@ const FAILURE_REASON_BADGE: Record<string, string> = {
   api_invalid_request: "Request rejected",
   skill_bundle_unavailable: "Skill download failed",
   runtime_cli_timeout: "Runtime CLI timeout",
+  plan_mode_unavailable: "Plan unavailable",
   environment_prepare_failed: "Environment setup failed",
   runtime_access_denied: RUNTIME_ACCESS_DENIED_BADGE,
 

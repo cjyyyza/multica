@@ -74,9 +74,10 @@ type ExecOptions struct {
 	// HandshakeTimeout; when both are zero Codex uses separate built-in defaults.
 	ThreadHandshakeTimeout time.Duration
 	ResumeSessionID        string // if non-empty, resume a previous agent session
-	// PermissionMode selects a provider-native tool permission policy. The daemon
+	// PermissionMode selects a provider-native execution mode. The daemon
 	// admits Plan Mode only for providers in SupportsPlanMode and rejects every
-	// other provider before Execute rather than allowing a full-access fallback.
+	// other provider before Execute. Plan semantics and tool permissions are
+	// provider-owned; DSH's native mode supplies guidance, not tool restrictions.
 	PermissionMode string
 	// ResumeExpected records that this task intended to continue a prior
 	// conversation, independent of ResumeSessionID (which a fallback retry may
