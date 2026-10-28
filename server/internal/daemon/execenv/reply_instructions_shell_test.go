@@ -56,7 +56,17 @@ func stubMultica(t *testing.T, exitCode int) string {
 	dir := t.TempDir()
 	name, body := "multica", "#!/bin/sh\nexit "+strconv.Itoa(exitCode)+"\n"
 	if runtime.GOOS == "windows" {
-		name, body = "multica.cmd", "@exit /b "+strconv.Itoa(exitCode)+"\r\n"
+		// Git Bash does not resolve .cmd stubs. Use a native executable so both
+		// shells select the fake rather than an installed multica on PATH.
+		source := filepath.Join(dir, "main.go")
+		body = "package main\nimport \"os\"\nfunc main() { os.Exit(" + strconv.Itoa(exitCode) + ") }\n"
+		if err := os.WriteFile(source, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command("go", "build", "-o", filepath.Join(dir, "multica.exe"), source).CombinedOutput(); err != nil {
+			t.Fatalf("build fake multica: %v\n%s", err, out)
+		}
+		return dir
 	}
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
 		t.Fatal(err)
@@ -153,8 +163,8 @@ func TestCommentReplySnippetPropagatesPostFailure(t *testing.T) {
 
 			t.Run("failed post keeps the failure and the body", func(t *testing.T) {
 				code, bodyKept := runSnippet(t, tc.shell, tc.wrap(script), stubMultica(t, 3))
-				if code == 0 {
-					t.Errorf("failed post reported success (exit 0); the cleanup masked it\n---\n%s", script)
+				if code != 3 {
+					t.Errorf("failed post reported exit %d, want the fake's exit 3\n---\n%s", code, script)
 				}
 				if !bodyKept {
 					t.Errorf("failed post deleted ./reply.md; the retry would have to regenerate the body\n---\n%s", script)

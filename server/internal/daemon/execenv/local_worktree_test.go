@@ -892,8 +892,10 @@ func TestPrepareLocalWorktreeContinuesTheConversationBranch(t *testing.T) {
 // A clean local HEAD advancing during a turn is committed work, not a new
 // user edit to replay onto the conversation branch (#8544).
 func TestPrepareLocalWorktreeDoesNotReplayCleanHEADAdvance(t *testing.T) {
+	t.Parallel()
 	for _, dirty := range []bool{false, true} {
 		t.Run(fmt.Sprintf("new_local_edit_%t", dirty), func(t *testing.T) {
+			t.Parallel()
 			repo := newTestRepo(t)
 			first := prepareTurn(t, repo, "MUL-6881", turnOneTask)
 			writeFile(t, filepath.Join(first.WorkDir, "turn-one.txt"), "agent work\n")
@@ -935,9 +937,11 @@ func TestPrepareLocalWorktreeDoesNotReplayCleanHEADAdvance(t *testing.T) {
 }
 
 func TestPrepareLocalWorktreeExcludesHEADAdvanceWithExistingUserEdits(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"untracked", "tracked", "deleted"} {
 		for _, newEdits := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/new_edits_%t", kind, newEdits), func(t *testing.T) {
+				t.Parallel()
 				repo := newTestRepo(t)
 				switch kind {
 				case "untracked":
@@ -1022,6 +1026,7 @@ func TestPrepareLocalWorktreeExcludesHEADAdvanceWithExistingUserEdits(t *testing
 }
 
 func TestPrepareLocalWorktreeNormalizesEditsAcrossChangesInTheSameFile(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	base := "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n"
 	writeFile(t, filepath.Join(repo, "tracked.txt"), base)
@@ -1051,6 +1056,7 @@ func TestPrepareLocalWorktreeNormalizesEditsAcrossChangesInTheSameFile(t *testin
 }
 
 func TestPrepareLocalWorktreeExcludesHEADAdvanceAfterUncommittedConflictResolution(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	writeFile(t, filepath.Join(repo, "tracked.txt"), "user A\n")
 	first := prepareTurn(t, repo, "MUL-7488", turnOneTask)
@@ -1091,9 +1097,11 @@ func TestPrepareLocalWorktreeExcludesHEADAdvanceAfterUncommittedConflictResoluti
 }
 
 func TestPrepareLocalWorktreeContinuesAfterUserCommitsConflictingDraft(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"untracked", "tracked"} {
 		for _, newEdits := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/new_edits_%t", kind, newEdits), func(t *testing.T) {
+				t.Parallel()
 				repo := newTestRepo(t)
 				name := "draft.txt"
 				if kind == "tracked" {
@@ -1161,6 +1169,7 @@ func TestPrepareLocalWorktreeContinuesAfterUserCommitsConflictingDraft(t *testin
 }
 
 func TestPrepareLocalWorktreeHandsCurrentEditsToAgentAfterHEADNormalizationConflict(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	writeFile(t, filepath.Join(repo, "tracked.txt"), "previous user draft\n")
 	first := prepareTurn(t, repo, "MUL-7488", turnOneTask)
@@ -1196,9 +1205,11 @@ func TestPrepareLocalWorktreeHandsCurrentEditsToAgentAfterHEADNormalizationConfl
 }
 
 func TestPrepareLocalWorktreePreservesOtherDraftsWhenNormalizationConflicts(t *testing.T) {
+	t.Parallel()
 	for _, committedChange := range []string{"finish", "delete", "directory"} {
 		for _, newEdit := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/new_edit_%t", committedChange, newEdit), func(t *testing.T) {
+				t.Parallel()
 				repo := newTestRepo(t)
 				// A tracked draft allows both content and modify/delete conflicts.
 				writeFile(t, filepath.Join(repo, "notes.txt"), "original notes\n")
@@ -1267,6 +1278,7 @@ func TestPrepareLocalWorktreePreservesOtherDraftsWhenNormalizationConflicts(t *t
 }
 
 func TestPrepareLocalWorktreeNormalizesConflictPathsLiterally(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	// Brackets are valid filenames on every platform but are also Git glob
 	// syntax. Restoring the first path must not reset the second draft's WIP.
