@@ -159,7 +159,9 @@
     "p4_submit": "追加",
     "toast_p4_attached": "Perforce depot を添付しました",
     "p4_needs_local_directory": "Perforce depot を添付する前に、このマシンのワークスペースフォルダを指定してください。エージェントはそのフォルダを編集し、コピーは同期しません。",
-    "p4_needs_in_place_directory": "Perforce depot を添付する前に、このディレクトリの実行モードをフォルダの直接編集に変更してください。"
+    "p4_needs_in_place_directory": "Perforce depot を添付する前に、このディレクトリの実行モードをフォルダの直接編集に変更してください。",
+    "p4_missing_local_directory": "P4 ファイルを操作するには、エージェントを実行するコンピューターで「リソースを追加」から既存のローカル P4 ワークスペースのディレクトリを関連付けてください。",
+    "p4_invalid_directory_mode": "P4 のファイルタスクでは、関連付けたディレクトリを直接編集する必要があります。実行前に、このフォルダーを直接編集するモードへ変更してください。"
   },
   "delete_dialog": {
     "title": "プロジェクトを削除",

@@ -34,6 +34,7 @@ import {
   runtimeListOptions,
 } from "@multica/core/runtimes";
 import { useConfigStore } from "@multica/core/config";
+import { useAuthStore } from "@multica/core/auth";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -60,7 +61,6 @@ import {
 } from "./local-directory-mode-dialog";
 import { GithubRefDialog } from "./github-ref-dialog";
 import { GithubRefField, githubRefHasError } from "./github-ref-field";
-import { localDirectoryLabel } from "./local-directory-label";
 import { useT } from "../../i18n";
 import { githubShortLabel } from "../../common/github-url";
 import { p4DepotIdentity, p4DepotLabel, p4RefIdentity } from "../../common/p4-depot";
@@ -135,8 +135,14 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const [refSaving, setRefSaving] = useState(false);
   const [refError, setRefError] = useState<string | null>(null);
 
-  const { data: resources = [] } = useQuery(
+  const userId = useAuthStore((state) => state.user?.id);
+  const { data: allResources } = useQuery(
     projectResourcesOptions(wsId, projectId),
+  );
+  // Also guard cached responses from older servers or a previous account.
+  // Ownership is per member; the same user's other machines remain visible.
+  const resources = (allResources ?? []).filter(
+    (resource) => !isLocalDirectoryRef(resource) || (!!userId && resource.created_by === userId),
   );
   const createResource = useCreateProjectResource(wsId, projectId);
   const updateResource = useUpdateProjectResource(wsId, projectId);
@@ -199,6 +205,9 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
             executionModeOf(r.resource_ref) === "in_place",
         );
   const hasPerforceResource = resources.some(isPerforceRef);
+  const directoryOnThisMachine = resources.filter(isLocalDirectoryRef).find(
+    (resource) => localDaemonId === null || resource.resource_ref.daemon_id === localDaemonId,
+  );
 
   const attachedP4Identities = new Set(
     resources.filter(isPerforceRef).map((r) => p4RefIdentity(r.resource_ref)),
@@ -209,6 +218,18 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
     workspace?.repos?.filter((repo) => repo.url.toLowerCase().includes(repoQuery)) ?? [];
   const p4Query = p4Search.trim().toLowerCase();
   const workspaceP4Depots = workspace?.p4_depots ?? [];
+  // A Git project owns its code sources. A workspace P4 catalog also does
+  // not turn an existing Git worktree into a P4 file task.
+  const needsP4Directory = hasPerforceResource || (
+    workspaceP4Depots.length > 0 &&
+    !resources.some(isGithubRef) &&
+    !resources.some((resource) => isLocalDirectoryRef(resource) && executionModeOf(resource.resource_ref) === "worktree")
+  );
+  const p4DirectoryWarning = userId && allResources !== undefined && needsP4Directory && !inPlaceLocalDirectory
+    ? directoryOnThisMachine && executionModeOf(directoryOnThisMachine.resource_ref) === "worktree"
+      ? t(($) => $.resources.p4_invalid_directory_mode)
+      : t(($) => $.resources.p4_missing_local_directory)
+    : null;
   const filteredP4Depots =
     workspaceP4Depots.filter((depot) =>
       p4DepotLabel(depot).toLowerCase().includes(p4Query),
@@ -529,7 +550,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
       </button>
       {open && (
         <div className="pl-2 space-y-1.5">
-          {resources.length === 0 && (
+          {resources.length === 0 && !p4DirectoryWarning && (
             <p className="text-caption text-muted-foreground">
               {t(($) => $.resources.empty)}
             </p>
@@ -575,6 +596,11 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                 />
               ))}
             </div>
+          )}
+          {p4DirectoryWarning && (
+            <p role="alert" className="text-caption text-destructive">
+              {p4DirectoryWarning}
+            </p>
           )}
           <Popover
             open={addOpen}
@@ -1036,7 +1062,7 @@ function LocalDirectoryRow({
   const { t } = useT("projects");
   const ref = resource.resource_ref;
   const mode = executionModeOf(ref);
-  const display = localDirectoryLabel(resource);
+  const display = ref.local_path;
   const isForeignDaemon =
     localDaemonId !== null && ref.daemon_id !== localDaemonId;
   const isLocalUnknown = localDaemonId === null;
@@ -1052,13 +1078,11 @@ function LocalDirectoryRow({
       }`}
     >
       <FolderOpen className="size-3.5 text-muted-foreground shrink-0" />
-      {/* The name is the folder's own (or whatever a label update stored);
-          there is deliberately no rename here. A folder is identified by its
-          path, and a pencil that only retitled the row read as a broken edit
-          action beside the branch and remove controls (MUL-7525). */}
+      {/* Show the actual bound directory, including its full parent path,
+          so folders with the same name can be distinguished. */}
       <Tooltip>
         <TooltipTrigger
-          render={<span className="truncate flex-1">{display}</span>}
+          render={<span className="min-w-0 flex-1 whitespace-normal break-all">{display}</span>}
         />
         <TooltipContent side="top">
           <div className="space-y-0.5 text-micro">

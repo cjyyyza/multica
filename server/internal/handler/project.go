@@ -478,10 +478,7 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	resp.ResourceCount = int64(len(resourceResp))
 	h.publish(protocol.EventProjectCreated, workspaceID, "member", userID, map[string]any{"project": resp})
 	for _, rr := range resourceResp {
-		h.publish(protocol.EventProjectResourceCreated, workspaceID, "member", userID, map[string]any{
-			"resource":   rr,
-			"project_id": resp.ID,
-		})
+		h.publishProjectResourceChange(protocol.EventProjectResourceCreated, workspaceID, userID, rr)
 	}
 	// One-shot create echo: the parent ProjectResponse fields plus the just-
 	// created resources. This is a transient creation echo, not a contract for

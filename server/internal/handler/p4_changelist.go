@@ -477,7 +477,7 @@ func (h *Handler) p4PollingDepots(ctx context.Context, workspaceID pgtype.UUID, 
 			if projects[projectKey] {
 				continue
 			}
-			project, err := h.resolveClaimProjectContext(ctx, issue.ProjectID, workspaceID)
+			project, err := h.resolveClaimProjectContext(ctx, issue.ProjectID, workspaceID, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -749,7 +749,7 @@ func (h *Handler) resolveIssueP4Port(ctx context.Context, issue db.Issue, reques
 	if port := strings.TrimSpace(requested); port != "" {
 		return port, true
 	}
-	projectCtx, err := h.resolveClaimProjectContext(ctx, issue.ProjectID, issue.WorkspaceID)
+	projectCtx, err := h.resolveClaimProjectContext(ctx, issue.ProjectID, issue.WorkspaceID, nil)
 	if err != nil {
 		slog.Warn("resolve p4 port: load project context failed", "error", err, "issue_id", uuidToString(issue.ID))
 		return "", false

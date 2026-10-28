@@ -4,6 +4,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { renderWithI18n } from "../../test/i18n";
 
+vi.mock("@multica/core/auth", () => ({
+  useAuthStore: (selector: (state: { user: { id: string } }) => unknown) =>
+    selector({ user: { id: "u1" } }),
+}));
+
 const updateMock = vi.fn().mockResolvedValue({});
 const createMock = vi.fn().mockResolvedValue({});
 

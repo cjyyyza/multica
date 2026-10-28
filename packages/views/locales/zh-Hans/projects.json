@@ -159,7 +159,9 @@
     "p4_submit": "添加",
     "toast_p4_attached": "已关联 Perforce depot",
     "p4_needs_local_directory": "关联 Perforce depot 之前，先指定这台机器上的工作区文件夹。智能体在这个文件夹里改文件，不会再同步一份。",
-    "p4_needs_in_place_directory": "请先将此目录的执行模式改为直接修改文件夹，再关联 Perforce depot。"
+    "p4_needs_in_place_directory": "请先将此目录的执行模式改为直接修改文件夹，再关联 Perforce depot。",
+    "p4_missing_local_directory": "使用 P4 文件前，请在运行智能体的电脑上，通过添加资源绑定已有的 P4 本地工作区目录。",
+    "p4_invalid_directory_mode": "P4 文件任务需要直接使用本地目录。请先把目录的运行方式改为“直接修改这个文件夹”，再运行智能体。"
   },
   "delete_dialog": {
     "title": "删除项目",

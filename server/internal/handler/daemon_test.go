@@ -2477,6 +2477,7 @@ func TestClaimTask_AutopilotRunOnly_PopulatesWorkspaceAndProjectContext(t *testi
 		"resource_type": "local_directory",
 		"resource_ref":  `{"daemon_id":"test-daemon-claim","local_path":"/srv/run-only-project","execution_mode":"in_place"}`,
 		"position":      1,
+		"created_by":    testUserID,
 	})
 
 	autopilotID := dbfx.Insert(t, "autopilot", testutil.Cols{

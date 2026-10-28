@@ -5,6 +5,7 @@ import { FolderOpen, GitBranch } from "lucide-react";
 import { projectResourcesOptions } from "@multica/core/projects";
 import type { LocalDirectoryResourceRef, ProjectResource } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useAuthStore } from "@multica/core/auth";
 import { useLocalDaemonStatus } from "../../platform";
 import { useT } from "../../i18n";
 import { localDirectoryLabel } from "./local-directory-label";
@@ -36,6 +37,7 @@ export function LocalDirectoryHint({
 }) {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
+  const userId = useAuthStore((state) => state.user?.id);
   const daemon = useLocalDaemonStatus();
   const { data: resources = [] } = useQuery({
     ...projectResourcesOptions(wsId, projectId ?? ""),
@@ -43,6 +45,7 @@ export function LocalDirectoryHint({
   });
 
   if (!projectId) return null;
+  if (!userId) return null;
   if (!daemon.daemonId) return null;
 
   const matches: Array<ProjectResource & { resource_ref: LocalDirectoryResourceRef }> =
@@ -51,7 +54,7 @@ export function LocalDirectoryHint({
         (r): r is ProjectResource & { resource_ref: LocalDirectoryResourceRef } =>
           r.resource_type === "local_directory",
       )
-      .filter((r) => r.resource_ref.daemon_id === daemon.daemonId);
+      .filter((r) => r.created_by === userId && r.resource_ref.daemon_id === daemon.daemonId);
 
   if (matches.length === 0) return null;
 

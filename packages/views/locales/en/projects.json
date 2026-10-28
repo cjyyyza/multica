@@ -160,7 +160,9 @@
     "p4_submit": "Add",
     "toast_p4_attached": "Perforce depot attached",
     "p4_needs_local_directory": "Specify this machine's workspace folder before attaching a Perforce depot. The agent edits that folder and does not sync a new copy.",
-    "p4_needs_in_place_directory": "Change this directory's execution mode to edit the folder directly before attaching a Perforce depot."
+    "p4_needs_in_place_directory": "Change this directory's execution mode to edit the folder directly before attaching a Perforce depot.",
+    "p4_missing_local_directory": "To work with P4 files, use Add resource on the machine running the agent to bind an existing local P4 workspace directory.",
+    "p4_invalid_directory_mode": "P4 file tasks need to edit the bound directory directly. Change this directory to Edit this folder directly before running the agent."
   },
   "delete_dialog": {
     "title": "Delete project",

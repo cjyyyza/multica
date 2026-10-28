@@ -65,6 +65,25 @@ func (q *Queries) CreateProjectResource(ctx context.Context, arg CreateProjectRe
 	return i, err
 }
 
+const deleteOwnerlessLocalDirectoryBindings = `-- name: DeleteOwnerlessLocalDirectoryBindings :exec
+DELETE FROM project_resource
+WHERE project_id = $1 AND workspace_id = $2
+  AND resource_type = 'local_directory'
+  AND created_by IS NULL
+  AND resource_ref->>'daemon_id' = $3::text
+`
+
+type DeleteOwnerlessLocalDirectoryBindingsParams struct {
+	ProjectID   pgtype.UUID `json:"project_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	DaemonID    string      `json:"daemon_id"`
+}
+
+func (q *Queries) DeleteOwnerlessLocalDirectoryBindings(ctx context.Context, arg DeleteOwnerlessLocalDirectoryBindingsParams) error {
+	_, err := q.db.Exec(ctx, deleteOwnerlessLocalDirectoryBindings, arg.ProjectID, arg.WorkspaceID, arg.DaemonID)
+	return err
+}
+
 const deleteProjectResource = `-- name: DeleteProjectResource :exec
 DELETE FROM project_resource WHERE id = $1
 `
@@ -269,6 +288,24 @@ func (q *Queries) ListProjectResourcesInWorkspace(ctx context.Context, arg ListP
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockProjectResourceBindings = `-- name: LockProjectResourceBindings :one
+SELECT id FROM project
+WHERE id = $1 AND workspace_id = $2
+FOR UPDATE
+`
+
+type LockProjectResourceBindingsParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) LockProjectResourceBindings(ctx context.Context, arg LockProjectResourceBindingsParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockProjectResourceBindings, arg.ID, arg.WorkspaceID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const updateProjectResource = `-- name: UpdateProjectResource :one

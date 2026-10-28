@@ -31,6 +31,18 @@ INSERT INTO project_resource (
     $1, $2, $3, $4, $5, $6, $7
 ) RETURNING *;
 
+-- name: LockProjectResourceBindings :one
+SELECT id FROM project
+WHERE id = $1 AND workspace_id = $2
+FOR UPDATE;
+
+-- name: DeleteOwnerlessLocalDirectoryBindings :exec
+DELETE FROM project_resource
+WHERE project_id = $1 AND workspace_id = $2
+  AND resource_type = 'local_directory'
+  AND created_by IS NULL
+  AND resource_ref->>'daemon_id' = sqlc.arg(daemon_id)::text;
+
 -- name: UpdateProjectResource :one
 UPDATE project_resource
 SET resource_ref = $2,

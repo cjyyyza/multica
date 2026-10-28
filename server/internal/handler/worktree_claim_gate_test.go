@@ -590,10 +590,10 @@ func seedWorktreeGateClaimFixture(t *testing.T, ctx context.Context, label, daem
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM project WHERE id = $1`, projectID) })
 
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO project_resource (project_id, workspace_id, resource_type, resource_ref, position)
-		VALUES ($1, $2, 'local_directory', $3::jsonb, 0)
+		INSERT INTO project_resource (project_id, workspace_id, resource_type, resource_ref, position, created_by)
+		VALUES ($1, $2, 'local_directory', $3::jsonb, 0, $4)
 	`, projectID, testWorkspaceID,
-		`{"local_path":"/Users/dev/wtgate","daemon_id":"`+daemonID+`","execution_mode":"worktree"}`); err != nil {
+		`{"local_path":"/Users/dev/wtgate","daemon_id":"`+daemonID+`","execution_mode":"worktree"}`, testUserID); err != nil {
 		t.Fatalf("setup: create project_resource: %v", err)
 	}
 	t.Cleanup(func() {

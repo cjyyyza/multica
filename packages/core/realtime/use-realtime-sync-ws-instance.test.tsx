@@ -12,6 +12,7 @@ import { chatKeys } from "../chat/queries";
 import { runtimeKeys } from "../runtimes/queries";
 import { workspaceWorkingAgentsKeys } from "../agents/queries";
 import { workspaceKeys } from "../workspace/queries";
+import { projectResourceKeys } from "../projects/resource-queries";
 import { issueStatusKeys } from "../issue-statuses/queries";
 import { issueWorkflowKeys } from "../issue-workflows/queries";
 import {
@@ -79,6 +80,23 @@ describe("useRealtimeSync — ws instance change", () => {
     qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     stores = createStores();
     invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+  });
+
+  it.each(["created", "updated", "deleted"] as const)("refreshes private directory resources from an ID-only %s event", async (action) => {
+    const ws = createMockWs();
+    const key = projectResourceKeys.list("ws-1", "project-1");
+    qc.setQueryData(key, { resources: [], total: 0 });
+    renderHook(() => useRealtimeSync(ws, stores), { wrapper: createWrapper(qc) });
+    const onAny = vi.mocked(ws.onAny).mock.calls[0]?.[0];
+    if (!onAny) throw new Error("realtime subscription missing");
+
+    onAny({
+      type: `project_resource:${action}`,
+      payload: { project_id: "project-1", resource_id: "private-directory-1" },
+    });
+
+    await waitFor(() => expect(qc.getQueryState(key)?.isInvalidated).toBe(true));
+    expect(qc.getQueryData(key)).toEqual({ resources: [], total: 0 });
   });
 
   it("skips invalidation on first non-null ws instance", () => {

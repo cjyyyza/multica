@@ -545,20 +545,50 @@ func (h *Handler) loadProjectForResource(w http.ResponseWriter, r *http.Request,
 	return project, true
 }
 
-// ListProjectResources returns the resources attached to a project.
+// projectResourceVisibleToUser keeps machine-local bindings private to the
+// member who attached them. A daemon ID is a machine identity, not an owner;
+// legacy rows without a creator cannot safely be attributed to any member.
+func projectResourceVisibleToUser(resource db.ProjectResource, userID string) bool {
+	if resource.ResourceType != "local_directory" {
+		return true
+	}
+	userUUID, err := parseUUIDLoose(userID)
+	return err == nil && resource.CreatedBy.Valid && userUUID.Valid && resource.CreatedBy == userUUID
+}
+
+// publishProjectResourceChange broadcasts invalidation identifiers for local
+// bindings. Workspace events also reach other members, so neither the ref nor
+// the label (which may itself be a full path) belongs in their payload.
+func (h *Handler) publishProjectResourceChange(eventType, workspaceID, userID string, resource ProjectResourceResponse) {
+	payload := map[string]any{"project_id": resource.ProjectID, "resource_id": resource.ID}
+	if resource.ResourceType != "local_directory" {
+		payload["resource"] = resource
+	}
+	h.publish(eventType, workspaceID, "member", userID, payload)
+}
+
+// ListProjectResources returns shared resources and the caller's local bindings.
 func (h *Handler) ListProjectResources(w http.ResponseWriter, r *http.Request) {
 	project, ok := h.loadProjectForResource(w, r, chi.URLParam(r, "id"))
 	if !ok {
 		return
 	}
-	resources, err := h.Queries.ListProjectResources(r.Context(), project.ID)
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	resources, err := h.Queries.ListProjectResourcesInWorkspace(r.Context(), db.ListProjectResourcesInWorkspaceParams{
+		ProjectID: project.ID, WorkspaceID: project.WorkspaceID,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list project resources")
 		return
 	}
-	resp := make([]ProjectResourceResponse, len(resources))
-	for i, res := range resources {
-		resp[i] = projectResourceToResponse(res)
+	resp := make([]ProjectResourceResponse, 0, len(resources))
+	for _, res := range resources {
+		if projectResourceVisibleToUser(res, userID) {
+			resp = append(resp, projectResourceToResponse(res))
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"resources": resp, "total": len(resp)})
 }
@@ -589,14 +619,6 @@ func (h *Handler) CreateProjectResource(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if conflict, err := h.findLocalDirectoryConflict(r.Context(), project.ID, req.ResourceType, normalizedRef, pgtype.UUID{}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to check existing resources")
-		return
-	} else if conflict {
-		writeError(w, http.StatusConflict, "this daemon already has a local_directory attached to the project; remove it before adding another")
-		return
-	}
-
 	if !h.requireWorktreeCapableDaemon(w, r, project.WorkspaceID, req.ResourceType, normalizedRef) {
 		return
 	}
@@ -615,7 +637,7 @@ func (h *Handler) CreateProjectResource(w http.ResponseWriter, r *http.Request) 
 	}
 
 	creator, _ := h.parseUserUUIDOrZero(userID)
-	resource, err := h.Queries.CreateProjectResource(r.Context(), db.CreateProjectResourceParams{
+	resource, err := h.createProjectResource(r.Context(), db.CreateProjectResourceParams{
 		ProjectID:    project.ID,
 		WorkspaceID:  project.WorkspaceID,
 		ResourceType: req.ResourceType,
@@ -625,6 +647,10 @@ func (h *Handler) CreateProjectResource(w http.ResponseWriter, r *http.Request) 
 		CreatedBy:    creator,
 	})
 	if err != nil {
+		if errors.Is(err, errLocalDirectoryConflict) {
+			writeError(w, http.StatusConflict, "this daemon already has a local_directory attached to the project; remove it before adding another")
+			return
+		}
 		if isUniqueViolation(err) {
 			writeError(w, http.StatusConflict, "this resource is already attached to the project")
 			return
@@ -634,14 +660,57 @@ func (h *Handler) CreateProjectResource(w http.ResponseWriter, r *http.Request) 
 	}
 
 	resp := projectResourceToResponse(resource)
-	h.publish(
+	h.publishProjectResourceChange(
 		protocol.EventProjectResourceCreated,
 		uuidToString(project.WorkspaceID),
-		"member",
 		userID,
-		map[string]any{"resource": resp, "project_id": uuidToString(project.ID)},
+		resp,
 	)
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+var errLocalDirectoryConflict = errors.New("local directory already attached")
+
+func (h *Handler) createProjectResource(ctx context.Context, params db.CreateProjectResourceParams) (db.ProjectResource, error) {
+	if params.ResourceType != "local_directory" {
+		return h.Queries.CreateProjectResource(ctx, params)
+	}
+	if !params.CreatedBy.Valid {
+		return db.ProjectResource{}, errors.New("local directory owner is required")
+	}
+	var ref localDirectoryRef
+	if err := json.Unmarshal(params.ResourceRef, &ref); err != nil {
+		return db.ProjectResource{}, err
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return db.ProjectResource{}, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := h.Queries.WithTx(tx)
+	if _, err := qtx.LockProjectResourceBindings(ctx, db.LockProjectResourceBindingsParams{ID: params.ProjectID, WorkspaceID: params.WorkspaceID}); err != nil {
+		return db.ProjectResource{}, err
+	}
+	if conflict, err := findLocalDirectoryConflict(ctx, qtx, params.ProjectID, params.ResourceType, params.ResourceRef, pgtype.UUID{}); err != nil {
+		return db.ProjectResource{}, err
+	} else if conflict {
+		return db.ProjectResource{}, errLocalDirectoryConflict
+	}
+	// A rebind is a new user-supplied record, never an ownership claim on the
+	// legacy row. Replace only ownerless bindings, atomically with creation.
+	if err := qtx.DeleteOwnerlessLocalDirectoryBindings(ctx, db.DeleteOwnerlessLocalDirectoryBindingsParams{
+		ProjectID: params.ProjectID, WorkspaceID: params.WorkspaceID, DaemonID: ref.DaemonID,
+	}); err != nil {
+		return db.ProjectResource{}, err
+	}
+	resource, err := qtx.CreateProjectResource(ctx, params)
+	if err != nil {
+		return db.ProjectResource{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.ProjectResource{}, err
+	}
+	return resource, nil
 }
 
 // UpdateProjectResource edits an existing resource's ref/label/position.
@@ -671,7 +740,7 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotFound, "project resource not found")
 		return
 	}
-	if uuidToString(existing.ProjectID) != uuidToString(project.ID) {
+	if uuidToString(existing.ProjectID) != uuidToString(project.ID) || !projectResourceVisibleToUser(existing, userID) {
 		writeError(w, http.StatusNotFound, "project resource not found")
 		return
 	}
@@ -820,12 +889,11 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 	}
 
 	resp := projectResourceToResponse(updated)
-	h.publish(
+	h.publishProjectResourceChange(
 		protocol.EventProjectResourceUpdated,
 		uuidToString(project.WorkspaceID),
-		"member",
 		userID,
-		map[string]any{"resource": resp, "project_id": uuidToString(project.ID)},
+		resp,
 	)
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -844,6 +912,10 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 //
 // `excludeID` lets the update path ignore the row being edited.
 func (h *Handler) findLocalDirectoryConflict(ctx context.Context, projectID pgtype.UUID, resourceType string, normalizedRef json.RawMessage, excludeID pgtype.UUID) (bool, error) {
+	return findLocalDirectoryConflict(ctx, h.Queries, projectID, resourceType, normalizedRef, excludeID)
+}
+
+func findLocalDirectoryConflict(ctx context.Context, queries *db.Queries, projectID pgtype.UUID, resourceType string, normalizedRef json.RawMessage, excludeID pgtype.UUID) (bool, error) {
 	if resourceType != "local_directory" {
 		return false, nil
 	}
@@ -851,12 +923,12 @@ func (h *Handler) findLocalDirectoryConflict(ctx context.Context, projectID pgty
 	if err := json.Unmarshal(normalizedRef, &incoming); err != nil {
 		return false, err
 	}
-	rows, err := h.Queries.ListProjectResources(ctx, projectID)
+	rows, err := queries.ListProjectResources(ctx, projectID)
 	if err != nil {
 		return false, err
 	}
 	for _, row := range rows {
-		if row.ResourceType != "local_directory" {
+		if row.ResourceType != "local_directory" || !row.CreatedBy.Valid {
 			continue
 		}
 		if excludeID.Valid && uuidToString(row.ID) == uuidToString(excludeID) {
@@ -898,7 +970,7 @@ func (h *Handler) DeleteProjectResource(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotFound, "project resource not found")
 		return
 	}
-	if uuidToString(resource.ProjectID) != uuidToString(project.ID) {
+	if uuidToString(resource.ProjectID) != uuidToString(project.ID) || !projectResourceVisibleToUser(resource, userID) {
 		writeError(w, http.StatusNotFound, "project resource not found")
 		return
 	}
@@ -987,6 +1059,9 @@ func (c claimProjectContext) applyTo(resp *AgentTaskResponse) {
 //   - A project that resolves to no row IS "no project": the reference is stale,
 //     deleted, or points outside this workspace, and the claim degrades to
 //     workspace context.
+//   - Local directories belong to the executing runtime's owner, independently
+//     of the task initiator or the agent's shared visibility. A nil runtime is
+//     a depot-only lookup and never exposes local paths.
 //
 // Code-source precedence: a project that attaches ANY code resource owns the
 // task's code sources outright, and the workspace-level lists are not mixed in.
@@ -996,7 +1071,7 @@ func (c claimProjectContext) applyTo(resp *AgentTaskResponse) {
 // the reverse inherits a repo checkout into a Perforce-only task). The workspace
 // lists remain the fallback for a project with no code resources at all, for no
 // project, and for a stale reference.
-func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, workspaceID pgtype.UUID) (claimProjectContext, error) {
+func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, workspaceID pgtype.UUID, runtime *db.AgentRuntime) (claimProjectContext, error) {
 	var out claimProjectContext
 
 	if projectID.Valid {
@@ -1017,7 +1092,7 @@ func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, wor
 			if resErr != nil {
 				return claimProjectContext{}, fmt.Errorf("list project resources: %w", resErr)
 			}
-			out.Resources, out.Repos, out.P4Depots = projectResourcesForClaim(rows)
+			out.Resources, out.Repos, out.P4Depots = projectResourcesForClaim(rows, runtime)
 			if len(out.P4Depots) > 0 {
 				ws, wsErr := h.Queries.GetWorkspace(ctx, workspaceID)
 				if wsErr != nil {
@@ -1075,7 +1150,7 @@ func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, wor
 // `multica repo checkout`, `multica p4 sync`, and the meta-skill render them
 // as the task's code sources. Either kind makes the project the authoritative
 // code source; see resolveClaimProjectContext for the fallback rule.
-func projectResourcesForClaim(rows []db.ProjectResource) ([]ProjectResourceData, []RepoData, []P4DepotData) {
+func projectResourcesForClaim(rows []db.ProjectResource, runtime *db.AgentRuntime) ([]ProjectResourceData, []RepoData, []P4DepotData) {
 	if len(rows) == 0 {
 		return nil, nil, nil
 	}
@@ -1083,6 +1158,12 @@ func projectResourcesForClaim(rows []db.ProjectResource) ([]ProjectResourceData,
 	var repos []RepoData
 	var depots []P4DepotData
 	for _, row := range rows {
+		// A shared agent still executes on one member's runtime. Never send
+		// another member's local paths to that runtime, including ownerless
+		// legacy bindings. Depot-only lookups do not need any local paths.
+		if row.ResourceType == "local_directory" && (runtime == nil || !projectResourceVisibleToUser(row, uuidToString(runtime.OwnerID))) {
+			continue
+		}
 		label := ""
 		if row.Label.Valid {
 			label = row.Label.String
