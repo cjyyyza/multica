@@ -2,10 +2,15 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -13,27 +18,172 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/p4cache"
 	"github.com/multica-ai/multica/server/internal/p4depot"
+	"github.com/multica-ai/multica/server/internal/util"
 )
 
 // p4TaskBinding is the human-owned Helix client a task edits in place.
 // change is filled lazily on the first open, or reused from an earlier run
 // on the same issue.
 type p4TaskBinding struct {
-	opMu            sync.Mutex // Serialize writes and close-out on this client.
-	mu              sync.Mutex
-	ws              *p4cache.Workspace
-	ref             p4depot.Ref
-	ticket          string
-	issueKey, title string
-	description     string
-	change          string
-	submitted       bool
-	submission      *p4cache.FinishResult
-	sidecars        []string
-	defaultSnapshot []string
-	release         func()
-	taskID          string
-	closed          bool
+	opMu                sync.Mutex // Serialize writes and close-out on this client.
+	mu                  sync.Mutex
+	ws                  *p4cache.Workspace
+	ref                 p4depot.Ref
+	depots              []p4depot.Ref
+	ticket              string
+	issueKey, title     string
+	description         string
+	change              string
+	submitted           bool
+	submission          *p4cache.FinishResult
+	sidecars            []string
+	defaultSnapshot     []string
+	release             func()
+	taskID              string
+	closed              bool
+	readOnly            bool
+	changeTouched       bool
+	initialOpened       map[string]p4OpenedFileSnapshot
+	descriptionReady    bool
+	changeReported      bool
+	registrationPending bool
+	touchedPaths        map[string]bool
+	workspaceID         string
+}
+
+type p4OpenedFileSnapshot struct {
+	path, action, fileType string
+	exists                 bool
+	digest                 [sha256.Size]byte
+}
+
+type p4SnapshotReader struct {
+	ctx context.Context
+	io.Reader
+}
+
+func (r p4SnapshotReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.Reader.Read(p)
+}
+
+func (b *p4TaskBinding) touchChange() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.changeTouched = true
+}
+
+// Snapshot only this reused CL's opens, never the entire workspace. Content
+// hashes also catch direct edits that preserve file size and modification time.
+func (d *Daemon) snapshotP4Change(ctx context.Context, b *p4TaskBinding) (map[string]p4OpenedFileSnapshot, error) {
+	files, err := d.p4Cache.OpenedInChange(ctx, b.ws, b.change)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := make(map[string]p4OpenedFileSnapshot, len(files))
+	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		path, err := d.p4Cache.LocalPath(ctx, b.ws, file.DepotFile)
+		if err != nil {
+			return nil, err
+		}
+		path, err = b.ws.ResolveLocalPath(path)
+		if err != nil {
+			return nil, err
+		}
+		state := p4OpenedFileSnapshot{path: path, action: file.Action, fileType: file.HeadType}
+		f, err := os.Open(path)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("snapshot changelist file %s: %w", path, err)
+		}
+		if err == nil {
+			h := sha256.New()
+			_, readErr := io.Copy(h, p4SnapshotReader{ctx, f})
+			closeErr := f.Close()
+			if err := errors.Join(readErr, closeErr); err != nil {
+				return nil, fmt.Errorf("snapshot changelist file %s: %w", path, err)
+			}
+			state.exists = true
+			copy(state.digest[:], h.Sum(nil))
+		}
+		snapshot[file.DepotFile] = state
+	}
+	return snapshot, nil
+}
+
+func changedP4OpenedFiles(before, after map[string]p4OpenedFileSnapshot) []string {
+	var files []string
+	for file, state := range after {
+		if initial, ok := before[file]; !ok || initial != state {
+			files = append(files, file)
+		}
+	}
+	files = append(files, removedP4OpenedFiles(before, after)...)
+	sort.Strings(files)
+	return files
+}
+
+func removedP4OpenedFiles(before, after map[string]p4OpenedFileSnapshot) []string {
+	var files []string
+	for file := range before {
+		if _, ok := after[file]; !ok {
+			files = append(files, file)
+		}
+	}
+	sort.Strings(files)
+	return files
+}
+
+func p4WorkspacePathKey(path string) string {
+	path = filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		path = strings.ToLower(path)
+	}
+	return path
+}
+
+func (b *p4TaskBinding) touchPaths(paths []string) {
+	if b.touchedPaths == nil {
+		b.touchedPaths = make(map[string]bool)
+	}
+	for _, path := range paths {
+		b.touchedPaths[p4WorkspacePathKey(path)] = true
+	}
+}
+
+// Only this run's file commands authorize cleanup. A human can open another
+// file in the same CL while the task runs, so absence from the snapshot alone
+// is not sufficient authority to revert it.
+func (d *Daemon) revertableP4Files(ctx context.Context, b *p4TaskBinding) ([]string, error) {
+	files := []string{}
+	if len(b.touchedPaths) == 0 {
+		return files, nil
+	}
+	opened, err := d.p4Cache.OpenedInChange(ctx, b.ws, b.change)
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range opened {
+		if _, protected := b.initialOpened[file.DepotFile]; protected {
+			continue
+		}
+		path, err := d.p4Cache.LocalPath(ctx, b.ws, file.DepotFile)
+		if err != nil {
+			return nil, err
+		}
+		path, err = b.ws.ResolveLocalPath(path)
+		if err != nil {
+			return nil, err
+		}
+		if b.touchedPaths[p4WorkspacePathKey(path)] {
+			files = append(files, file.DepotFile)
+		}
+	}
+	return files, nil
 }
 
 func (b *p4TaskBinding) changelist() string {
@@ -81,6 +231,7 @@ func (b *p4TaskBinding) envSpec() *execenv.P4WorkspaceForEnv {
 		AllowSubmit:    b.ref.AllowSubmit,
 		AllowSync:      b.ref.AllowSync,
 		AllowUnshelve:  b.ref.AllowUnshelve,
+		ReadOnly:       b.readOnly,
 	}
 }
 
@@ -119,31 +270,69 @@ func (d *Daemon) bindP4Workspace(ctx context.Context, task Task, a *localDirecto
 	if d.p4Cache == nil {
 		return nil, fmt.Errorf("perforce is not initialized")
 	}
-	if d.p4ClientLocks == nil {
-		return nil, fmt.Errorf("perforce client locks are not initialized")
+	// Detection and alias verification can block on network calls before the
+	// client-wait and snapshot phases start their own lease protection.
+	stopProbeLease := func() {}
+	if d.client != nil {
+		log := d.logger
+		if log == nil {
+			log = slog.Default()
+		}
+		stopProbeLease = d.startTaskPrepareLeaseExtender(ctx, task, log)
 	}
+	defer stopProbeLease()
 	ws, err := d.p4Cache.DetectWorkspace(ctx, a.AbsPath)
 	if err != nil {
+		if !projectExplicitlyTargetsP4(task) && errors.Is(err, p4cache.ErrWorkspaceNotConfigured) {
+			if d.logger != nil {
+				d.logger.Info("workspace Perforce catalog does not apply to this local directory", "path", a.AbsPath, "reason", err)
+			}
+			return nil, nil
+		}
 		return nil, fmt.Errorf("this task has Perforce depots, but no usable workspace was detected in %s: %w", a.AbsPath, err)
 	}
-	ref, err := matchTaskDepot(task.P4Depots, ws)
+	ref, depots, err := d.matchP4Workspace(ctx, task.P4Depots, ws)
 	if err != nil {
 		return nil, err
 	}
-	release, err := d.p4ClientLocks.Acquire(ctx, ws.Port+"|"+ws.Client, task.ID, nil)
+	binding := &p4TaskBinding{
+		ws:          ws,
+		ref:         ref,
+		depots:      depots,
+		ticket:      strings.TrimSpace(task.P4Ticket),
+		issueKey:    strings.TrimSpace(task.IssueIdentifier),
+		title:       strings.TrimSpace(task.ThreadName),
+		taskID:      task.ID,
+		workspaceID: task.WorkspaceID,
+		readOnly:    task.ChatSessionID != "" || task.IssueID == "",
+	}
+	if binding.readOnly {
+		if err := d.rejectTrackedSidecars(ctx, binding, a.AbsPath); err != nil {
+			return nil, err
+		}
+		d.rememberP4Binding(binding)
+		return binding, nil
+	}
+	if d.p4ClientLocks == nil {
+		return nil, fmt.Errorf("perforce client locks are not initialized")
+	}
+	stopProbeLease()
+	release, err := d.acquireP4ClientLock(ctx, task, ws)
 	if err != nil {
 		return nil, fmt.Errorf("wait for Perforce client %s: %w", ws.Client, err)
 	}
-	binding := &p4TaskBinding{
-		ws:       ws,
-		ref:      ref,
-		ticket:   strings.TrimSpace(task.P4Ticket),
-		issueKey: strings.TrimSpace(task.IssueIdentifier),
-		title:    strings.TrimSpace(task.ThreadName),
-		taskID:   task.ID,
-		release:  release,
+	binding.release = release
+	// Existing opened UE assets can be large; hashing them must not let the
+	// dispatched task's lease expire after the client wait has ended.
+	if d.client != nil {
+		log := d.logger
+		if log == nil {
+			log = slog.Default()
+		}
+		stopLease := d.startTaskPrepareLeaseExtender(ctx, task, log)
+		defer stopLease()
 	}
-	if err := d.rejectTrackedSidecars(ctx, binding, a.AbsPath, provider); err != nil {
+	if err := d.rejectTrackedSidecars(ctx, binding, a.AbsPath); err != nil {
 		release()
 		return nil, err
 	}
@@ -163,19 +352,103 @@ func (d *Daemon) bindP4Workspace(ctx context.Context, task Task, a *localDirecto
 		}
 		binding.change = change
 		if change != "" {
-			binding.description = p4depot.ChangeDescription(binding.ticket, binding.title, binding.issueKey)
+			spec, err := d.p4Cache.ReadPendingChange(ctx, ws, change)
+			if err != nil {
+				release()
+				return nil, err
+			}
+			binding.description = spec.Description
+			binding.initialOpened, err = d.snapshotP4Change(ctx, binding)
+			if err != nil {
+				release()
+				return nil, fmt.Errorf("snapshot reused changelist %s: %w", change, err)
+			}
+		}
+	}
+	if binding.change != "" {
+		if err := d.registerPendingP4Change(ctx, binding); err != nil {
+			release()
+			return nil, err
 		}
 	}
 	d.rememberP4Binding(binding)
 	return binding, nil
 }
 
-// rejectTrackedSidecars fails the task when a file Multica is about to write
-// (the runtime brief, its scratch directories, or the provider skills) is
-// already in the depot. Writing those in a project subdirectory edits the
-// game, so the local directory has to be the workspace root.
-func (d *Daemon) rejectTrackedSidecars(ctx context.Context, b *p4TaskBinding, workDir, provider string) error {
-	candidates := sidecarCandidates(workDir, provider)
+func (d *Daemon) acquireP4ClientLock(ctx context.Context, task Task, ws *p4cache.Workspace) (func(), error) {
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	log := d.logger
+	if log == nil {
+		log = slog.Default()
+	}
+	waiting := false
+	var stopLease func()
+	defer func() {
+		if waiting {
+			d.resourceWaitTasks.Add(-1)
+		}
+		if stopLease != nil {
+			stopLease()
+		}
+	}()
+	onWait := func(holder string) {
+		if waiting {
+			return
+		}
+		waiting = true
+		d.resourceWaitTasks.Add(1)
+		log.Info("perforce client waiting", "client", ws.Client, "holder", holder)
+		if d.client == nil {
+			return
+		}
+		reason := "Perforce client " + ws.Client
+		if err := d.client.MarkTaskWaitingLocalDirectory(waitCtx, task.ID, reason); err != nil {
+			log.Warn("mark perforce client waiting failed", "error", err)
+		}
+		stopLease = d.startTaskPrepareLeaseExtender(waitCtx, task, log)
+		interval := d.cancelPollInterval
+		if interval <= 0 {
+			interval = 5 * time.Second
+		}
+		cancelled := d.watchTaskCancellation(waitCtx, task.ID, interval, log)
+		go func() {
+			select {
+			case <-cancelled:
+				cancel()
+			case <-waitCtx.Done():
+			}
+		}()
+	}
+	server := ws.ServerCluster
+	if !p4depot.ClusterKey(server, ws.Port) {
+		server = strings.TrimPrefix(p4depot.EndpointKey(ws.Port), "tcp:")
+	}
+	releaseClient, err := d.p4ClientLocks.Acquire(waitCtx, server+"|"+ws.Client, task.ID, onWait)
+	if err != nil {
+		return nil, err
+	}
+	root, err := util.ResolveSymlinks(ws.Root)
+	if err != nil {
+		releaseClient()
+		return nil, err
+	}
+	if runtime.GOOS == "windows" {
+		root = strings.ToLower(root)
+	}
+	releaseRoot, err := d.p4ClientLocks.Acquire(waitCtx, "root:"+root, task.ID, onWait)
+	if err != nil {
+		releaseClient()
+		return nil, err
+	}
+	var once sync.Once
+	return func() { once.Do(func() { releaseRoot(); releaseClient() }) }, nil
+}
+
+// Only Multica's private marker/resource directories belong to the daemon.
+// Repository rules and provider skills stay under normal Perforce ownership.
+func (d *Daemon) rejectTrackedSidecars(ctx context.Context, b *p4TaskBinding, workDir string) error {
+	candidates := []string{filepath.Join(workDir, ".multica"), filepath.Join(workDir, ".agent_context")}
 	b.sidecars = candidates
 	states, err := d.p4Cache.FileStates(ctx, b.ws, sidecarFstatPatterns(candidates))
 	if err != nil {
@@ -188,7 +461,7 @@ func (d *Daemon) rejectTrackedSidecars(ctx context.Context, b *p4TaskBinding, wo
 	for _, state := range states {
 		tracked = append(tracked, state.DepotFile)
 	}
-	return fmt.Errorf("%s is tracked in the depot; point the local directory resource at the workspace root (e.g. D:\\DJ)", strings.Join(tracked, ", "))
+	return fmt.Errorf("Multica private paths are tracked in the depot: %s; keep .multica and .agent_context untracked before running in %s", strings.Join(tracked, ", "), workDir)
 }
 
 // sidecarFstatPatterns turns sidecar paths into fstat arguments. fstat on a
@@ -207,21 +480,6 @@ func sidecarFstatPatterns(candidates []string) []string {
 		patterns = append(patterns, filepath.Join(path, "..."))
 	}
 	return patterns
-}
-
-func sidecarCandidates(workDir, provider string) []string {
-	var paths []string
-	if config := execenv.RuntimeConfigPath(workDir, provider); config != "" {
-		paths = append(paths, config)
-	}
-	paths = append(paths,
-		filepath.Join(workDir, ".multica"),
-		filepath.Join(workDir, ".agent_context"),
-	)
-	if skills := execenv.SkillsDirPath(workDir, provider); skills != "" {
-		paths = append(paths, skills)
-	}
-	return paths
 }
 
 type p4FinalizeError struct{ err error }
@@ -251,17 +509,83 @@ func (d *Daemon) finishP4Workspace(ctx context.Context, task Task, b *p4TaskBind
 	change := b.change
 	submitted := b.submitted
 	b.mu.Unlock()
-	if change == "" {
+	if b.readOnly || change == "" {
 		return nil
+	}
+	if err := d.registerPendingP4Change(ctx, b); err != nil {
+		return err
 	}
 	var (
 		result    *p4cache.FinishResult
 		finishErr error
 	)
+	preserveOpens := false
+	var changedFiles []string
+	if !submitted && b.initialOpened != nil {
+		current, err := d.snapshotP4Change(ctx, b)
+		if err != nil {
+			return fmt.Errorf("inspect reused changelist %s before close-out: %w", change, err)
+		}
+		changedFiles = changedP4OpenedFiles(b.initialOpened, current)
+		if removed := removedP4OpenedFiles(b.initialOpened, current); len(removed) > 0 {
+			preserveOpens = true
+			finishErr = fmt.Errorf("pre-existing opens were removed from changelist %s: %s", change, strings.Join(removed, ", "))
+			result = &p4cache.FinishResult{Change: change}
+		} else if len(changedFiles) == 0 {
+			// Metadata-only operations and failed/no-op file commands do not
+			// authorize replacing the human's pre-existing open files.
+			preserveOpens = true
+			shelf, err := d.p4Cache.ReadShelf(ctx, b.ws, change)
+			if err != nil {
+				return err
+			}
+			files := shelf.Files
+			result = &p4cache.FinishResult{Change: change, Files: files, Shelved: shelf.HasContents()}
+			names := make([]string, 0, len(current))
+			shelvedPaths := make(map[string]bool, len(files))
+			for _, file := range files {
+				shelvedPaths[file.DepotFile] = true
+			}
+			for file := range current {
+				names = append(names, file)
+			}
+			sort.Strings(names)
+			for _, file := range names {
+				if !shelvedPaths[file] {
+					state := current[file]
+					result.Files = append(result.Files, p4cache.FileState{DepotFile: file, LocalPath: state.path, Action: state.action, HeadType: state.fileType})
+				}
+			}
+		}
+	}
 	if submitted {
 		result, finishErr = d.submittedP4Change(ctx, b)
-	} else {
-		result, finishErr = d.p4Cache.FinishChange(ctx, b.ws, change)
+	} else if !preserveOpens {
+		files := changedFiles
+		if files == nil {
+			opened, err := d.p4Cache.OpenedInChange(ctx, b.ws, change)
+			if err != nil {
+				return err
+			}
+			for _, file := range opened {
+				files = append(files, file.DepotFile)
+			}
+		}
+		if err := d.validateP4CloseoutFiles(ctx, b, files); err != nil {
+			return err
+		}
+		shelf, err := d.p4Cache.ReadShelf(ctx, b.ws, change)
+		if err != nil {
+			return err
+		}
+		if rej := b.rejectDepotFiles("shelve", shelf.Files); rej != nil {
+			return fmt.Errorf("%s: %s", rej.Code, rej.Message)
+		}
+		revertFiles, err := d.revertableP4Files(ctx, b)
+		if err != nil {
+			return err
+		}
+		result, finishErr = d.p4Cache.FinishChange(ctx, b.ws, change, p4cache.FinishChangeOptions{Files: changedFiles, RevertFiles: revertFiles})
 	}
 	if finishErr != nil && d.logger != nil {
 		d.logger.Error("p4 workspace finish failed", "task_id", task.ID, "change", change, "error", finishErr)
@@ -272,7 +596,7 @@ func (d *Daemon) finishP4Workspace(ctx context.Context, task Task, b *p4TaskBind
 		result = &p4cache.FinishResult{Change: change}
 	}
 	report := d.changelistReport(ctx, b, result)
-	if result.Shelved && !b.ref.NoAutoReview {
+	if result.Shelved && !preserveOpens && !b.ref.NoAutoReview {
 		d.attachSwarmReview(ctx, b, &report)
 	}
 	reportErr := d.reportTaskP4Changelist(ctx, task, report)
@@ -307,31 +631,20 @@ func (d *Daemon) p4CommandTimeout() time.Duration {
 }
 
 // matchTaskDepot picks the configured depot this client actually maps.
-// The longest covering path wins, so //DJ01_Proj/Dev beats //DJ01_Proj.
+// The client stream takes priority over imports. Within that class the
+// most specific mapped resource wins. An ancestor alone grants no stream access.
 func matchTaskDepot(depots []P4DepotData, ws *p4cache.Workspace) (p4depot.Ref, error) {
 	var best p4depot.Ref
 	bestLen := -1
-	consider := func(ref p4depot.Ref, target string) {
-		if !strings.EqualFold(ref.Port, ws.Port) || !depotCovers(ref, target) {
-			return
-		}
-		if n := len(depotScopePath(ref)); n > bestLen {
-			best = ref
-			bestLen = n
-		}
-	}
+	bestStream := false
 	for _, depot := range depots {
 		ref, err := p4depot.Normalize(p4depot.Ref(depot))
-		if err != nil {
+		if err != nil || !p4depot.SameEndpoint(ref.Port, ws.Port) {
 			continue
 		}
-		if ws.Stream != "" {
-			consider(ref, ws.Stream)
-			continue
-		}
-		for _, mapping := range ws.View {
-			left, _, _ := strings.Cut(mapping, " ")
-			consider(ref, strings.TrimSuffix(left, "/..."))
+		mapped, streamMatch := depotMatchesWorkspace(ref, ws)
+		if mapped && ((streamMatch && !bestStream) || (streamMatch == bestStream && len(depotScopePath(ref)) > bestLen)) {
+			best, bestLen, bestStream = ref, len(depotScopePath(ref)), streamMatch
 		}
 	}
 	if bestLen < 0 {
@@ -342,6 +655,31 @@ func matchTaskDepot(depots []P4DepotData, ws *p4cache.Workspace) (p4depot.Ref, e
 		return p4depot.Ref{}, fmt.Errorf("Perforce client %s (%s) is not under a depot configured for this task", ws.Client, where)
 	}
 	return best, nil
+}
+
+func depotMatchesWorkspace(ref p4depot.Ref, ws *p4cache.Workspace) (bool, bool) {
+	scope := depotScopePath(ref)
+	stream := strings.TrimSuffix(strings.TrimSpace(ws.Stream), "/...")
+	if stream != "" && scope == stream {
+		return true, true
+	}
+	if stream != "" && depotCovers(ref, stream) {
+		return false, false
+	}
+	for _, mapping := range ws.View {
+		source, excluded, err := p4depot.ViewSource(mapping)
+		if err != nil || excluded || !p4depot.ViewOverlaps(scope, source) {
+			continue
+		}
+		prefix := strings.TrimRight(p4depot.ViewLiteralPrefix(source), "/")
+		if stream != "" && strings.HasPrefix(prefix, scope+"/") {
+			// Generated stream views name mapped namespaces, including imports.
+			// Their parents cannot lend grants to those namespaces.
+			continue
+		}
+		return true, false
+	}
+	return false, false
 }
 
 func depotScopePath(ref p4depot.Ref) string {
@@ -363,19 +701,11 @@ func depotCovers(ref p4depot.Ref, target string) bool {
 
 func (b *p4TaskBinding) isSidecar(path string) bool {
 	for _, root := range b.sidecars {
-		if pathEqualOrInside(root, path) {
+		inside, err := p4cache.PathWithin(root, path)
+		if err != nil || inside {
+			// An unresolvable alias cannot prove this is a business file.
 			return true
 		}
 	}
 	return false
-}
-
-func pathEqualOrInside(root, path string) bool {
-	root = strings.TrimRight(filepath.Clean(root), string(filepath.Separator))
-	path = filepath.Clean(path)
-	if strings.EqualFold(root, path) {
-		return true
-	}
-	prefix := root + string(filepath.Separator)
-	return len(path) > len(prefix) && strings.EqualFold(path[:len(prefix)], prefix)
 }

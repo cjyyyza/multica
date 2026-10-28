@@ -89,7 +89,7 @@ Multica: <任务编号>
 
 ### 智能体能做什么、不能做什么
 
-智能体用 `multica p4 edit` 打开文件、用 `multica p4 add-files` 新增文件，用 `multica p4 status` 查看 changelist。打开的文件都会进这条任务的 changelist。这个模式下 `--port` 和 `--depot` 可以省略。
+智能体用 `multica p4 edit` 打开文件、用 `multica p4 add-files` 新增文件，用 `multica p4 status` 查看 changelist。打开的文件都会进这条任务的 changelist。不要传 `--port` 和 `--depot`，守护进程会按绑定补上。不要去查 P4PORT 再重试。只传其中一个也会转发，但端口写法和绑定对不上会被拒绝。
 
 守护进程会拒绝下面这些操作，并给出原因 —— 智能体必须把原因报出来，而不是绕过去：
 

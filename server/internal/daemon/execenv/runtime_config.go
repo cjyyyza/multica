@@ -208,6 +208,12 @@ func formatProjectResource(r ProjectResourceForEnv) string {
 // For Qwen:        writes {workDir}/QWEN.md (Qwen Code's native context file; it also reads AGENTS.md, but QWEN.md avoids cross-runtime ambiguity)
 func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) (string, error) {
 	content := buildMetaSkillContent(provider, ctx)
+	if ctx.PrivateRuntimeDir != "" {
+		if err := os.MkdirAll(ctx.PrivateRuntimeDir, 0o700); err != nil {
+			return content, err
+		}
+		return content, os.WriteFile(filepath.Join(ctx.PrivateRuntimeDir, "runtime.md"), []byte(content), 0o600)
+	}
 	path := runtimeConfigPath(workDir, provider)
 	if path == "" {
 		// Unknown provider — skip config injection, prompt-only mode.

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/internal/daemon/p4cache"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
@@ -550,7 +551,7 @@ func TestTaskMulticaEnvironmentIncludesPrivateConfigRoot(t *testing.T) {
 		WorkspaceID: "workspace-test",
 		IssueID:     "issue-test",
 	}
-	env := taskMulticaEnvironment(task, "codex", "agent-name", fakeToken, taskRoot, workspacesRoot, "https://task.example", 19514, 3, "/task/tmp", false)
+	env := taskMulticaEnvironment(task, "codex", "agent-name", fakeToken, taskRoot, workspacesRoot, "https://task.example", 19514, 3, "/task/tmp", nil)
 
 	want := map[string]string{
 		"MULTICA_TOKEN":                fakeToken,
@@ -595,11 +596,15 @@ func TestTaskMulticaEnvironmentIncludesPrivateConfigRoot(t *testing.T) {
 
 func TestTaskMulticaEnvironmentBlocksRawP4WritesWhenWorkspaceBound(t *testing.T) {
 	t.Parallel()
-	env := taskMulticaEnvironment(Task{}, "codex", "", "", "", "", "", 0, 0, "/task/tmp", true)
+	ws := &p4cache.Workspace{Port: "ssl:p4.example:1666", User: "alice", Charset: "utf8"}
+	env := taskMulticaEnvironment(Task{}, "codex", "", "", "", "", "", 0, 0, "/task/tmp", ws)
 	if env["P4CONFIG"] != ".multica-p4-disabled" || env["P4CLIENT"] != "multica-blocked" {
 		t.Fatalf("workspace binding did not shield raw p4 writes: %#v", env)
 	}
-	plain := taskMulticaEnvironment(Task{}, "codex", "", "", "", "", "", 0, 0, "/task/tmp", false)
+	if env["P4PORT"] != ws.Port || env["P4USER"] != ws.User || env["P4CHARSET"] != ws.Charset {
+		t.Fatalf("disabling P4CONFIG lost the resolved read connection: %#v", env)
+	}
+	plain := taskMulticaEnvironment(Task{}, "codex", "", "", "", "", "", 0, 0, "/task/tmp", nil)
 	if _, ok := plain["P4CONFIG"]; ok {
 		t.Fatal("a task outside workspace mode inherited the p4 write shield")
 	}
@@ -609,7 +614,7 @@ func TestTaskMulticaEnvironmentTempPolicy(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_TMPDIR", "")
 	for _, provider := range []string{"claude", "codex", "pi", "opencode", "cursor"} {
 		t.Run(provider, func(t *testing.T) {
-			env := taskMulticaEnvironment(Task{}, provider, "", "", "", "", "", 0, 0, "/task/tmp", false)
+			env := taskMulticaEnvironment(Task{}, provider, "", "", "", "", "", 0, 0, "/task/tmp", nil)
 			if env["TMPDIR"] != "/task/tmp" {
 				t.Fatalf("TMPDIR = %q, want private task temp", env["TMPDIR"])
 			}
@@ -639,7 +644,7 @@ func TestTaskMulticaEnvironmentTempPolicy(t *testing.T) {
 
 func TestTaskMulticaEnvironmentRespectsClaudeTempOverride(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_TMPDIR", "/user/claude-temp")
-	env := taskMulticaEnvironment(Task{}, "claude", "", "", "", "", "", 0, 0, "/task/tmp", false)
+	env := taskMulticaEnvironment(Task{}, "claude", "", "", "", "", "", 0, 0, "/task/tmp", nil)
 	if _, overridden := env["CLAUDE_CODE_TMPDIR"]; overridden {
 		t.Fatal("inherited user CLAUDE_CODE_TMPDIR must remain authoritative")
 	}
@@ -647,7 +652,7 @@ func TestTaskMulticaEnvironmentRespectsClaudeTempOverride(t *testing.T) {
 	for _, key := range []string{"CLAUDE_CODE_TMPDIR", "claude_code_tmpdir"} {
 		for _, value := range []string{"/custom/claude-temp", ""} {
 			custom := map[string]string{key: value}
-			env = taskMulticaEnvironment(Task{Agent: &AgentData{CustomEnv: custom}}, "claude", "", "", "", "", "", 0, 0, "/task/tmp", false)
+			env = taskMulticaEnvironment(Task{Agent: &AgentData{CustomEnv: custom}}, "claude", "", "", "", "", "", 0, 0, "/task/tmp", nil)
 			layerCustomEnvAndHermesHome(env, custom, "", nil)
 			if env[key] != value {
 				t.Fatalf("custom %s = %q, want user's %q", key, env[key], value)

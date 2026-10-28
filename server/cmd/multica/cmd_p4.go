@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/p4depot"
@@ -64,11 +63,14 @@ var (
 func init() {
 	p4ListCmd.Flags().String("output", "table", "Output format: table or json")
 
-	for _, cmd := range []*cobra.Command{p4AddCmd, p4RemoveCmd, p4SyncCmd} {
+	for _, cmd := range []*cobra.Command{p4AddCmd, p4RemoveCmd} {
 		cmd.Flags().StringVar(&p4Port, "port", "", "P4PORT (host:port or ssl:host:port)")
 		cmd.Flags().StringVar(&p4DepotPath, "depot", "", "Depot path (//depot/project/...)")
 		cmd.Flags().StringVar(&p4Stream, "stream", "", "Optional stream path")
 	}
+	p4SyncCmd.Flags().StringVar(&p4Port, "port", "", "P4PORT. Omit in a bound workspace; the daemon fills it. Do not look it up")
+	p4SyncCmd.Flags().StringVar(&p4DepotPath, "depot", "", "Depot path. Omit in a bound workspace; the daemon fills it")
+	p4SyncCmd.Flags().StringVar(&p4Stream, "stream", "", "Optional stream path")
 	p4AddCmd.Flags().StringVar(&p4User, "user", "", "Optional P4USER hint")
 	p4AddCmd.Flags().StringVar(&p4Charset, "charset", "", "Optional P4CHARSET")
 	p4AddCmd.Flags().StringVar(&p4Changelist, "changelist", "", "Optional baseline changelist")
@@ -174,26 +176,23 @@ func requireP4PortDepot() (p4depot.Ref, error) {
 	return ref, nil
 }
 
-// optionalP4PortDepot validates the depot flags only when the caller passed
-// them. A task bound to a human-owned Perforce workspace omits --port/--depot
-// and the daemon fills both from the binding; outside workspace mode the
-// daemon still refuses a request with no depot.
+// optionalP4PortDepot validates whichever depot flags the caller passed.
+// A task bound to a human-owned Perforce workspace omits --port/--depot and
+// the daemon fills both from the binding. Passing only one of them is also
+// forwarded: requiring the pair made the CLI answer "port is required" before
+// the daemon could complete it. Outside workspace mode the daemon still
+// refuses a request with no depot.
 func optionalP4PortDepot() (p4depot.Ref, error) {
-	if strings.TrimSpace(p4Port) != "" || strings.TrimSpace(p4DepotPath) != "" {
-		return requireP4PortDepot()
-	}
-	changelist := strings.TrimSpace(p4Changelist)
-	if changelist != "" && !p4depot.ValidChangelist(changelist) {
-		return p4depot.Ref{}, fmt.Errorf("changelist must be a changelist number, label, or #head")
-	}
-	return p4depot.Ref{
-		Stream:      strings.TrimSpace(p4Stream),
-		User:        strings.TrimSpace(p4User),
-		Charset:     strings.TrimSpace(p4Charset),
-		Changelist:  changelist,
-		Description: strings.TrimSpace(p4Desc),
-		SwarmURL:    strings.TrimRight(strings.TrimSpace(p4SwarmURL), "/"),
-	}, nil
+	return p4depot.ValidateProvided(p4depot.Ref{
+		Port:        p4Port,
+		Depot:       p4DepotPath,
+		Stream:      p4Stream,
+		User:        p4User,
+		Charset:     p4Charset,
+		Changelist:  p4Changelist,
+		Description: p4Desc,
+		SwarmURL:    p4SwarmURL,
+	})
 }
 
 func runP4List(cmd *cobra.Command, _ []string) error {
@@ -243,7 +242,23 @@ func runP4Add(cmd *cobra.Command, _ []string) error {
 	for i, existing := range depots {
 		if p4depot.Identity(existing) == id {
 			// `p4 add` rebuilds the depot from port and path. Keep the
-			// switches edited in Settings → Code.
+			// switches edited in Settings → Code and any existing metadata
+			// omitted by this invocation.
+			if ref.User == "" && !cmd.Flags().Changed("user") {
+				ref.User = existing.User
+			}
+			if ref.Charset == "" && !cmd.Flags().Changed("charset") {
+				ref.Charset = existing.Charset
+			}
+			if ref.Changelist == "" && !cmd.Flags().Changed("changelist") {
+				ref.Changelist = existing.Changelist
+			}
+			if ref.Description == "" && !cmd.Flags().Changed("description") {
+				ref.Description = existing.Description
+			}
+			if ref.SwarmURL == "" && !cmd.Flags().Changed("swarm-url") {
+				ref.SwarmURL = existing.SwarmURL
+			}
 			ref.AllowExclusive = existing.AllowExclusive
 			ref.NoAutoReview = existing.NoAutoReview
 			ref.AllowSubmit = existing.AllowSubmit

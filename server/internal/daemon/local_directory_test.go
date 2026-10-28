@@ -1216,7 +1216,10 @@ func TestIssueTasksStillSerialiseOnPathMutex(t *testing.T) {
 
 func TestRequireInPlaceDirectoryForP4(t *testing.T) {
 	t.Parallel()
-	withDepot := Task{P4Depots: []P4DepotData{{Port: "p4:1666", Depot: "//DJ01_Proj/Dev"}}}
+	withDepot := Task{
+		P4Depots:         []P4DepotData{{Port: "p4:1666", Depot: "//DJ01_Proj/Dev"}},
+		ProjectResources: []ProjectResourceData{{ResourceType: "perforce_depot"}},
+	}
 	inPlace := &localDirectoryAssignment{
 		Ref:     localDirectoryRef{LocalPath: `D:\DJ`, ExecutionMode: localDirectoryModeInPlace},
 		AbsPath: `D:\DJ`,
@@ -1253,8 +1256,12 @@ func TestRequireInPlaceDirectoryForP4(t *testing.T) {
 	}
 	mixedFallback := withDepot
 	mixedFallback.Repos = []RepoData{{URL: "https://github.com/example/repo"}}
+	mixedFallback.ProjectResources = nil
 	if err := requireInPlaceDirectoryForP4(mixedFallback, nil); err != nil {
 		t.Fatalf("workspace fallback with git repos should not block on p4 directory: %v", err)
+	}
+	if err := requireInPlaceDirectoryForP4(Task{P4Depots: withDepot.P4Depots, IssueID: "ordinary-issue"}, nil); err != nil {
+		t.Fatalf("a projectless issue must not require a P4 directory from the workspace catalog alone: %v", err)
 	}
 	gitProjectWithFallbackP4 := Task{
 		P4Depots: []P4DepotData{{Port: "p4:1666", Depot: "//DJ01_Proj/Dev"}},

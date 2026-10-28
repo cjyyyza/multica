@@ -39,6 +39,51 @@ func TestOverlayP4ActionSwitchesUsesWorkspaceSettings(t *testing.T) {
 	}
 }
 
+func TestOverlayP4MetadataUsesOnlyExactCatalogDefaults(t *testing.T) {
+	workspace := []P4DepotData{{Port: "p4:1666", Depot: "//depot/main", User: "catalog-user", Charset: "utf8", SwarmURL: "https://swarm.example", AllowSubmit: true}}
+	project := []P4DepotData{
+		{Port: "p4:1666", Depot: "//depot/main"},
+		{Port: "p4:1666", Depot: "//depot/main", User: "project-user", Charset: "utf8-bom", SwarmURL: "https://project.example"},
+		{Port: "p4:1666", Depot: "//depot/main/sub"},
+	}
+	overlayP4ActionSwitches(project, workspace)
+	if project[0].User != "catalog-user" || project[0].Charset != "utf8" || project[0].SwarmURL != "https://swarm.example" || !project[0].AllowSubmit {
+		t.Fatalf("exact catalog defaults lost: %+v", project[0])
+	}
+	if project[1].User != "project-user" || project[1].Charset != "utf8-bom" || project[1].SwarmURL != "https://swarm.example" {
+		t.Fatalf("explicit project metadata overwritten: %+v", project[1])
+	}
+	if project[2].User != "" || project[2].Charset != "" || project[2].SwarmURL != "" || project[2].AllowSubmit {
+		t.Fatalf("parent catalog entry granted a child scope: %+v", project[2])
+	}
+}
+
+func TestProjectP4SwarmOriginCannotOverrideCatalog(t *testing.T) {
+	for _, catalog := range [][]P4DepotData{
+		{{Port: "p4:1666", Depot: "//depot/main", SwarmURL: "https://trusted.example"}},
+		{{Port: "p4:1666", Depot: "//depot/other", SwarmURL: "https://trusted.example"}},
+		nil,
+	} {
+		raw, err := validatePerforceDepotRef(json.RawMessage(`{"port":"p4:1666","depot":"//depot/main","swarm_url":"https://attacker.example"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var depot P4DepotData
+		if err := json.Unmarshal(raw, &depot); err != nil {
+			t.Fatal(err)
+		}
+		project := []P4DepotData{depot}
+		overlayP4ActionSwitches(project, catalog)
+		want := ""
+		if len(catalog) > 0 && catalog[0].Depot == depot.Depot {
+			want = catalog[0].SwarmURL
+		}
+		if project[0].SwarmURL != want {
+			t.Fatalf("untrusted origin survived catalog overlay: %+v", project[0])
+		}
+	}
+}
+
 func TestOverlayP4ActionSwitchesCannotGrantProjectPermissions(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

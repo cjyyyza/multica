@@ -162,7 +162,16 @@ func writeContextFiles(workDir, provider string, ctx TaskContextForEnv, manifest
 		return err
 	}
 
-	if len(ctx.AgentSkills) > 0 {
+	if ctx.PrivateRuntimeDir != "" {
+		if err := recordMkdirAll(ctx.PrivateRuntimeDir, 0o700, manifest); err != nil {
+			return err
+		}
+		if len(ctx.AgentSkills) > 0 {
+			if err := writeSkillFiles(filepath.Join(ctx.PrivateRuntimeDir, "skills"), ctx.AgentSkills, manifest); err != nil {
+				return err
+			}
+		}
+	} else if len(ctx.AgentSkills) > 0 {
 		// Hermes materializes skills into its per-task HERMES_HOME/skills during
 		// Prepare (Hermes has no workspace-relative discovery), so it needs no
 		// workdir-local skills dir at all — skip the resolve too, to avoid
@@ -266,20 +275,24 @@ func (p ProjectResourceForEnv) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// writeProjectResources writes .multica/project/resources.json into the
-// working directory when the task carries project context. The file is
+// writeProjectResources writes project context beside the private P4 runtime,
+// or under .multica/project for other environments. The file is
 // always written when a project is attached (even with zero resources) so
 // agents can rely on its presence as a signal that a project exists.
 //
-// manifest, when non-nil, is populated with the .multica/project chain
-// of created directories and the resources.json file so CleanupSidecars
+// manifest, when non-nil, records the created project context directories
+// and resources.json file so CleanupSidecars
 // can undo them on local_directory teardown.
 func writeProjectResources(workDir string, ctx TaskContextForEnv, manifest *sidecarManifest) error {
 	if ctx.ProjectID == "" && len(ctx.ProjectResources) == 0 {
 		return nil
 	}
-	dir := filepath.Join(workDir, ".multica", "project")
-	if err := recordMkdirAll(dir, 0o755, manifest); err != nil {
+	path := projectResourcesPath(workDir, ctx)
+	dirMode, fileMode := os.FileMode(0o755), os.FileMode(0o644)
+	if ctx.PrivateRuntimeDir != "" {
+		dirMode, fileMode = 0o700, 0o600
+	}
+	if err := recordMkdirAll(filepath.Dir(path), dirMode, manifest); err != nil {
 		return err
 	}
 	resources := ctx.ProjectResources
@@ -296,7 +309,7 @@ func writeProjectResources(workDir string, ctx TaskContextForEnv, manifest *side
 	if err != nil {
 		return err
 	}
-	if err := recordWriteFile(filepath.Join(dir, "resources.json"), data, 0o644, manifest); err != nil {
+	if err := recordWriteFile(path, data, fileMode, manifest); err != nil {
 		// .multica/project/resources.json is Multica-owned and a
 		// pre-existing path is almost certainly user content the
 		// manifest must not destroy. The runtime brief already lists
@@ -307,6 +320,13 @@ func writeProjectResources(workDir string, ctx TaskContextForEnv, manifest *side
 		}
 	}
 	return nil
+}
+
+func projectResourcesPath(workDir string, ctx TaskContextForEnv) string {
+	if ctx.PrivateRuntimeDir != "" {
+		return filepath.Join(ctx.PrivateRuntimeDir, "project", "resources.json")
+	}
+	return filepath.Join(workDir, ".multica", "project", "resources.json")
 }
 
 // resolveSkillsDir returns the directory where skills should be written

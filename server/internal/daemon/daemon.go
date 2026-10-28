@@ -178,7 +178,7 @@ func taskScopedAuthToken(task Task) (string, error) {
 	return token, nil
 }
 
-func taskMulticaEnvironment(task Task, provider, agentName, token, configRoot, workspacesRoot, serverURL string, healthPort, slot int, tempDir string, p4Workspace bool) map[string]string {
+func taskMulticaEnvironment(task Task, provider, agentName, token, configRoot, workspacesRoot, serverURL string, healthPort, slot int, tempDir string, p4Workspace *p4cache.Workspace) map[string]string {
 	env := map[string]string{
 		"MULTICA_TOKEN":        token,
 		cli.TaskConfigRootEnv:  configRoot,
@@ -194,12 +194,15 @@ func taskMulticaEnvironment(task Task, provider, agentName, token, configRoot, w
 		"TMP":                  tempDir,
 		"TEMP":                 tempDir,
 	}
-	if p4Workspace {
+	if p4Workspace != nil {
 		// A missing P4CONFIG file hides the directory's real one, and an
 		// unknown P4CLIENT makes workspace writes fail. Depot reads still
 		// work. This map is the agent's environment only.
 		env["P4CONFIG"] = ".multica-p4-disabled"
 		env["P4CLIENT"] = "multica-blocked"
+		env["P4PORT"] = p4Workspace.Port
+		env["P4USER"] = p4Workspace.User
+		env["P4CHARSET"] = p4Workspace.Charset
 	}
 	if issueID := strings.TrimSpace(task.IssueID); issueID != "" {
 		env["MULTICA_ISSUE_ID"] = issueID
@@ -6077,6 +6080,17 @@ func (e *environmentSetupError) Unwrap() error { return e.err }
 // except taskRunFailureReason.
 func asEnvironmentSetupFailure(err error) error { return &environmentSetupError{err: err} }
 
+// Directory setup needs its own recovery guidance even though it is part of
+// environment preparation. Keep the underlying diagnostic for run details.
+type localDirectorySetupError struct{ err error }
+
+func (e *localDirectorySetupError) Error() string { return e.err.Error() }
+func (e *localDirectorySetupError) Unwrap() error { return e.err }
+
+func asLocalDirectorySetupFailure(err error) error {
+	return asEnvironmentSetupFailure(&localDirectorySetupError{err: err})
+}
+
 func taskRunFailureReason(err error) string {
 	var p4Failure *p4FinalizeError
 	if errors.As(err, &p4Failure) {
@@ -6107,6 +6121,10 @@ func taskRunFailureReason(err error) string {
 	// preparationErrorKind (#7112).
 	if errors.Is(err, execenv.ErrOpenclawCLITimeout) {
 		return taskfailure.ReasonRuntimeCLITimeout.String()
+	}
+	var directorySetupErr *localDirectorySetupError
+	if errors.As(err, &directorySetupErr) {
+		return "local_directory_error"
 	}
 	// Everything else that failed while building or re-opening the execution
 	// environment. Last of the structural branches: the four sentinels above
@@ -7837,6 +7855,40 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		return TaskResult{}, fmt.Errorf("refusing to spawn agent: task has no workspace_id (task_id=%s)", task.ID)
 	}
 
+	// Client contention is resource waiting, not environment preparation.
+	// Bind before starting the preparation deadline, as with the path lock.
+	localAssignment, _ := localDirectoryAssignmentForTask(task, d.cfg.DaemonID)
+	customSpec, usesCustomProfileCommand := d.customProfileLaunchForRuntime(task.RuntimeID)
+	if err := validatePlanExecutionRuntime(task, usesCustomProfileCommand, localAssignment); err != nil {
+		return TaskResult{}, err
+	}
+	if err := requireInPlaceDirectoryForP4(task, localAssignment); err != nil {
+		return TaskResult{}, asLocalDirectorySetupFailure(err)
+	}
+	var taskP4Binding *p4TaskBinding
+	if localAssignment != nil && !localAssignment.UsesWorktree() && taskTargetsP4(task, localAssignment) {
+		var err error
+		taskP4Binding, err = d.bindP4Workspace(ctx, task, localAssignment, provider)
+		if err != nil {
+			return TaskResult{}, asLocalDirectorySetupFailure(fmt.Errorf("perforce workspace: %w", err))
+		}
+		if taskP4Binding != nil {
+			defer func() {
+				finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*d.p4CommandTimeout())
+				defer finishCancel()
+				if err := d.finishP4Workspace(finishCtx, task, taskP4Binding); err != nil {
+					returnErr = errors.Join(returnErr, &p4FinalizeError{err: err})
+				}
+			}()
+		}
+	}
+
+	// A workspace catalog is not a task resource. Once binding confirms it
+	// does not apply, omit it from task registration and runtime guidance.
+	if taskP4Binding == nil && !projectExplicitlyTargetsP4(task) {
+		task.P4Depots = nil
+	}
+
 	prepareTimeout := d.effectiveTaskPrepareTimeout()
 	prepareCtx, cancelPrepare := context.WithTimeoutCause(ctx, prepareTimeout, errTaskPrepareTimeout)
 	prepareComplete := false
@@ -7880,9 +7932,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// "some other binary speaking this provider's protocol". Backends need it
 	// for compatibility exceptions verified against a specific vendor's CLI,
 	// which must not extend to arbitrary commands sharing a protocol family.
-	var usesCustomProfileCommand bool
-	if customSpec, isCustom := d.customProfileLaunchForRuntime(task.RuntimeID); isCustom {
-		usesCustomProfileCommand = true
+	if usesCustomProfileCommand {
 		entry.Path = customSpec.path
 		resolvedVersion = customSpec.version
 		// Filter here rather than relying on agent.New doing it, so that the
@@ -7976,6 +8026,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		IssueStatusesOmitted:             task.IssueStatusesOmitted,
 		ConnectedApps:                    task.ConnectedApps,
 	}
+	// Prepare and Reuse copy taskCtx; updating only those copies would leave
+	// the final runtime brief without the workspace binding.
+	if taskP4Binding != nil {
+		taskCtx.P4Workspace = taskP4Binding.envSpec()
+	}
 
 	// A local_directory task gets a fresh CODEX_HOME but mounts the same
 	// per-conversation sessions store as the task it replaces. Codex scopes its
@@ -8068,10 +8123,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Resolve any local_directory assignment again here so runTask can plumb
 	// LocalWorkDir into execenv. handleTask already validated + locked the
 	// path for worker tasks; leader tasks intentionally skip the assignment.
-	localAssignment, _ := localDirectoryAssignmentForTask(task, d.cfg.DaemonID)
-	if err := validatePlanExecutionRuntime(task, usesCustomProfileCommand, localAssignment); err != nil {
-		return TaskResult{}, err
-	}
 	if permissionMode == agent.PermissionModePlan {
 		profileFixedArgs = nil
 	}
@@ -8418,22 +8469,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			if localAssignment != nil {
 				prepParams.LocalWorkDir = localAssignment.AbsPath
 			}
-			if localAssignment != nil && !localAssignment.UsesWorktree() && taskTargetsP4(task, localAssignment) {
-				binding, bindErr := d.bindP4Workspace(prepareCtx, task, localAssignment, provider)
-				if bindErr != nil {
-					return TaskResult{}, asEnvironmentSetupFailure(fmt.Errorf("perforce workspace: %w", bindErr))
-				}
-				if binding != nil {
-					prepParams.Task.P4Workspace = binding.envSpec()
-					defer func() {
-						finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(prepareCtx), 3*d.p4CommandTimeout())
-						defer finishCancel()
-						if err := d.finishP4Workspace(finishCtx, task, binding); err != nil {
-							returnErr = errors.Join(returnErr, &p4FinalizeError{err: err})
-						}
-					}()
-				}
-			}
 			env, err = d.prepareExecutionEnvironment(prepareCtx, prepParams)
 			if err != nil {
 				return TaskResult{}, asEnvironmentSetupFailure(fmt.Errorf("prepare execution environment: %w", err))
@@ -8533,9 +8568,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if env.LocalDirectory || env.LocalWorktree != nil {
 		defer func() {
 			var cleanupErr error
-			if cerr := execenv.CleanupRuntimeConfig(env.WorkDir, provider); cerr != nil {
-				cleanupErr = cerr
-				d.logger.Warn("execenv: cleanup runtime config failed", "error", cerr)
+			if env.PrivateRuntimeDir == "" {
+				if cerr := execenv.CleanupRuntimeConfig(env.WorkDir, provider); cerr != nil {
+					cleanupErr = cerr
+					d.logger.Warn("execenv: cleanup runtime config failed", "error", cerr)
+				}
 			}
 			// Excise the sidecar tree (.agent_context/, .multica/,
 			// provider-specific .claude/skills/ etc.) that Prepare wrote
@@ -8652,6 +8689,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 
 	// Inject runtime-specific config (meta skill) so the agent discovers .agent_context/.
+	taskCtx.PrivateRuntimeDir = env.PrivateRuntimeDir
 	runtimeBrief, err := execenv.InjectRuntimeConfig(env.WorkDir, provider, taskCtx)
 	if err != nil {
 		d.logger.Warn("execenv: inject runtime config failed (non-fatal)", "error", err)
@@ -8675,6 +8713,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		promptOptions = append(promptOptions, WithWorktreeReplayConflicts(env.LocalWorktree.ReplayConflicts))
 	}
 	prompt := BuildPrompt(task, provider, promptOptions...)
+	if env.PrivateRuntimeDir != "" {
+		prompt = runtimeBrief + "\n\n---\n\n" + prompt
+	}
 
 	// Pass task-scoped auth credentials and context so the spawned agent CLI
 	// can call the Multica API and the local daemon (e.g. `multica repo checkout`).
@@ -8689,7 +8730,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		taskLog.Error("task auth token invalid; refusing to start agent", "error", err)
 		return TaskResult{}, err
 	}
-	agentEnv := taskMulticaEnvironment(task, provider, agentName, agentToken, env.MulticaConfigRoot, d.cfg.WorkspacesRoot, d.cfg.ServerBaseURL, d.cfg.HealthPort, slot, taskTempDir, d.p4Binding(task.ID) != nil)
+	var p4Workspace *p4cache.Workspace
+	if taskP4Binding != nil {
+		p4Workspace = taskP4Binding.ws
+	}
+	agentEnv := taskMulticaEnvironment(task, provider, agentName, agentToken, env.MulticaConfigRoot, d.cfg.WorkspacesRoot, d.cfg.ServerBaseURL, d.cfg.HealthPort, slot, taskTempDir, p4Workspace)
 	for key, value := range planModeEnvironment(task) {
 		agentEnv[key] = value
 	}
@@ -9066,6 +9111,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			}
 		}
 		freshPrompt := BuildPrompt(task, provider, promptOptions...)
+		if env.PrivateRuntimeDir != "" {
+			freshPrompt = runtimeBrief + "\n\n---\n\n" + freshPrompt
+		}
 
 		retryResult, retryTools, retryErr := d.executeAndDrain(ctx, backend, freshPrompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
 		if retryErr != nil {

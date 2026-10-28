@@ -5,6 +5,16 @@ import (
 	"testing"
 )
 
+func TestP4ReadOnlyWorkspaceBrief(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("codex", TaskContextForEnv{
+		P4Workspace: &P4WorkspaceForEnv{ReadOnly: true, Ticket: "123", Client: "alice_DEV"},
+	})
+	if !strings.Contains(out, "read-only Perforce access") || strings.Contains(out, "Open a file with") {
+		t.Fatalf("coordination task received editing instructions:\n%s", out)
+	}
+}
+
 // A task configured with Perforce and no repository has nothing to check out
 // and no commit to author, yet the brief shipped it `multica repo checkout`
 // and a git-identity paragraph. Both read as instructions, so agents went
@@ -117,6 +127,7 @@ func TestP4WorkspaceSectionNamesTheClientAndItsRules(t *testing.T) {
 		"refs #123456",
 		// How to write, and why the read-only bit is not the way.
 		"multica p4 edit -- <files>",
+		"Do not pass `--port`",
 		"multica p4 add-files -- <files>",
 		"never clear the read-only bit",
 		// The task changelist is implicit, and discoverable.
@@ -133,7 +144,7 @@ func TestP4WorkspaceSectionNamesTheClientAndItsRules(t *testing.T) {
 		"`not_head`",
 		"stop on that file and explain it in the issue",
 		// What happens after the turn, and what the reply owes the human.
-		"shelves the rest, and opens a Helix Swarm review",
+		"shelves the rest while retaining existing shelf-only files",
 		"the changelist number (`multica p4 status`), and how to verify it in Unreal Editor",
 		// Project rules live in the depot.
 		"Read `Game/DJ01/AGENTS.md` first",
@@ -195,12 +206,19 @@ func TestP4WorkspaceWithoutTicketRefusesToOpenFiles(t *testing.T) {
 			t.Errorf("ticket-less workspace brief missing %q; got:\n%s", want, out)
 		}
 	}
+	// Available Commands still names the invocation and points here for
+	// permission. This section is what must not teach it: an agent that has
+	// read this far should ask for a ticket, not open a file.
+	section := out[strings.Index(out, "## Perforce workspace"):]
+	if next := strings.Index(section[len("## Perforce workspace"):], "\n## "); next >= 0 {
+		section = section[:len("## Perforce workspace")+next]
+	}
 	for _, banned := range []string{
 		"multica p4 edit -- <files>",
 		"multica p4 add-files -- <files>",
 	} {
-		if strings.Contains(out, banned) {
-			t.Errorf("ticket-less workspace brief should not teach %q; got:\n%s", banned, out)
+		if strings.Contains(section, banned) {
+			t.Errorf("ticket-less workspace section should not teach %q; got:\n%s", banned, section)
 		}
 	}
 }

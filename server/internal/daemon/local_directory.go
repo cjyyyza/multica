@@ -158,12 +158,16 @@ func taskTargetsP4(task Task, assignment *localDirectoryAssignment) bool {
 	if assignment != nil && !assignment.UsesWorktree() {
 		return true
 	}
-	for _, r := range task.ProjectResources {
-		if r.ResourceType == "perforce_depot" {
+	return projectExplicitlyTargetsP4(task)
+}
+
+func projectExplicitlyTargetsP4(task Task) bool {
+	for _, resource := range task.ProjectResources {
+		if resource.ResourceType == "perforce_depot" {
 			return true
 		}
 	}
-	return len(task.ProjectResources) == 0 && len(task.Repos) == 0
+	return false
 }
 
 // localDirectoryLockExempt reports whether a task may run inside an in_place

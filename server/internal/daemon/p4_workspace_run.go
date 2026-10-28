@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/daemon/p4cache"
 	"github.com/multica-ai/multica/server/internal/p4depot"
 )
+
+var p4DescriptionTicketMarker = regexp.MustCompile(`(?i)\brefs\s*#`)
 
 // p4Warning is one non-fatal observation attached to a workspace-mode run
 // or status response. kind is one of not_head, opened_elsewhere,
@@ -57,6 +60,9 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 		return nil, rejectP4(p4CodeActionNotAllowed, "this task's Perforce workspace is already closing", nil, nil), nil
 	}
 	action := strings.ToLower(strings.TrimSpace(req.Action))
+	if b.readOnly && action != p4cache.ActionOpened && action != p4cache.ActionDescribe {
+		return nil, rejectP4(p4CodeActionNotAllowed, "chat and tasks without an issue may only read the Perforce workspace", nil, nil), nil
+	}
 	if b.isSubmitted() && action != p4cache.ActionOpened && action != p4cache.ActionDescribe && action != "sync" {
 		return nil, rejectP4(p4CodeActionNotAllowed, "this task's changelist has already been submitted", nil, nil), nil
 	}
@@ -66,6 +72,11 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 		}
 	} else if rej := b.rejectForeignChangelist(req.Changelist); rej != nil {
 		return nil, rej, nil
+	}
+	if b.registrationPending && action != p4cache.ActionOpened && action != p4cache.ActionDescribe {
+		if err := d.registerPendingP4Change(ctx, b); err != nil {
+			return nil, nil, err
+		}
 	}
 	switch action {
 	case "submit":
@@ -103,9 +114,28 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 	case p4cache.ActionShelve:
 		return d.workspaceShelve(ctx, b)
 	}
+	if action == p4cache.ActionRevert && req.RevertUnchanged && len(req.Files) == 0 {
+		files, err := d.revertableP4Files(ctx, b)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(files) == 0 {
+			return workspaceVerbResult(b, action, b.changelist(), "No unchanged files opened by this run."), nil, nil
+		}
+		req.Files = files
+	}
 
 	files, dest, rej := b.resolveWorkspacePaths(cwd, req.Files, req.Dest)
 	if rej != nil {
+		return nil, rej, nil
+	}
+	var localTargets []string
+	for _, path := range append(append([]string{}, files...), dest) {
+		if path != "" && !strings.HasPrefix(path, "//") {
+			localTargets = append(localTargets, path)
+		}
+	}
+	if rej := b.rejectSidecars(action, localTargets); rej != nil {
 		return nil, rej, nil
 	}
 	// Depot syntax is an alias for a local path, including files not in the
@@ -148,8 +178,18 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 	if err != nil {
 		return nil, nil, err
 	}
+	if rej := b.rejectDepotFiles(action, states); rej != nil {
+		return nil, rej, nil
+	}
 	if rej := b.rejectFileStates(action, states); rej != nil {
 		return nil, rej, nil
+	}
+	if action == p4cache.ActionRevert {
+		for _, path := range files {
+			if !b.touchedPaths[p4WorkspacePathKey(path)] {
+				return nil, rejectP4(p4CodeOpenedByYou, "file was not opened by this run", []string{path}, nil), nil
+			}
+		}
 	}
 	warnings := workspaceFileWarnings(states, b.ref.AllowExclusive)
 
@@ -175,6 +215,11 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 	case p4cache.ActionMove:
 		runFiles = []string{files[0], dest}
 	}
+	// P4 can apply some files before returning an error.
+	b.touchChange()
+	if actionOpensFiles(action) {
+		b.touchPaths(targets)
+	}
 	output, err := d.p4Cache.RunInChange(ctx, b.ws, change, action, runFiles, flags...)
 	if err != nil {
 		return nil, nil, err
@@ -197,10 +242,14 @@ func (d *Daemon) workspaceSubmit(ctx context.Context, b *p4TaskBinding) (*p4Work
 		return nil, rejectP4(p4CodeActionNotAllowed, "this task has no changelist yet; open a file first", nil, nil), nil
 	}
 	validate := func() (*p4Rejection, error) {
-		desc, err := d.p4Cache.PendingChangeDescription(ctx, b.ws, change)
+		spec, err := d.p4Cache.ReadPendingChange(ctx, b.ws, change)
 		if err != nil {
 			return nil, err
 		}
+		if spec.Stream != "" {
+			return rejectP4(p4CodeActionNotAllowed, "this changelist contains an open stream specification; a person must move or submit it before the agent can submit files", nil, nil), nil
+		}
+		desc := spec.Description
 		if !p4depot.ValidTicket(b.ticket) || p4depot.TicketFromText(desc) != b.ticket {
 			return rejectP4(p4CodeTicketRequired, "the changelist description must still reference this task's ticket refs #"+b.ticket, nil, nil), nil
 		}
@@ -215,15 +264,66 @@ func (d *Daemon) workspaceSubmit(ctx context.Context, b *p4TaskBinding) (*p4Work
 	if rej, err := validate(); rej != nil || err != nil {
 		return nil, rej, err
 	}
-	if _, err := d.p4Cache.RunInChange(ctx, b.ws, change, "revert", []string{"//" + b.ws.Client + "/..."}, "-a"); err != nil {
+	opened, err := d.p4Cache.OpenedInChange(ctx, b.ws, change)
+	if err != nil {
 		return nil, nil, err
 	}
-	opened, err := d.p4Cache.OpenedInChange(ctx, b.ws, change)
+	current := make(map[string]p4OpenedFileSnapshot, len(opened))
+	for _, file := range opened {
+		current[file.DepotFile] = p4OpenedFileSnapshot{}
+	}
+	if removed := removedP4OpenedFiles(b.initialOpened, current); len(removed) > 0 {
+		return nil, rejectP4(p4CodeOpenedByYou, "pre-existing opens were removed; restore them before submitting", removed, nil), nil
+	}
+	shelf, err := d.p4Cache.ReadShelf(ctx, b.ws, change)
+	if err != nil {
+		return nil, nil, err
+	}
+	if shelf.Stream != "" {
+		return nil, rejectP4(p4CodeActionNotAllowed, "this changelist contains a stream specification; a person must move or submit it before the agent can submit files", nil, nil), nil
+	}
+	if rej := b.rejectDepotFiles("submit", append(append([]p4cache.FileState{}, opened...), shelf.Files...)); rej != nil {
+		return nil, rej, nil
+	}
+	b.touchChange()
+	revertFiles, err := d.revertableP4Files(ctx, b)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(revertFiles) > 0 {
+		if _, err := d.p4Cache.RunInChange(ctx, b.ws, change, "revert", revertFiles, "-a"); err != nil {
+			return nil, nil, err
+		}
+	}
+	opened, err = d.p4Cache.OpenedInChange(ctx, b.ws, change)
 	if err != nil {
 		return nil, nil, err
 	}
 	if len(opened) == 0 {
 		return nil, rejectP4(p4CodeActionNotAllowed, "this task's changelist has no modified files to submit", nil, nil), nil
+	}
+	shelf, err = d.p4Cache.ReadShelf(ctx, b.ws, change)
+	if err != nil {
+		return nil, nil, err
+	}
+	if shelf.Stream != "" {
+		return nil, rejectP4(p4CodeActionNotAllowed, "this changelist contains a stream specification; a person must move or submit it before the agent can submit files", nil, nil), nil
+	}
+	openPaths := make(map[string]bool, len(opened))
+	for _, file := range opened {
+		openPaths[file.DepotFile] = true
+	}
+	for _, file := range shelf.Files {
+		if !openPaths[file.DepotFile] {
+			unchanged, err := d.p4Cache.ShelfFileMatchesHave(ctx, b.ws, change, file)
+			if err != nil {
+				return nil, nil, err
+			}
+			if unchanged {
+				continue
+			}
+			return nil, rejectP4(p4CodeActionNotAllowed, "the shelf contains files not open in this task changelist; restore or explicitly remove them before submitting", []string{file.DepotFile}, nil), nil
+		}
 	}
 	// Re-read after cleanup: a person can edit the description in P4V while
 	// the task is running. Never rewrite their description to authorize submit.
@@ -253,7 +353,22 @@ func (d *Daemon) workspaceUnshelve(ctx context.Context, b *p4TaskBinding) (*p4Wo
 	}
 	// -s and -c are the same task changelist. Another shelf would land
 	// someone else's files in this workspace.
-	output, err := d.p4Cache.RunInChange(ctx, b.ws, change, "unshelve", nil, "-s", change)
+	shelf, err := d.p4Cache.ReadShelf(ctx, b.ws, change)
+	if err != nil {
+		return nil, nil, err
+	}
+	if rej := b.rejectDepotFiles("unshelve", shelf.Files); rej != nil {
+		return nil, rej, nil
+	}
+	for _, file := range shelf.Files {
+		path, rej, err := d.workspaceLocalPath(ctx, b, file.DepotFile)
+		if rej != nil || err != nil {
+			return nil, rej, err
+		}
+		b.touchPaths([]string{path})
+	}
+	b.touchChange()
+	output, err := d.p4Cache.RunInChange(ctx, b.ws, change, "unshelve", nil, "-s", change, "-Af")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -285,17 +400,18 @@ func workspaceVerbResult(b *p4TaskBinding, action, change, output string) *p4Wor
 }
 
 func (d *Daemon) workspaceLocalPath(ctx context.Context, b *p4TaskBinding, path string) (string, *p4Rejection, error) {
-	if strings.HasPrefix(path, "//") {
-		local, err := d.p4Cache.LocalPath(ctx, b.ws, path)
-		if err != nil {
-			return "", nil, err
-		}
-		paths, rej := b.resolveOneList(b.ws.Dir, []string{local})
-		if rej != nil {
-			return "", rej, nil
-		}
-		path = paths[0]
+	depot, local, err := d.p4Cache.MappedFile(ctx, b.ws, path)
+	if err != nil {
+		return "", nil, err
 	}
+	if _, allowed := b.depotRef(depot); !allowed {
+		return "", rejectP4(p4CodeNotInWorkspace, "mapped file is outside this task's authorized depots", []string{depot}, nil), nil
+	}
+	paths, rej := b.resolveOneList(b.ws.Dir, []string{local})
+	if rej != nil {
+		return "", rej, nil
+	}
+	path = paths[0]
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
 		return "", rejectP4(p4CodeActionNotAllowed, "workspace mode requires individual files, not directories", []string{path}, nil), nil
 	}
@@ -331,8 +447,24 @@ func actionNeedsChange(action string) bool {
 
 func (d *Daemon) ensureTaskChange(ctx context.Context, b *p4TaskBinding) (string, error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	change, err := d.ensureTaskChangeLocked(ctx, b)
+	b.mu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	if err := d.registerPendingP4Change(ctx, b); err != nil {
+		return "", err
+	}
+	return change, nil
+}
+
+func (d *Daemon) ensureTaskChangeLocked(ctx context.Context, b *p4TaskBinding) (string, error) {
 	if b.change != "" {
+		if b.initialOpened != nil && !b.descriptionReady {
+			if err := d.prepareReusedP4Description(ctx, b); err != nil {
+				return "", err
+			}
+		}
 		return b.change, nil
 	}
 	if strings.TrimSpace(b.ticket) == "" {
@@ -345,18 +477,71 @@ func (d *Daemon) ensureTaskChange(ctx context.Context, b *p4TaskBinding) (string
 		}
 		if existing != "" {
 			b.change = existing
-			b.description = p4depot.ChangeDescription(b.ticket, b.title, b.issueKey)
+			spec, err := d.p4Cache.ReadPendingChange(ctx, b.ws, existing)
+			if err != nil {
+				return "", err
+			}
+			b.description = spec.Description
+			b.initialOpened, err = d.snapshotP4Change(ctx, b)
+			if err != nil {
+				return "", err
+			}
+			if err := d.prepareReusedP4Description(ctx, b); err != nil {
+				return "", err
+			}
 			return existing, nil
 		}
 	}
 	desc := p4depot.ChangeDescription(b.ticket, b.title, b.issueKey)
+	b.changeTouched = true
 	change, err := d.p4Cache.CreateTaskChange(ctx, b.ws, desc)
 	if err != nil {
 		return "", err
 	}
 	b.change = change
 	b.description = desc
+	b.descriptionReady = true
 	return change, nil
+}
+
+// Called with b.mu held. Repair only a ticket that was already absent when
+// binding; never overwrite human edits or a conflicting task association.
+func (d *Daemon) prepareReusedP4Description(ctx context.Context, b *p4TaskBinding) error {
+	spec, err := d.p4Cache.ReadPendingChange(ctx, b.ws, b.change)
+	if err != nil {
+		return err
+	}
+	desc := spec.Description
+	if !p4depot.ValidTicket(b.ticket) {
+		return fmt.Errorf("this task has no valid bound ticket")
+	}
+	if !p4depot.DescriptionHasTaskTrailer(desc, b.issueKey) {
+		return fmt.Errorf("the changelist no longer identifies this task's issue")
+	}
+	for _, line := range strings.Split(desc, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(strings.ToLower(line), strings.ToLower(p4depot.TaskTrailerPrefix)) &&
+			!strings.EqualFold(line, p4depot.TaskTrailerPrefix+b.issueKey) {
+			return fmt.Errorf("the changelist identifies another issue")
+		}
+	}
+	ticket := p4depot.TicketFromText(desc)
+	if ticket != "" && ticket != b.ticket {
+		return fmt.Errorf("the changelist references another ticket refs #%s", ticket)
+	}
+	if ticket == "" {
+		if strings.TrimSpace(desc) != strings.TrimSpace(b.description) || p4DescriptionTicketMarker.MatchString(desc) {
+			return fmt.Errorf("the changelist ticket is missing or was edited; ask a person to restore refs #%s", b.ticket)
+		}
+		desc = "refs #" + b.ticket + "\n\n" + desc
+		b.changeTouched = true
+		if err := d.p4Cache.SetChangeDescription(ctx, b.ws, b.change, desc); err != nil {
+			return err
+		}
+	}
+	b.description = desc
+	b.descriptionReady = true
+	return nil
 }
 
 func (b *p4TaskBinding) resolveWorkspacePaths(cwd string, files []string, dest string) ([]string, string, *p4Rejection) {
@@ -393,38 +578,29 @@ func (b *p4TaskBinding) resolveOneList(cwd string, files []string) ([]string, *p
 			return nil, rejectP4(p4CodeActionNotAllowed, "workspace mode requires individual file paths without wildcards or revision specifiers", []string{file}, nil)
 		}
 		if strings.HasPrefix(file, "//") {
-			if !b.depotVisible(file) {
-				outside = append(outside, file)
-				continue
-			}
 			out = append(out, file)
 			continue
 		}
 		abs := file
 		if !filepath.IsAbs(file) {
-			abs = filepath.Join(cwd, file)
+			if filepath.VolumeName(file) != "" || os.IsPathSeparator(file[0]) || !filepath.IsAbs(cwd) {
+				outside = append(outside, file)
+				continue
+			}
+			// Join/Abs clean away link/.. before the filesystem can resolve it.
+			abs = strings.TrimRight(cwd, string(filepath.Separator)) + string(filepath.Separator) + file
 		}
-		abs, err := filepath.Abs(abs)
-		if err != nil || !pathEqualOrInside(b.ws.Root, abs) {
+		resolved, err := b.ws.ResolveLocalPath(abs)
+		if err != nil {
 			outside = append(outside, file)
 			continue
 		}
-		out = append(out, abs)
+		out = append(out, resolved)
 	}
 	if len(outside) > 0 {
 		return nil, rejectP4(p4CodeNotInWorkspace, "path is outside the Perforce client root "+b.ws.Root, outside, nil)
 	}
 	return out, nil
-}
-
-func (b *p4TaskBinding) depotVisible(path string) bool {
-	target := b.ws.Stream
-	if target == "" {
-		target = depotScopePath(b.ref)
-	}
-	target = strings.TrimSuffix(target, "/...")
-	path = strings.TrimSuffix(strings.TrimSpace(path), "/...")
-	return path == target || strings.HasPrefix(path, target+"/")
 }
 
 func (b *p4TaskBinding) rejectSidecars(action string, paths []string) *p4Rejection {
@@ -459,6 +635,9 @@ func (b *p4TaskBinding) rejectFileStates(action string, states []p4cache.FileSta
 		}
 		switch action {
 		case p4cache.ActionRevert:
+			if _, protected := b.initialOpened[state.DepotFile]; protected {
+				return rejectP4(p4CodeOpenedByYou, "file was already open before this run", []string{state.DepotFile}, nil)
+			}
 			if state.OpenChange != taskChange {
 				outside = append(outside, state.DepotFile)
 			}
@@ -497,7 +676,8 @@ func (b *p4TaskBinding) rejectFileStates(action string, states []p4cache.FileSta
 			lockedHolders = append(lockedHolders, state.OtherOpens...)
 			continue
 		}
-		if state.Exclusive() && !b.ref.AllowExclusive && action != p4cache.ActionRevert {
+		ref, _ := b.depotRef(state.DepotFile)
+		if state.Exclusive() && !ref.AllowExclusive && action != p4cache.ActionRevert {
 			exclusiveFiles = append(exclusiveFiles, state.DepotFile)
 		}
 	}
@@ -572,7 +752,7 @@ func (d *Daemon) workspaceOpened(ctx context.Context, b *p4TaskBinding) (*p4Work
 		err    error
 	)
 	if change == "" {
-		states, err = d.p4Cache.Opened(ctx, b.ws)
+		return workspaceVerbResult(b, p4cache.ActionOpened, "", ""), nil, nil
 	} else {
 		states, err = d.p4Cache.OpenedInChange(ctx, b.ws, change)
 	}
@@ -624,6 +804,7 @@ func (d *Daemon) workspaceRetitle(ctx context.Context, b *p4TaskBinding, descrip
 	if err != nil {
 		return nil, nil, err
 	}
+	b.touchChange()
 	if err := d.p4Cache.SetChangeDescription(ctx, b.ws, change, desc); err != nil {
 		return nil, nil, err
 	}
@@ -674,11 +855,32 @@ func (d *Daemon) workspaceShelve(ctx context.Context, b *p4TaskBinding) (*p4Work
 	if change == "" {
 		return nil, rejectP4(p4CodeActionNotAllowed, "this task has no changelist yet; open a file first", nil, nil), nil
 	}
-	flags := []string{"-r"}
-	if b.ws.Edge {
-		flags = append(flags, "-p")
+	opened, err := d.p4Cache.OpenedInChange(ctx, b.ws, change)
+	if err != nil {
+		return nil, nil, err
 	}
-	output, err := d.p4Cache.RunInChange(ctx, b.ws, change, p4cache.ActionShelve, nil, flags...)
+	files := make([]string, 0, len(opened))
+	for _, file := range opened {
+		files = append(files, file.DepotFile)
+	}
+	if b.initialOpened != nil {
+		current, err := d.snapshotP4Change(ctx, b)
+		if err != nil {
+			return nil, nil, err
+		}
+		files = changedP4OpenedFiles(b.initialOpened, current)
+		if removed := removedP4OpenedFiles(b.initialOpened, current); len(removed) > 0 {
+			return nil, rejectP4(p4CodeOpenedByYou, "pre-existing opens were removed; restore them before shelving", removed, nil), nil
+		}
+	}
+	if len(files) == 0 {
+		return nil, rejectP4(p4CodeActionNotAllowed, "this run has no changed opens to shelve; its existing shelf is unchanged", nil, nil), nil
+	}
+	if err := d.validateP4CloseoutFiles(ctx, b, files); err != nil {
+		return nil, nil, err
+	}
+	b.touchChange()
+	output, err := d.p4Cache.ShelveFiles(ctx, b.ws, change, files)
 	if err != nil {
 		return nil, nil, err
 	}

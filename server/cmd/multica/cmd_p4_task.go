@@ -177,8 +177,8 @@ var p4SwarmLinkCmd = &cobra.Command{
 }
 
 func addP4TaskFlags(cmd *cobra.Command, files bool) {
-	cmd.Flags().StringVar(&p4Port, "port", "", "P4PORT (host:port or ssl:host:port)")
-	cmd.Flags().StringVar(&p4DepotPath, "depot", "", "Depot path (//depot/project/...)")
+	cmd.Flags().StringVar(&p4Port, "port", "", "P4PORT. Omit in a bound workspace; the daemon fills it. Do not look it up")
+	cmd.Flags().StringVar(&p4DepotPath, "depot", "", "Depot path. Omit in a bound workspace; the daemon fills it")
 	cmd.Flags().StringVar(&p4Stream, "stream", "", "Optional stream path")
 	cmd.Flags().StringVar(&p4User, "user", "", "Optional P4USER override")
 	cmd.Flags().StringVar(&p4Charset, "charset", "", "Optional P4CHARSET")
@@ -388,7 +388,7 @@ func runP4Mutate(action string) func(*cobra.Command, []string) error {
 }
 
 func runP4Status(cmd *cobra.Command, _ []string) error {
-	payload, err := p4DaemonCall(cmd.Context(), http.MethodGet, "/p4/status", nil, time.Minute)
+	payload, err := p4DaemonCall(cmd.Context(), http.MethodGet, "/p4/status", nil, p4DaemonTimeout())
 	if err != nil {
 		return reportP4Failure("p4 status", err)
 	}
@@ -466,7 +466,7 @@ func runP4Swarm(action string) func(*cobra.Command, []string) error {
 		}
 		// Creating a review shelves the changelist first, so this budget has to
 		// cover a Perforce shelve plus the Swarm round trip, not just the HTTP call.
-		payload, err := p4DaemonPost(cmd.Context(), "/p4/swarm", body, 3*time.Minute)
+		payload, err := p4DaemonPost(cmd.Context(), "/p4/swarm", body, p4DaemonTimeout())
 		if err != nil {
 			return reportP4Failure("p4 swarm "+action, err)
 		}

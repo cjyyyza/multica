@@ -20,7 +20,7 @@ func TestP4SubmitReportsAuthoritativeReceipt(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("P4_FAKE_CHANGEOUT", "Change: 1001\nClient: alice_main\nUser: alice\nStatus: pending\nDescription:\n\trefs #123 fix\n")
 	t.Setenv("P4_FAKE_MUTATE", "Change 1001 renamed change 2002 and submitted.\n")
-	t.Setenv("P4_FAKE_DESCRIBE", "... change 2002\n... oldChange 1001\n... status submitted\n... depotFile0 //depot/main/a.cpp\n... action0 edit\n... type0 text\n... depotFile1 //depot/main/b.cpp\n... action1 add\n... type1 text\n")
+	t.Setenv("P4_FAKE_DESCRIBE", "... change 2002\n... oldChange 1001\n... status submitted\n... time 1700000000\n... depotFile0 //depot/main/a.cpp\n... action0 edit\n... type0 text\n... depotFile1 //depot/main/b.cpp\n... action1 add\n... type1 text\n")
 	t.Setenv("P4_FAKE_OPENED", "... depotFile //depot/main/a.cpp\n... change 1001\n... action edit\n")
 	var got p4ChangelistReport
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +52,9 @@ func TestP4SubmitReportsAuthoritativeReceipt(t *testing.T) {
 	}
 	if got.Number != 2002 || got.OriginalNumber != 1001 || got.FilesCount != 2 || got.Status != "submitted" {
 		t.Fatalf("submitted receipt = %+v", got)
+	}
+	if got.SubmittedAt != "2023-11-14T22:13:20Z" || !got.FencePolls {
+		t.Fatalf("submission facts were not preserved for durable delivery: %+v", got)
 	}
 }
 
@@ -103,6 +106,8 @@ func TestP4SubmitReceiptFailureDoesNotResubmitOrReportCompletion(t *testing.T) {
 func TestP4FinishFailureReportsPendingChange(t *testing.T) {
 	bin := writeDaemonFakeP4(t)
 	t.Setenv("P4_FAKE_MUTATE_ERR", "simulated connection failure")
+	t.Setenv("P4_FAKE_DEPOT", "//depot/Dev")
+	t.Setenv("P4_FAKE_OPENED", "... depotFile //depot/Dev/A.cpp\n... action edit\n... change 1001\n")
 	var got p4ChangelistReport
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
@@ -118,6 +123,7 @@ func TestP4FinishFailureReportsPendingChange(t *testing.T) {
 		taskID: "task", ticket: "123", change: "1001",
 	}
 	d := &Daemon{client: NewClient(api.URL), p4Cache: &p4cache.Cache{P4Path: bin}, logger: slog.Default()}
+	b.touchPaths([]string{filepath.Join(root, "A.cpp")})
 	d.rememberP4Binding(b)
 	if err := d.finishP4Workspace(t.Context(), Task{ID: "task"}, b); err == nil {
 		t.Fatal("failed Perforce finalization was reported as success")

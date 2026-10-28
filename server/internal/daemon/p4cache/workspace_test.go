@@ -69,11 +69,23 @@ func main() {
 		emit("CLIENT")
 	case rest[0] == "fstat":
 		emit("FSTAT")
+	case rest[0] == "where":
+		emit("WHERE")
+	case rest[0] == "diff2":
+		emit("DIFF2")
 	case rest[0] == "opened":
 		emit("OPENED")
 	case rest[0] == "changes":
 		emit("CHANGES")
 	case rest[0] == "describe":
+		if strings.Contains(joined, " -S ") {
+			if _, ok := os.LookupEnv("P4_FAKE_SHELF"); ok || os.Getenv("P4_FAKE_SHELF_ERR") != "" {
+				emit("SHELF")
+			} else {
+				fmt.Printf("... change %s\n... status pending\n", rest[len(rest)-1])
+			}
+			return
+		}
 		if original := os.Getenv("P4_FAKE_ORIGINAL_CHANGE"); original != "" && strings.Contains(joined, " " + original + " ") && !strings.Contains(joined, " -O ") {
 			fmt.Fprintln(os.Stderr, "Change " + original + " unknown.")
 			os.Exit(1)
@@ -231,8 +243,13 @@ func TestDetectWorkspaceRefusesAForeignClient(t *testing.T) {
 			want:   "outside the root",
 		},
 		{
-			name: "client does not exist",
+			name: "client root cannot be verified",
 			info: "... userName alice\n... clientName alice_DEV\n",
+			want: "could not be verified",
+		},
+		{
+			name: "client is explicitly unknown",
+			info: "... userName alice\n... clientName unknown\n",
 			want: "does not exist",
 		},
 		{
@@ -341,6 +358,153 @@ func TestFileStatesSurfacesRealFailures(t *testing.T) {
 	}
 }
 
+func TestFileStatesRejectsPartialFailure(t *testing.T) {
+	fixture := newWorkspaceFixture(t)
+	ws := fixture.detect(t)
+	t.Setenv("P4_FAKE_FSTAT", "... depotFile //DJ01_Proj/Dev/A.cpp\n... headType text\n")
+	t.Setenv("P4_FAKE_FSTAT_ERR", "B.cpp - permission denied.")
+	if _, err := fixture.cache.FileStates(t.Context(), ws, []string{"A.cpp", "B.cpp"}); err == nil {
+		t.Fatal("partial fstat success hid a permission failure")
+	}
+}
+
+func TestShelfFileMatchesHaveRequiresConfirmedContentAndType(t *testing.T) {
+	fixture := newWorkspaceFixture(t)
+	ws := fixture.detect(t)
+	const file = "//depot/main/A.cpp"
+	for _, tc := range []struct {
+		name, response, failure string
+		identical               bool
+	}{
+		{name: "identical", response: "... status identical\n... depotFile " + file + "\n... depotFile2 " + file + "\n", identical: true},
+		{name: "different content", response: "... status content\n... depotFile " + file + "\n... depotFile2 " + file + "\n"},
+		{name: "different type", response: "... status types\n... depotFile " + file + "\n... depotFile2 " + file + "\n"},
+		{name: "wrong file", response: "... status identical\n... depotFile //depot/main/B.cpp\n... depotFile2 " + file + "\n"},
+		{name: "empty response"},
+		{name: "partial failure", response: "... status identical\n... depotFile " + file + "\n... depotFile2 " + file + "\n", failure: "permission denied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("P4_FAKE_DIFF2", tc.response)
+			t.Setenv("P4_FAKE_DIFF2_ERR", tc.failure)
+			same, err := fixture.cache.ShelfFileMatchesHave(t.Context(), ws, "1001", FileState{DepotFile: file, Action: "edit"})
+			if same != tc.identical || (err != nil) != (tc.failure != "") {
+				t.Fatalf("same=%v error=%v", same, err)
+			}
+		})
+	}
+}
+
+func TestPendingChangeDescriptionPreservesHumanFormatting(t *testing.T) {
+	fixture := newWorkspaceFixture(t)
+	ws := fixture.detect(t)
+	const description = "Human summary\n\n\tIndented details\n#review-42\nMultica: MUL-7"
+	t.Setenv("P4_FAKE_CHANGEOUT", "Change: 1001\nClient: alice_DEV\nUser: alice\nStatus: pending\nDescription:\n\t"+strings.ReplaceAll(description, "\n", "\n\t")+"\n")
+	got, err := fixture.cache.ReadPendingChange(t.Context(), ws, "1001")
+	if err != nil || got.Description != description {
+		t.Fatalf("description=%q error=%v", got.Description, err)
+	}
+}
+
+func TestFinishChangePreservesExistingShelf(t *testing.T) {
+	for _, tc := range []struct {
+		name, opened, failure string
+	}{
+		{name: "shelf only"},
+		{name: "shelf and new open", opened: "... depotFile //DJ01_Proj/Dev/B.cpp\n... action edit\n... change 794230\n"},
+		{name: "shelf lookup failure", failure: "connection lost"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newWorkspaceFixture(t)
+			ws := fixture.detect(t)
+			t.Setenv("P4_FAKE_OPENED", tc.opened)
+			t.Setenv("P4_FAKE_FSTAT", tc.opened)
+			t.Setenv("P4_FAKE_SHELF", "... change 794230\n... status pending\n... depotFile0 //DJ01_Proj/Dev/A.cpp\n... action0 edit\n... type0 text\n")
+			t.Setenv("P4_FAKE_SHELF_ERR", tc.failure)
+			result, err := fixture.cache.FinishChange(t.Context(), ws, "794230", FinishChangeOptions{RevertFiles: []string{"//" + ws.Client + "/..."}})
+			log := fixture.log(t)
+			for _, forbidden := range []string{"shelve -d", "shelve -r", "change -d"} {
+				if strings.Contains(log, forbidden) {
+					t.Fatalf("existing shelf was destroyed by %q:\n%s", forbidden, log)
+				}
+			}
+			if tc.failure != "" {
+				if err == nil || strings.Contains(log, "shelve -f") {
+					t.Fatalf("failed shelf lookup allowed a write: result=%+v error=%v\n%s", result, err, log)
+				}
+				return
+			}
+			wantFiles := 1
+			if tc.opened != "" {
+				wantFiles = 2
+				if !strings.Contains(log, "shelve -f -Af -c 794230 //DJ01_Proj/Dev/B.cpp") {
+					t.Fatalf("new file was not shelved without replacing shelf-only files:\n%s", log)
+				}
+			} else if strings.Contains(log, "shelve -f") {
+				t.Fatalf("an untouched shelf was rewritten:\n%s", log)
+			}
+			if err != nil || result == nil || !result.Shelved || result.Deleted || len(result.Files) != wantFiles {
+				t.Fatalf("result=%+v error=%v, want %d preserved files", result, err, wantFiles)
+			}
+		})
+	}
+}
+
+func TestFinishChangeRefusesUnverifiedShelf(t *testing.T) {
+	fixture := newWorkspaceFixture(t)
+	ws := fixture.detect(t)
+	for _, response := range []string{
+		"",
+		"... change 999\n... status pending\n",
+		"... change 794230\n... status submitted\n",
+		"... change 794230\n... status pending\n... depotFile1 //depot/A.cpp\n",
+		"... change 794230\n... status pending\n... depotFile0 \n",
+		"... change 794230\n... status pending\n... stream invalid\n",
+	} {
+		t.Run(response, func(t *testing.T) {
+			t.Setenv("P4_FAKE_SHELF", response)
+			before := fixture.log(t)
+			if _, err := fixture.cache.FinishChange(t.Context(), ws, "794230", FinishChangeOptions{RevertFiles: []string{"//" + ws.Client + "/..."}}); err == nil {
+				t.Fatal("unverified shelf was treated as empty")
+			}
+			log := strings.TrimPrefix(fixture.log(t), before)
+			for _, verb := range []string{"revert ", "shelve ", "change -d"} {
+				if strings.Contains(log, verb) {
+					t.Fatalf("invalid shelf response allowed mutation:\n%s", log)
+				}
+			}
+		})
+	}
+}
+
+func TestFinishChangePreservesStreamShelfAndValidFiles(t *testing.T) {
+	fixture := newWorkspaceFixture(t)
+	ws := fixture.detect(t)
+	for _, files := range []string{"", "... depotFile0 //DJ01_Proj/Dev/A.cpp\n... action0 edit\n... type0 text\n"} {
+		t.Run(files, func(t *testing.T) {
+			t.Setenv("P4_FAKE_SHELF", "... change 794230\n... status pending\n... stream //DJ01_Proj/Dev\n"+files)
+			before := fixture.log(t)
+			result, err := fixture.cache.FinishChange(t.Context(), ws, "794230", FinishChangeOptions{})
+			if err != nil || !result.Shelved || result.Deleted || (len(result.Files) > 0) != (files != "") {
+				t.Fatalf("valid stream shelf was not retained: %+v %v", result, err)
+			}
+			if log := strings.TrimPrefix(fixture.log(t), before); strings.Contains(log, "change -d") || strings.Contains(log, "shelve -d") {
+				t.Fatalf("stream shelf was treated as an empty changelist: %s", log)
+			}
+		})
+	}
+}
+
+func TestShelveFilesDoesNotShelveAnOpenStreamSpec(t *testing.T) {
+	fixture := newWorkspaceFixture(t)
+	ws := fixture.detect(t)
+	if _, err := fixture.cache.ShelveFiles(t.Context(), ws, "794230", []string{"//DJ01_Proj/Dev/A.cpp"}); err != nil {
+		t.Fatal(err)
+	}
+	if log := fixture.log(t); !strings.Contains(log, "shelve -f -Af -c 794230 //DJ01_Proj/Dev/A.cpp") {
+		t.Fatalf("shelve did not limit its operation to files: %s", log)
+	}
+}
+
 func TestFindTaskChangeReusesTheIssueChangelist(t *testing.T) {
 	fixture := newWorkspaceFixture(t)
 	ws := fixture.detect(t)
@@ -392,7 +556,7 @@ func TestFinishChangeDeletesAnEmptyChangelist(t *testing.T) {
 	t.Setenv("P4_FAKE_OPENED", "")
 	t.Setenv("P4_FAKE_CHANGEDEL", "Change 794230 deleted.\n")
 
-	result, err := fixture.cache.FinishChange(context.Background(), ws, "794230")
+	result, err := fixture.cache.FinishChange(context.Background(), ws, "794230", FinishChangeOptions{RevertFiles: []string{"//" + ws.Client + "/..."}})
 	if err != nil {
 		t.Fatalf("FinishChange: %v", err)
 	}
@@ -406,8 +570,8 @@ func TestFinishChangeDeletesAnEmptyChangelist(t *testing.T) {
 	if !strings.Contains(log, "change -d 794230") {
 		t.Fatalf("empty changelist was left behind: %s", log)
 	}
-	if !strings.Contains(log, "shelve -d -c 794230") {
-		t.Fatalf("the old shelf was not removed: %s", log)
+	if strings.Contains(log, "shelve -d") {
+		t.Fatalf("an empty CL must not delete a shelf: %s", log)
 	}
 }
 
@@ -426,7 +590,7 @@ func TestFinishChangeShelvesRemainingWork(t *testing.T) {
 			t.Setenv("P4_FAKE_OPENED", "... depotFile //DJ01_Proj/Dev/Game/A.uasset\n... action edit\n... change 794230\n... type binary+l\n")
 			t.Setenv("P4_FAKE_FSTAT", "... depotFile //DJ01_Proj/Dev/Game/A.uasset\n... headType binary+l\n... headRev 9\n... haveRev 8\n... action edit\n... change 794230\n")
 
-			result, err := fixture.cache.FinishChange(context.Background(), ws, "794230")
+			result, err := fixture.cache.FinishChange(context.Background(), ws, "794230", FinishChangeOptions{RevertFiles: []string{"//" + ws.Client + "/..."}})
 			if err != nil {
 				t.Fatalf("FinishChange: %v", err)
 			}
@@ -437,9 +601,9 @@ func TestFinishChangeShelvesRemainingWork(t *testing.T) {
 				t.Fatalf("report lost the +l and not-at-head warnings: %+v", result)
 			}
 			log := fixture.log(t)
-			wantShelve := "shelve -r -c 794230"
+			wantShelve := "shelve -f -Af -c 794230 //DJ01_Proj/Dev/Game/A.uasset"
 			if edge {
-				wantShelve = "shelve -r -p -c 794230"
+				wantShelve = "shelve -f -p -Af -c 794230 //DJ01_Proj/Dev/Game/A.uasset"
 			}
 			if !strings.Contains(log, wantShelve) {
 				t.Fatalf("expected %q in %s", wantShelve, log)
@@ -502,12 +666,43 @@ func TestRunInChangeAlwaysBindsTheChangelist(t *testing.T) {
 	}
 }
 
+func TestMappedFileUsesOnlyOneEffectiveMapping(t *testing.T) {
+	fixture := newWorkspaceFixture(t)
+	ws := fixture.detect(t)
+	path := filepath.Join(fixture.root, "effective", "file.cpp")
+	live := "... depotFile //depot/main/file.cpp\n... path " + path + "\n"
+	for _, tc := range []struct {
+		name, output, wantError string
+	}{
+		{"excluded then live", "... depotFile -//depot/main/file.cpp\n... unmap\n... path " + filepath.Join(fixture.root, "old") + "\n" + live, ""},
+		{"identical live records", live + live, ""},
+		{"excluded only", "... depotFile -//depot/main/file.cpp\n... unmap\n... path " + path + "\n", "not mapped"},
+		{"ambiguous overlay", live + "... depotFile //depot/main/file.cpp\n... path " + filepath.Join(fixture.root, "another") + "\n", "ambiguous"},
+		{"relative target", "... depotFile //depot/main/file.cpp\n... path relative.cpp\n", "invalid local path"},
+		{"empty result", "", "not mapped"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("P4_FAKE_WHERE", tc.output)
+			depot, local, err := fixture.cache.MappedFile(t.Context(), ws, "//depot/main/file.cpp")
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("error=%v, want %q", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil || depot != "//depot/main/file.cpp" || local != path {
+				t.Fatalf("effective mapping = %s -> %s: %v", depot, local, err)
+			}
+		})
+	}
+}
+
 func TestDescribeChangeFollowsASubmitRenumber(t *testing.T) {
 	fixture := newWorkspaceFixture(t)
 	ref := fixture.detect(t).Ref()
 	ref.Depot = "//DJ01_Proj/Dev"
 
-	t.Setenv("P4_FAKE_DESCRIBE", "... change 795115\n... oldChange 795095\n... status submitted\n... user alice\n")
+	t.Setenv("P4_FAKE_DESCRIBE", "... change 795115\n... oldChange 795095\n... status submitted\n... user alice\n... time 1700000000\n")
 	t.Setenv("P4_FAKE_ORIGINAL_CHANGE", "795095")
 	info, err := fixture.cache.DescribeChange(context.Background(), ref, "795095")
 	if err != nil {
@@ -515,6 +710,9 @@ func TestDescribeChangeFollowsASubmitRenumber(t *testing.T) {
 	}
 	if info.Change != "795115" || info.OldChange != "795095" || info.Status != "submitted" || info.Missing {
 		t.Fatalf("info = %+v", info)
+	}
+	if info.SubmittedAt.Unix() != 1700000000 {
+		t.Fatalf("submission time = %v", info.SubmittedAt)
 	}
 	if log := fixture.log(t); !strings.Contains(log, "describe -s -O 795095") {
 		t.Fatalf("describe did not look the changelist up by its original number: %s", log)
@@ -566,15 +764,15 @@ func TestPendingChangeDescriptionValidatesLiveOwnership(t *testing.T) {
 				text = strings.Replace(text, tc.before, tc.after, 1)
 			}
 			t.Setenv("P4_FAKE_CHANGEOUT", text)
-			desc, err := fixture.cache.PendingChangeDescription(t.Context(), ws, "1001")
+			spec, err := fixture.cache.ReadPendingChange(t.Context(), ws, "1001")
 			if tc.name != "valid" {
 				if err == nil {
 					t.Fatalf("accepted changelist outside the bound pending client: %s", text)
 				}
 				return
 			}
-			if err != nil || desc != "A summary\nrefs #123 fix\nMultica: MUL-7" {
-				t.Fatalf("multiline description = %q, error %v", desc, err)
+			if err != nil || spec.Description != "A summary\nrefs #123 fix\nMultica: MUL-7" {
+				t.Fatalf("multiline description = %q, error %v", spec.Description, err)
 			}
 		})
 	}
@@ -587,8 +785,10 @@ func TestSubmittedChangeReadsTheOriginalIdentityInTheBoundWorkspace(t *testing.T
 	for _, tc := range []struct {
 		name, body, stderr, want string
 	}{
-		{"renumbered", "... change 2002\n... oldChange 1001\n... status submitted\n", "", "2002"},
-		{"same number", "... change 1001\n... status submitted\n", "", "1001"},
+		{"renumbered", "... change 2002\n... oldChange 1001\n... status submitted\n... time 1700000000\n", "", "2002"},
+		{"same number", "... change 1001\n... status submitted\n... time 1700000000\n", "", "1001"},
+		{"missing timestamp", "... change 1001\n... status submitted\n", "", ""},
+		{"invalid timestamp", "... change 1001\n... status submitted\n... time nope\n", "", ""},
 		{"pending", "... change 1001\n... status pending\n", "", ""},
 		{"invalid number", "... change nope\n... status submitted\n", "", ""},
 		{"foreign original", "... change 2002\n... oldChange 999\n... status submitted\n", "", ""},
@@ -607,7 +807,7 @@ func TestSubmittedChangeReadsTheOriginalIdentityInTheBoundWorkspace(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Change != tc.want || got.OriginalChange != "1001" || !got.Submitted || len(got.Files) != 2 || got.Files[1].Action != "add" {
+			if got.Change != tc.want || got.OriginalChange != "1001" || !got.Submitted || got.SubmittedAt.Unix() != 1700000000 || len(got.Files) != 2 || got.Files[1].Action != "add" {
 				t.Fatalf("submission receipt = %+v", got)
 			}
 		})

@@ -651,9 +651,10 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"the daemon polls and claims the task",
 				"multica runtime list --output json",
 				"multica repo checkout <url>",
-				"multica p4 edit --port <p4port> --depot <depot-path> -- <files>",
+				"multica p4 edit -- <files>",
 				"multica p4 status --output json",
-				"multica p4 swarm create --port <p4port> --depot <depot-path> --changelist <n> --output json",
+				"multica p4 swarm create --output json",
+				"Do not pass `--port` or `--depot`",
 				// The daemon edits the person's existing client and refuses to
 				// create one. An agent that syncs a new client downloads the depot.
 				"Workspace mode",
@@ -688,6 +689,9 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"Do not request `multica p4 sync`",
 				"do not run `multica p4 sync`",
 				"multica p4 sync --port <p4port> --depot <depot-path>",
+				// Workspace file commands must not teach the agent to supply P4PORT.
+				"multica p4 edit --port <p4port>",
+				"multica p4 swarm create --port <p4port>",
 			},
 		},
 		{

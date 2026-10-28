@@ -61,8 +61,21 @@ func (d *Daemon) overlayP4Ref(workspaceID, taskID string, ref p4depot.Ref, inclu
 		ref.Changelist = stored.Changelist
 	}
 	// A task may not choose where the host's Helix ticket is sent.
-	ref.SwarmURL = stored.SwarmURL
+	ref.SwarmURL = d.workspaceSwarmURL(workspaceID, ref)
 	return ref
+}
+
+func (d *Daemon) workspaceSwarmURL(workspaceID string, ref p4depot.Ref) string {
+	ref, err := p4depot.Normalize(ref)
+	if err != nil {
+		return ""
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if ws := d.workspaces[workspaceID]; ws != nil {
+		return ws.allowedP4Identities[p4depot.Identity(ref)].SwarmURL
+	}
+	return ""
 }
 
 func (d *Daemon) authorizeP4Call(w http.ResponseWriter, r *http.Request, workspaceID, taskID, workDir, op string) (activeRepoCheckoutTask, string, bool) {
@@ -110,8 +123,7 @@ func (d *Daemon) allowP4Ref(w http.ResponseWriter, r *http.Request, workspaceID,
 		http.Error(w, "perforce depot is not configured for this workspace or task", http.StatusBadRequest)
 		return p4depot.Ref{}, false
 	}
-	stored := d.taskP4Default(workspaceID, taskID, ref)
-	if ref.SwarmURL != "" && ref.SwarmURL != stored.SwarmURL {
+	if ref.SwarmURL != "" && ref.SwarmURL != d.workspaceSwarmURL(workspaceID, ref) {
 		http.Error(w, "swarm_url must match the configured depot URL", http.StatusForbidden)
 		return p4depot.Ref{}, false
 	}
@@ -153,6 +165,33 @@ func (d *Daemon) p4SwarmHandler() http.HandlerFunc {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		activeTask, _, ok := d.authorizeP4Call(w, r, req.WorkspaceID, req.TaskID, req.WorkDir, "p4 swarm")
+		if !ok {
+			return
+		}
+		if binding := d.p4Binding(activeTask.TaskID); binding != nil {
+			action := strings.ToLower(strings.TrimSpace(req.Action))
+			if binding.readOnly && action != p4cache.SwarmList && action != p4cache.SwarmShow {
+				writeP4Rejection(w, p4Rejection{Code: p4CodeActionNotAllowed, Message: "chat and tasks without an issue may only read the Perforce workspace"})
+				return
+			}
+			selected, matches := binding.requestRef(strings.TrimSpace(req.Port), strings.TrimSpace(req.Depot), strings.TrimSpace(req.Stream))
+			if !matches {
+				writeP4Rejection(w, p4Rejection{Code: p4CodeNotInWorkspace, Message: "resource does not match this task's verified workspace"})
+				return
+			}
+			req.Port, req.Depot, req.Stream = selected.Port, selected.Depot, selected.Stream
+			req.User, req.Charset = selected.User, selected.Charset
+			if req.User == "" {
+				req.User = binding.ws.User
+			}
+			if req.Charset == "" {
+				req.Charset = binding.ws.Charset
+			}
+			if strings.TrimSpace(req.Changelist) == "" && action == p4cache.SwarmCreate {
+				req.Changelist = binding.changelist()
+			}
+		}
 		ref, err := p4depot.Normalize(p4depot.Ref{
 			Port:       req.Port,
 			Depot:      req.Depot,
@@ -164,10 +203,6 @@ func (d *Daemon) p4SwarmHandler() http.HandlerFunc {
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		activeTask, _, ok := d.authorizeP4Call(w, r, req.WorkspaceID, req.TaskID, req.WorkDir, "p4 swarm")
-		if !ok {
 			return
 		}
 		ref, ok = d.allowP4Ref(w, r, req.WorkspaceID, activeTask.TaskID, ref)
@@ -184,7 +219,7 @@ func (d *Daemon) p4SwarmHandler() http.HandlerFunc {
 				writeP4Rejection(w, p4Rejection{Code: p4CodeActionNotAllowed, Message: p4cache.ErrTaskClientNotCreated.Error()})
 				return
 			}
-			if !strings.EqualFold(ref.Port, binding.ws.Port) || (ref.Depot != binding.ref.Depot && ref.Depot != binding.ws.Stream) {
+			if _, matches := binding.requestRef(ref.Port, ref.Depot, ref.Stream); !matches {
 				writeP4Rejection(w, p4Rejection{Code: p4CodeNotInWorkspace, Message: "depot does not match the workspace this task is bound to"})
 				return
 			}
@@ -244,12 +279,8 @@ func (d *Daemon) serveWorkspaceP4Run(w http.ResponseWriter, r *http.Request, act
 		http.Error(w, "p4 task context does not match the active task", http.StatusForbidden)
 		return
 	}
-	if port := strings.TrimSpace(req.Port); port != "" && !strings.EqualFold(port, binding.ws.Port) {
-		http.Error(w, "port does not match the workspace this task is bound to", http.StatusBadRequest)
-		return
-	}
-	if depot := strings.TrimSpace(req.Depot); depot != "" && depot != binding.ref.Depot && depot != binding.ref.Stream && depot != binding.ws.Stream {
-		http.Error(w, "depot does not match the workspace this task is bound to", http.StatusBadRequest)
+	if _, matches := binding.requestRef(strings.TrimSpace(req.Port), strings.TrimSpace(req.Depot), strings.TrimSpace(req.Stream)); !matches {
+		http.Error(w, "resource does not match the workspace this task is bound to", http.StatusBadRequest)
 		return
 	}
 	cwd := binding.ws.Dir

@@ -89,7 +89,7 @@ Re-running the same issue on the same client reuses the pending changelist, matc
 
 ### What the agent can and cannot do
 
-The agent opens files with `multica p4 edit` and `multica p4 add-files`, and reads the changelist with `multica p4 status`. Everything it opens lands in the task changelist. `--port` and `--depot` are optional in this mode.
+The agent opens files with `multica p4 edit` and `multica p4 add-files`, and reads the changelist with `multica p4 status`. Everything it opens lands in the task changelist. Omit `--port` and `--depot`; the daemon fills both from the binding. Do not look up P4PORT and retry. Passing only one of them is forwarded, but a port spelling that does not match the binding is rejected.
 
 The daemon refuses, with an explanation the agent has to report rather than work around:
 

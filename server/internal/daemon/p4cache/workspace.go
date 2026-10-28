@@ -3,15 +3,22 @@ package p4cache
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/p4depot"
+	"github.com/multica-ai/multica/server/internal/util"
 )
+
+// ErrWorkspaceNotConfigured is positive evidence that the directory is not
+// inside the detected client. Connection and ownership failures are different.
+var ErrWorkspaceNotConfigured = errors.New("no Perforce workspace is configured for this directory")
 
 // Workspace is a human-owned Helix client resolved from a local directory.
 // Every command for it runs with cwd=Dir and spells out -p -u -c -C, because
@@ -27,9 +34,11 @@ type Workspace struct {
 	Dir string
 	// Host is the client spec's Host restriction, empty when unrestricted.
 	Host string
-	// ServerCluster identifies the Helix installation across the commit server
-	// and its edges. Empty on servers that do not set one.
+	// ServerCluster uses the cluster name or the server ID with its address.
+	// A port fallback is only an endpoint identity, not proof of cluster peers.
 	ServerCluster string
+	ServerID      string
+	Replica       string
 	// View is the classic client mappings ("//depot/... //client/..."), empty
 	// for a stream client. DetectWorkspace uses it to see which depots this
 	// workspace actually covers.
@@ -65,6 +74,7 @@ type FinishResult struct {
 	Change, OriginalChange      string
 	Files                       []FileState
 	Deleted, Shelved, Submitted bool
+	SubmittedAt                 time.Time
 	ExclusiveHeld, NotHead      []string
 }
 
@@ -73,6 +83,7 @@ type FinishResult struct {
 type ChangeInfo struct {
 	Change, OldChange, Status string
 	Missing                   bool // the server has no such changelist (deleted)
+	SubmittedAt               time.Time
 }
 
 const defaultChangelist = "default"
@@ -105,14 +116,19 @@ func (c *Cache) DetectWorkspace(ctx context.Context, dir string) (*Workspace, er
 		User:          firstNonBlank(info["userName"], settings["P4USER"]),
 		Client:        firstNonBlank(info["clientName"], settings["P4CLIENT"]),
 		Charset:       firstNonBlank(settings["P4CHARSET"], info["charset"]),
-		ServerCluster: info["serverCluster"],
+		ServerCluster: serverIdentityKey(info, firstNonBlank(settings["P4PORT"], info["serverAddress"])),
+		ServerID:      firstNonBlank(info["ServerID"], info["serverID"]),
+		Replica:       info["replica"],
 		Edge:          strings.Contains(strings.ToLower(info["serverServices"]), "edge"),
 	}
 	if ws.Port == "" || ws.Client == "" {
 		return nil, fmt.Errorf("no Perforce client is configured for %s: point P4CONFIG (e.g. p4config.txt) at the workspace client", abs)
 	}
-	if strings.EqualFold(ws.Client, "unknown") || info["clientRoot"] == "" {
-		return nil, fmt.Errorf("Perforce client %q does not exist on %s (p4 info reported no client root)", ws.Client, ws.Port)
+	if strings.EqualFold(ws.Client, "unknown") {
+		return nil, fmt.Errorf("%w: Perforce client %q does not exist on %s (p4 info reported no client root)", ErrWorkspaceNotConfigured, ws.Client, ws.Port)
+	}
+	if info["clientRoot"] == "" {
+		return nil, fmt.Errorf("Perforce client %q could not be verified on %s: p4 info reported no client root", ws.Client, ws.Port)
 	}
 
 	spec, err := c.ztagRecord(ctx, abs, ws.tagArgs(), "client", "-o")
@@ -158,8 +174,19 @@ func (ws *Workspace) checkOwnership(owner string) error {
 	if ws.Root == "" {
 		return fmt.Errorf("Perforce client %s has no root", ws.Client)
 	}
-	if !pathWithin(ws.Root, ws.Dir) {
-		return fmt.Errorf("%s is outside the root %s of Perforce client %s: point the local directory resource at the workspace root", ws.Dir, ws.Root, ws.Client)
+	// An unreadable root is not proof that the directory is outside P4.
+	if _, err := util.ResolveSymlinks(ws.Root); err != nil {
+		return fmt.Errorf("resolve Perforce client root %s: %w", ws.Root, err)
+	}
+	if _, err := util.ResolveSymlinks(ws.Dir); err != nil {
+		return fmt.Errorf("resolve Perforce task directory %s: %w", ws.Dir, err)
+	}
+	inside, err := PathWithin(ws.Root, ws.Dir)
+	if err != nil {
+		return fmt.Errorf("verify Perforce client root: %w", err)
+	}
+	if !inside {
+		return fmt.Errorf("%w: %s is outside the root %s of Perforce client %s: point the local directory resource at the workspace root", ErrWorkspaceNotConfigured, ws.Dir, ws.Root, ws.Client)
 	}
 	return nil
 }
@@ -177,13 +204,15 @@ func (c *Cache) FileStates(ctx context.Context, ws *Workspace, files []string) (
 	args := append(ws.tagArgs(), "fstat")
 	stdout, stderr, err := c.runAt(ctx, ws.Dir, append(args, cleaned...))
 	records := parseZtag(stdout)
-	if err != nil && len(records) == 0 {
+	if err != nil || strings.TrimSpace(stderr) != "" {
 		// A file the agent is about to `add` has no depot record yet, and that
 		// is the normal case rather than a failure.
-		if onlyMissingFiles(stderr) {
-			return nil, nil
+		if !onlyMissingFiles(stderr) {
+			if err != nil {
+				return nil, fmt.Errorf("p4 fstat: %w: %s", err, strings.TrimSpace(stderr))
+			}
+			return nil, fmt.Errorf("p4 fstat: %s", strings.TrimSpace(stderr))
 		}
-		return nil, fmt.Errorf("p4 fstat: %w: %s", err, strings.TrimSpace(stderr))
 	}
 	states := make([]FileState, 0, len(records))
 	for _, record := range records {
@@ -198,18 +227,37 @@ func (c *Cache) FileStates(ctx context.Context, ws *Workspace, files []string) (
 // LocalPath resolves a depot filespec even before add creates a depot record.
 // Refuse ambiguous/negative mappings instead of bypassing the local guards.
 func (c *Cache) LocalPath(ctx context.Context, ws *Workspace, file string) (string, error) {
+	_, local, err := c.MappedFile(ctx, ws, file)
+	return local, err
+}
+
+// MappedFile ignores exclusion records but refuses multiple effective mappings.
+// An overlay with distinct live targets is ambiguous for a write.
+func (c *Cache) MappedFile(ctx context.Context, ws *Workspace, file string) (string, string, error) {
 	stdout, stderr, err := c.runAt(ctx, ws.Dir, append(ws.tagArgs(), "where", file))
-	if err != nil {
-		return "", fmt.Errorf("p4 where %s: %w: %s", file, err, strings.TrimSpace(stderr))
+	if err != nil || strings.TrimSpace(stderr) != "" {
+		return "", "", fmt.Errorf("p4 where %s: %v: %s", file, err, strings.TrimSpace(stderr))
 	}
 	records := parseZtag(stdout)
-	if len(records) != 1 || records[0]["path"] == "" {
-		return "", fmt.Errorf("p4 where %s did not return one local file", file)
+	var depot, local string
+	for _, record := range records {
+		_, excluded := record["unmap"]
+		if excluded || strings.HasPrefix(record["depotFile"], "-") {
+			continue
+		}
+		path := record["path"]
+		if !filepath.IsAbs(path) {
+			return "", "", fmt.Errorf("p4 where %s returned an invalid local path", file)
+		}
+		if local != "" && (local != path || depot != record["depotFile"]) {
+			return "", "", fmt.Errorf("p4 where %s returned ambiguous effective mappings", file)
+		}
+		depot, local = record["depotFile"], path
 	}
-	if _, excluded := records[0]["unmap"]; excluded || !filepath.IsAbs(records[0]["path"]) {
-		return "", fmt.Errorf("%s is not mapped into this Perforce client", file)
+	if local == "" {
+		return "", "", fmt.Errorf("%s is not mapped into this Perforce client", file)
 	}
-	return records[0]["path"], nil
+	return depot, local, nil
 }
 
 // Opened lists every file this client has opened, in every changelist.
@@ -313,24 +361,29 @@ func (c *Cache) SetChangeDescription(ctx context.Context, ws *Workspace, change,
 	return nil
 }
 
-// PendingChangeDescription reads the current spec, including multiline
+type PendingChangeSpec struct {
+	Description string
+	Stream      string
+}
+
+// ReadPendingChange reads the current spec, including multiline
 // descriptions, and refuses a change outside the bound user's client.
-func (c *Cache) PendingChangeDescription(ctx context.Context, ws *Workspace, change string) (string, error) {
+func (c *Cache) ReadPendingChange(ctx context.Context, ws *Workspace, change string) (PendingChangeSpec, error) {
 	if ws == nil {
-		return "", fmt.Errorf("perforce workspace is required")
+		return PendingChangeSpec{}, fmt.Errorf("perforce workspace is required")
 	}
 	if number, err := strconv.Atoi(change); err != nil || number <= 0 {
-		return "", fmt.Errorf("a positive pending changelist number is required")
+		return PendingChangeSpec{}, fmt.Errorf("a positive pending changelist number is required")
 	}
 	stdout, stderr, err := c.runAt(ctx, ws.Dir, append(ws.baseArgs(), "change", "-o", change))
 	if err != nil {
-		return "", fmt.Errorf("p4 change -o %s: %w: %s", change, err, strings.TrimSpace(stderr))
+		return PendingChangeSpec{}, fmt.Errorf("p4 change -o %s: %w: %s", change, err, strings.TrimSpace(stderr))
 	}
 	fields := changeSpecFields(stdout)
 	if fields["Change"] != change || fields["Status"] != "pending" || fields["Client"] != ws.Client || !strings.EqualFold(fields["User"], ws.User) {
-		return "", fmt.Errorf("changelist %s is not pending in the bound user's client %s", change, ws.Client)
+		return PendingChangeSpec{}, fmt.Errorf("changelist %s is not pending in the bound user's client %s", change, ws.Client)
 	}
-	return fields["Description"], nil
+	return PendingChangeSpec{Description: fields["Description"], Stream: fields["Stream"]}, nil
 }
 
 func changeSpecFields(spec string) map[string]string {
@@ -340,11 +393,21 @@ func changeSpecFields(spec string) map[string]string {
 		line = strings.TrimRight(line, "\r")
 		if strings.HasPrefix(line, "\t") || strings.HasPrefix(line, " ") {
 			if key != "" {
-				fields[key] = strings.TrimSpace(fields[key] + "\n" + strings.TrimSpace(line))
+				value := strings.TrimPrefix(line, "\t")
+				if !strings.HasPrefix(line, "\t") {
+					value = strings.TrimLeft(line, " ")
+				}
+				fields[key] += "\n" + value
 			}
 			continue
 		}
-		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
+		if strings.TrimSpace(line) == "" {
+			if key == "Description" {
+				fields[key] += "\n"
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
 			continue
 		}
 		name, value, ok := strings.Cut(line, ":")
@@ -353,6 +416,9 @@ func changeSpecFields(spec string) map[string]string {
 			key = name
 			fields[key] = strings.TrimSpace(value)
 		}
+	}
+	for name, value := range fields {
+		fields[name] = strings.Trim(value, "\r\n")
 	}
 	return fields
 }
@@ -434,7 +500,11 @@ func (c *Cache) SubmittedChange(ctx context.Context, ws *Workspace, original str
 	if old := record["oldChange"]; old != "" && old != original {
 		return nil, fmt.Errorf("submission receipt belongs to changelist %s, expected %s", old, original)
 	}
-	result := &FinishResult{Change: record["change"], OriginalChange: original, Submitted: true}
+	stamp, err := submissionTime(original, record["time"])
+	if err != nil {
+		return nil, err
+	}
+	result := &FinishResult{Change: record["change"], OriginalChange: original, Submitted: true, SubmittedAt: stamp}
 	for i := 0; ; i++ {
 		suffix := strconv.Itoa(i)
 		file, ok := record["depotFile"+suffix]
@@ -450,10 +520,100 @@ func (c *Cache) SubmittedChange(ctx context.Context, ws *Workspace, original str
 	return result, nil
 }
 
-// FinishChange closes out a task changelist: revert what was opened but never
-// changed, delete the changelist if nothing is left, otherwise shelve it for
-// review. Changed files stay open — the person submits them from UE.
-func (c *Cache) FinishChange(ctx context.Context, ws *Workspace, change string) (*FinishResult, error) {
+type ShelfState struct {
+	Files  []FileState
+	Stream string
+}
+
+func (s ShelfState) HasContents() bool { return len(s.Files) > 0 || s.Stream != "" }
+
+// ReadShelf reads the existing shelf without changing it. An unreadable or
+// malformed response must never be interpreted as permission to delete a CL.
+func (c *Cache) ReadShelf(ctx context.Context, ws *Workspace, change string) (ShelfState, error) {
+	if ws == nil || strings.TrimSpace(change) == "" {
+		return ShelfState{}, fmt.Errorf("a workspace and changelist are required")
+	}
+	stdout, stderr, err := c.runAt(ctx, ws.Dir, append(ws.tagArgs(), "describe", "-s", "-S", change))
+	if err != nil {
+		if noShelvedFiles.MatchString(strings.TrimSpace(stderr)) && strings.TrimSpace(stdout) == "" {
+			return ShelfState{}, nil
+		}
+		return ShelfState{}, fmt.Errorf("read shelf %s: %w: %s", change, err, strings.TrimSpace(stderr))
+	}
+	records := parseZtag(stdout)
+	record := firstZtagRecord(stdout)
+	if len(records) != 1 || strings.TrimSpace(stderr) != "" || record["change"] != change || record["status"] != "pending" {
+		return ShelfState{}, fmt.Errorf("shelf %s has no confirmed pending changelist response: %s", change, strings.TrimSpace(stderr))
+	}
+	var files []FileState
+	for i := 0; ; i++ {
+		suffix := strconv.Itoa(i)
+		file, ok := record["depotFile"+suffix]
+		if !ok {
+			break
+		}
+		if !strings.HasPrefix(file, "//") {
+			return ShelfState{}, fmt.Errorf("shelf %s contains an invalid depot file", change)
+		}
+		files = append(files, FileState{DepotFile: file, Action: record["action"+suffix], HeadType: record["type"+suffix]})
+	}
+	count := 0
+	for key := range record {
+		if strings.HasPrefix(key, "depotFile") {
+			count++
+		}
+	}
+	if count != len(files) {
+		return ShelfState{}, fmt.Errorf("shelf %s has an incomplete file list", change)
+	}
+	if stream := strings.TrimSpace(record["stream"]); stream != "" && !p4depot.ValidDepot(stream) {
+		return ShelfState{}, fmt.Errorf("shelf %s contains an invalid stream path", change)
+	}
+	return ShelfState{Files: files, Stream: strings.TrimSpace(record["stream"])}, nil
+}
+
+// ShelfFileMatchesHave verifies that a shelf-only edit contains no changes
+// compared with this client's have revision, including its file type.
+func (c *Cache) ShelfFileMatchesHave(ctx context.Context, ws *Workspace, change string, file FileState) (bool, error) {
+	if file.Action != "edit" {
+		return false, nil
+	}
+	from := file.DepotFile + "#have"
+	stdout, stderr, err := c.runAt(ctx, ws.Dir, append(ws.tagArgs(), "diff2", "-ds", from, file.DepotFile+"@="+change))
+	if err != nil {
+		return false, fmt.Errorf("compare shelf file %s: %w: %s", file.DepotFile, err, strings.TrimSpace(stderr))
+	}
+	if strings.TrimSpace(stderr) != "" {
+		return false, fmt.Errorf("compare shelf file %s: %s", file.DepotFile, strings.TrimSpace(stderr))
+	}
+	records := parseZtag(stdout)
+	return len(records) == 1 && records[0]["status"] == "identical" &&
+		records[0]["depotFile"] == file.DepotFile && records[0]["depotFile2"] == file.DepotFile, nil
+}
+
+// ShelveFiles updates only the specified opens, retaining shelf-only files.
+func (c *Cache) ShelveFiles(ctx context.Context, ws *Workspace, change string, files []string) (string, error) {
+	if ws == nil {
+		return "", fmt.Errorf("perforce workspace is required")
+	}
+	if len(files) == 0 {
+		return "", fmt.Errorf("explicit opened files are required to update a shelf")
+	}
+	flags := []string{"-f"}
+	if ws.Edge {
+		flags = append(flags, "-p")
+	}
+	return c.RunInChange(ctx, ws, change, "shelve", files, append(flags, "-Af")...)
+}
+
+// FinishChange reverts unchanged opens and shelves remaining work without
+// removing earlier shelved files. Only a CL with no opens or shelf is deleted.
+type FinishChangeOptions struct {
+	Files       []string
+	RevertFiles []string
+}
+
+func (c *Cache) FinishChange(ctx context.Context, ws *Workspace, change string, opts FinishChangeOptions) (*FinishResult, error) {
 	if ws == nil {
 		return nil, fmt.Errorf("perforce workspace is required")
 	}
@@ -462,25 +622,45 @@ func (c *Cache) FinishChange(ctx context.Context, ws *Workspace, change string) 
 		return nil, fmt.Errorf("a changelist number is required")
 	}
 	result := &FinishResult{Change: change}
-	// -a is the whole point: an unchanged open still holds a +l lock and still
-	// shows up in the person's P4V, so it must not survive the task. The path
-	// is the client's own //<client>/... view: the `-c change` already limits
-	// it to the task changelist, and a bare //... is not reliably passed
-	// through the Windows shells this daemon runs under.
-	if _, err := c.RunInChange(ctx, ws, change, "revert", []string{"//" + ws.Client + "/..."}, "-a"); err != nil {
-		// A changelist the person submitted or deleted mid-task is reported,
-		// not silently recreated.
+	shelf, err := c.ReadShelf(ctx, ws, change)
+	if err != nil {
 		return nil, err
+	}
+	shelved := shelf.Files
+	result.Files = shelved
+	result.Shelved = shelf.HasContents()
+	files := compactStrings(opts.Files)
+	// Shelving changed pre-existing opens does not grant permission to revert
+	// them. The caller supplies cleanup targets separately, and empty means none.
+	if targets := compactStrings(opts.RevertFiles); len(targets) > 0 {
+		if _, err := c.RunInChange(ctx, ws, change, "revert", targets, "-a"); err != nil {
+			return nil, err
+		}
 	}
 	opened, err := c.OpenedInChange(ctx, ws, change)
 	if err != nil {
 		return nil, err
 	}
+	allOpened := opened
+	if len(files) > 0 {
+		selected := make(map[string]bool, len(files))
+		for _, file := range files {
+			selected[file] = true
+		}
+		opened = nil
+		for _, file := range allOpened {
+			if selected[file.DepotFile] {
+				opened = append(opened, file)
+			}
+		}
+	}
 	if len(opened) == 0 {
-		// A previous run may have shelved files the person has since reverted.
-		// A changelist cannot be deleted until that shelf is removed as well.
-		if err := c.DeleteShelf(ctx, ws, change); err != nil {
-			return result, err
+		if result.Shelved {
+			return result, nil
+		}
+		if len(allOpened) > 0 {
+			result.Files = allOpened
+			return result, nil
 		}
 		if _, _, err := c.runAt(ctx, ws.Dir, append(ws.baseArgs(), "change", "-d", change)); err != nil {
 			return nil, fmt.Errorf("p4 change -d %s: %w", change, err)
@@ -499,8 +679,27 @@ func (c *Cache) FinishChange(ctx context.Context, ws *Workspace, change string) 
 		c.logger().Warn("p4 fstat for changelist report failed", "change", change, "error", err)
 		states = opened
 	}
-	result.Files = states
-	for _, file := range states {
+	// fstat may omit a newly added file. Keep every confirmed open in the
+	// receipt, and retain the files that exist only in the previous shelf.
+	byPath := make(map[string]FileState, len(states))
+	for _, state := range states {
+		byPath[state.DepotFile] = state
+	}
+	result.Files = append([]FileState{}, shelved...)
+	positions := make(map[string]int, len(shelved)+len(opened))
+	for i, file := range result.Files {
+		positions[file.DepotFile] = i
+	}
+	for _, file := range opened {
+		if state, ok := byPath[file.DepotFile]; ok {
+			file = state
+		}
+		if i, ok := positions[file.DepotFile]; ok {
+			result.Files[i] = file
+		} else {
+			positions[file.DepotFile] = len(result.Files)
+			result.Files = append(result.Files, file)
+		}
 		if file.Exclusive() {
 			result.ExclusiveHeld = append(result.ExclusiveHeld, file.DepotFile)
 		}
@@ -509,12 +708,7 @@ func (c *Cache) FinishChange(ctx context.Context, ws *Workspace, change string) 
 		}
 	}
 
-	flags := []string{"-r"}
-	if ws.Edge {
-		// Swarm only reads shelves that reached the commit server.
-		flags = append(flags, "-p")
-	}
-	if _, err := c.RunInChange(ctx, ws, change, "shelve", nil, flags...); err != nil {
+	if _, err := c.ShelveFiles(ctx, ws, change, paths); err != nil {
 		return result, err
 	}
 	result.Shelved = true
@@ -556,24 +750,71 @@ func (c *Cache) DescribeChange(ctx context.Context, ref p4depot.Ref, number stri
 		OldChange: firstNonBlank(record["oldChange"], number),
 		Status:    record["status"],
 	}
+	if strings.EqualFold(info.Status, "submitted") {
+		info.SubmittedAt, err = submissionTime(number, record["time"])
+		if err != nil {
+			return nil, err
+		}
+	}
 	return info, nil
+}
+
+func submissionTime(number, raw string) (time.Time, error) {
+	seconds, err := strconv.ParseInt(raw, 10, 64)
+	stamp := time.Unix(seconds, 0).UTC()
+	if err != nil || seconds <= 0 || stamp.Year() > 9999 {
+		return time.Time{}, fmt.Errorf("p4 describe %s returned an invalid submission time %q", number, raw)
+	}
+	return stamp, nil
 }
 
 // ServerKey resolves the shared cluster identity for a manually linked CL.
 // An unsuccessful info is not evidence that the server has no cluster.
 func (c *Cache) ServerKey(ctx context.Context, ref p4depot.Ref) (string, error) {
-	user, err := c.resolveUser(ctx, ref)
+	record, err := c.ServerInfo(ctx, ref)
 	if err != nil {
 		return "", err
+	}
+	return serverIdentityKey(record, ref.Port), nil
+}
+
+func serverIdentityKey(record map[string]string, port string) string {
+	if cluster := strings.TrimSpace(record["serverCluster"]); cluster != "" {
+		return cluster
+	}
+	if id := firstNonBlank(record["ServerID"], record["serverID"]); id != "" && strings.TrimSpace(record["serverAddress"]) != "" {
+		// Server IDs may be reused by independent installations. Pair the ID
+		// with the server's canonical address before treating ports as aliases.
+		return "server:" + id + "@" + p4depot.EndpointKey(record["serverAddress"])
+	}
+	return strings.ToLower(strings.TrimSpace(port))
+}
+
+func (c *Cache) ServerInfo(ctx context.Context, ref p4depot.Ref) (map[string]string, error) {
+	user, err := c.resolveUser(ctx, ref)
+	if err != nil {
+		return nil, err
 	}
 	out, err := c.output(ctx, ref, user, "", "-ztag", "info")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if cluster := strings.TrimSpace(firstZtagRecord(string(out))["serverCluster"]); cluster != "" {
-		return cluster, nil
+	return firstZtagRecord(string(out)), nil
+}
+
+func (c *Cache) ServerSpec(ctx context.Context, ref p4depot.Ref, id string) (map[string]string, error) {
+	if id == "" || strings.HasPrefix(id, "-") || strings.ContainsAny(id, " \t\r\n") {
+		return nil, fmt.Errorf("invalid Perforce server ID")
 	}
-	return strings.ToLower(strings.TrimSpace(ref.Port)), nil
+	user, err := c.resolveUser(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	out, err := c.output(ctx, ref, user, "", "-ztag", "server", "-o", id)
+	if err != nil {
+		return nil, err
+	}
+	return firstZtagRecord(string(out)), nil
 }
 
 // baseArgs spells out the connection for every command. Relying on the
@@ -851,26 +1092,6 @@ func sameHost(a, b string) bool {
 		return s
 	}
 	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b)) || strings.EqualFold(shorten(a), shorten(b))
-}
-
-// pathWithin reports whether path sits inside root, comparing the paths the
-// filesystem actually resolves so a junctioned workspace still matches.
-func pathWithin(root, path string) bool {
-	resolve := func(p string) string {
-		if resolved, err := filepath.EvalSymlinks(p); err == nil {
-			return resolved
-		}
-		abs, err := filepath.Abs(p)
-		if err != nil {
-			return p
-		}
-		return abs
-	}
-	rel, err := filepath.Rel(resolve(root), resolve(path))
-	if err != nil {
-		return false
-	}
-	return rel == "." || filepath.IsLocal(rel)
 }
 
 func firstNonBlank(values ...string) string {

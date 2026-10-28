@@ -1215,6 +1215,7 @@ func overlayP4ActionSwitches(project, workspace []P4DepotData) {
 		project[i].AllowSubmit = false
 		project[i].AllowSync = false
 		project[i].AllowUnshelve = false
+		project[i].SwarmURL = ""
 		ref, err := p4depot.Normalize(p4depot.Ref(depot))
 		if err != nil {
 			continue
@@ -1226,5 +1227,12 @@ func overlayP4ActionSwitches(project, workspace []P4DepotData) {
 		project[i].AllowSubmit = src.AllowSubmit
 		project[i].AllowSync = src.AllowSync
 		project[i].AllowUnshelve = src.AllowUnshelve
+		if project[i].User == "" {
+			project[i].User = src.User
+		}
+		if project[i].Charset == "" {
+			project[i].Charset = src.Charset
+		}
+		project[i].SwarmURL = src.SwarmURL
 	}
 }

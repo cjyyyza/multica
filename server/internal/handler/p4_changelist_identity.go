@@ -35,6 +35,9 @@ func (h *Handler) applyP4ChangelistStatus(ctx context.Context, workspaceID, id p
 	if row.DaemonID != "" && row.DaemonID != daemonID {
 		return db.P4Changelist{}, pgx.ErrNoRows
 	}
+	if row.PollGeneration != update.PollGeneration {
+		return db.P4Changelist{}, pgx.ErrNoRows
+	}
 	key := strings.TrimSpace(update.ServerKey)
 	if key == "" {
 		key = row.ServerKey
@@ -53,10 +56,11 @@ func (h *Handler) applyP4ChangelistStatus(ctx context.Context, workspaceID, id p
 	// A different daemon can already own the canonical row. Merging its
 	// duplicate manual link must not transfer that ownership or overwrite its
 	// observations; its normal poll will keep updating all the merged links.
-	if row.DaemonID == "" || row.DaemonID == daemonID {
+	if (row.DaemonID == "" || row.DaemonID == daemonID) && row.PollGeneration == update.PollGeneration {
 		row, err = qtx.UpdateP4ChangelistStatus(ctx, db.UpdateP4ChangelistStatusParams{
 			ID: row.ID, WorkspaceID: workspaceID, Status: update.Status,
 			Number: number, SubmittedAt: submittedAt, DaemonID: daemonID,
+			PollGeneration: update.PollGeneration,
 		})
 		if err != nil {
 			return db.P4Changelist{}, err

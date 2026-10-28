@@ -1296,6 +1296,8 @@ type P4Changelist struct {
 	SubmittedAt    pgtype.Timestamptz `json:"submitted_at"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	PollGeneration int64              `json:"poll_generation"`
+	PollLeaseUntil pgtype.Timestamptz `json:"poll_lease_until"`
 }
 
 type PersonalAccessToken struct {

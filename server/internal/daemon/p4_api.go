@@ -16,6 +16,8 @@ import (
 
 // p4ChangelistReport is the body of POST /api/daemon/tasks/{taskId}/p4/changelists.
 type p4ChangelistReport struct {
+	FencePolls     bool               `json:"fence_polls"`
+	SubmittedAt    string             `json:"submitted_at,omitempty"`
 	Port           string             `json:"port"`
 	ServerKey      string             `json:"server_key"`
 	Charset        string             `json:"charset"`
@@ -67,11 +69,17 @@ func (d *Daemon) changelistReport(ctx context.Context, b *p4TaskBinding, result 
 	if result.Submitted {
 		status = "submitted"
 	}
+	submittedAt := ""
+	if result.Submitted && !result.SubmittedAt.IsZero() {
+		submittedAt = p4SubmittedAt(result.SubmittedAt)
+	}
 	if exclusive == nil {
 		exclusive = []string{}
 	}
 	warnings = append(warnings, d.workspaceDriftWarnings(ctx, b)...)
 	return p4ChangelistReport{
+		FencePolls:     true,
+		SubmittedAt:    submittedAt,
 		Port:           b.ws.Port,
 		ServerKey:      p4ServerKey(b.ws),
 		Charset:        b.ws.Charset,
@@ -96,6 +104,39 @@ func p4ServerKey(ws *p4cache.Workspace) string {
 		return key
 	}
 	return strings.ToLower(strings.TrimSpace(ws.Port))
+}
+
+// Register before any file write. The existing durable outbox replays a pending
+// receipt after a crash; it must be acknowledged before a final receipt can
+// replace its immutable payload in that outbox.
+func (d *Daemon) registerPendingP4Change(ctx context.Context, b *p4TaskBinding) error {
+	b.mu.Lock()
+	if b.changeReported || b.change == "" || b.readOnly {
+		b.mu.Unlock()
+		return nil
+	}
+	number, err := strconv.Atoi(b.change)
+	if err != nil || number <= 0 {
+		b.mu.Unlock()
+		return fmt.Errorf("invalid pending Perforce changelist %q", b.change)
+	}
+	taskID := b.taskID
+	b.registrationPending = true
+	report := p4ChangelistReport{
+		FencePolls: true, Port: b.ws.Port, ServerKey: p4ServerKey(b.ws), Charset: b.ws.Charset,
+		Number: number, OriginalNumber: number, Status: "pending", Client: b.ws.Client,
+		P4User: b.ws.User, Description: b.description, Ticket: b.ticket,
+		FilesCount: len(b.initialOpened), ExclusiveFiles: []string{},
+	}
+	b.mu.Unlock()
+	if err := d.reportTaskP4Changelist(ctx, Task{ID: taskID}, report); err != nil {
+		return fmt.Errorf("register pending Perforce changelist %d: %w", number, err)
+	}
+	b.mu.Lock()
+	b.changeReported = true
+	b.registrationPending = false
+	b.mu.Unlock()
+	return nil
 }
 
 // workspaceDriftWarnings reports files that showed up outside the task
@@ -132,6 +173,12 @@ func (d *Daemon) workspaceDriftWarnings(ctx context.Context, b *p4TaskBinding) [
 
 func (d *Daemon) attachSwarmReview(ctx context.Context, b *p4TaskBinding, report *p4ChangelistReport) {
 	if d.p4Cache == nil || strings.TrimSpace(b.ref.SwarmURL) == "" || report.Number <= 0 {
+		return
+	}
+	if configured := d.workspaceSwarmURL(b.workspaceID, b.ref); configured == "" || configured != b.ref.SwarmURL {
+		if d.logger != nil {
+			d.logger.Warn("p4 automatic review rejected an origin outside the workspace catalog", "task_id", b.taskID)
+		}
 		return
 	}
 	change := strconv.Itoa(report.Number)
@@ -276,8 +323,6 @@ func (d *Daemon) workspaceStatus(ctx context.Context, b *p4TaskBinding) (*p4Stat
 	return resp, nil
 }
 
-// Keep time imported for the status loop's submitted_at formatting helper
-// that lives next to the report types.
-func p4SubmittedAt(now time.Time) string {
-	return now.UTC().Format(time.RFC3339)
+func p4SubmittedAt(submittedAt time.Time) string {
+	return submittedAt.UTC().Format(time.RFC3339)
 }

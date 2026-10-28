@@ -6,6 +6,8 @@
 -- The three COALESCEd columns are facts a later report may not carry: a report
 -- made before the Swarm review exists must not unset the review a previous one
 -- attached, and the same holds for the submit timestamp and the owning task.
+-- Lease-aware daemons fence in-flight polls when they report newer task work.
+-- The opt-in flag preserves generation-zero polling for installed older daemons.
 INSERT INTO p4_changelist (
     workspace_id, daemon_id, server_key, port, charset, number, original_number,
     client, p4_user, status, description, ticket, files_count, exclusive_files,
@@ -30,7 +32,10 @@ ON CONFLICT (workspace_id, server_key, original_number) DO UPDATE SET
     swarm_review_id = COALESCE(EXCLUDED.swarm_review_id, p4_changelist.swarm_review_id),
     task_id = COALESCE(EXCLUDED.task_id, p4_changelist.task_id),
     submitted_at = COALESCE(EXCLUDED.submitted_at, p4_changelist.submitted_at),
+    poll_generation = p4_changelist.poll_generation + CASE WHEN sqlc.arg('fence_polls')::boolean THEN 1 ELSE 0 END,
+    poll_lease_until = CASE WHEN sqlc.arg('fence_polls')::boolean THEN NULL ELSE p4_changelist.poll_lease_until END,
     updated_at = now()
+WHERE p4_changelist.poll_generation = 0 OR sqlc.arg('fence_polls')::boolean
 RETURNING *;
 
 -- name: LockP4ChangelistWorkspace :one
@@ -175,6 +180,12 @@ ORDER BY cl.created_at DESC, cl.original_number DESC;
 SELECT
     cl.id,
     cl.port,
+    cl.server_key,
+    cl.daemon_id,
+    cl.client,
+    cl.poll_generation,
+    cl.p4_user,
+    cl.charset,
     cl.number,
     cl.original_number,
     cl.status,
@@ -184,8 +195,34 @@ FROM p4_changelist cl
 LEFT JOIN swarm_review sr ON sr.id = cl.swarm_review_id
 WHERE cl.workspace_id = $1
   AND cl.status IN ('pending', 'shelved')
-  AND (cl.daemon_id = sqlc.arg('daemon_id') OR cl.daemon_id = '')
+  AND (cl.daemon_id = sqlc.arg('daemon_id') OR cl.daemon_id = '' OR (
+      COALESCE(cl.poll_lease_until, cl.updated_at + interval '2 minutes') <= now()
+      AND NOT EXISTS (
+          SELECT 1 FROM agent_runtime ar
+          WHERE ar.workspace_id = cl.workspace_id AND ar.daemon_id = cl.daemon_id
+            AND ar.status = 'online' AND ar.last_seen_at > now() - interval '90 seconds'
+      )
+  ))
 ORDER BY cl.original_number;
+
+-- name: ClaimP4ChangelistPoll :one
+-- The generation fences observations made before another daemon takes over.
+UPDATE p4_changelist cl SET
+    daemon_id = sqlc.arg('daemon_id'),
+    poll_generation = cl.poll_generation + 1,
+    poll_lease_until = now() + interval '2 minutes'
+WHERE cl.id = $1 AND cl.workspace_id = $2
+  AND cl.status IN ('pending', 'shelved')
+  AND cl.poll_generation = sqlc.arg('expected_generation')
+  AND (cl.daemon_id = sqlc.arg('daemon_id') OR cl.daemon_id = '' OR (
+      COALESCE(cl.poll_lease_until, cl.updated_at + interval '2 minutes') <= now()
+      AND NOT EXISTS (
+          SELECT 1 FROM agent_runtime ar
+          WHERE ar.workspace_id = cl.workspace_id AND ar.daemon_id = cl.daemon_id
+            AND ar.status = 'online' AND ar.last_seen_at > now() - interval '90 seconds'
+      )
+  ))
+RETURNING poll_generation;
 
 -- name: UpdateP4ChangelistStatus :one
 -- One poll result. A zero number means the poll had nothing new to say about
@@ -200,6 +237,8 @@ UPDATE p4_changelist SET
 WHERE id = $1
   AND workspace_id = $2
   AND (daemon_id = '' OR daemon_id = sqlc.arg('daemon_id'))
+  AND poll_generation = sqlc.arg('poll_generation')
+  AND (poll_generation = 0 OR poll_lease_until > now())
 RETURNING *;
 
 -- name: UpdateP4ChangelistSwarmReviewState :exec

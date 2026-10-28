@@ -1,12 +1,27 @@
 package daemon
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
+
+func p4RegistrationTestClient(t *testing.T) *Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/p4/changelists") {
+			t.Errorf("unexpected P4 registration request: %s", r.URL.Path)
+		}
+		w.Write([]byte("{}"))
+	}))
+	t.Cleanup(server.Close)
+	return NewClient(server.URL)
+}
 
 // writeDaemonFakeP4 builds a p4 stand-in. Each invocation is appended to
 // P4_FAKE_LOG as "<cwd>\t<args>", and the reply for a verb comes from
@@ -21,6 +36,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -66,6 +82,8 @@ func main() {
 		emit("INFO")
 	case "client":
 		emit("CLIENT")
+	case "server":
+		emit("SERVER")
 	case "fstat":
 		// P4_FAKE_FSTAT_WILDCARD answers only arguments ending in "...", the
 		// way a real server reports nothing for a bare directory path.
@@ -77,12 +95,39 @@ func main() {
 		}
 		emit("FSTAT")
 	case "where":
-		emit("WHERE")
+		if _, set := os.LookupEnv("P4_FAKE_WHERE"); set || os.Getenv("P4_FAKE_WHERE_ERR") != "" { emit("WHERE"); return }
+		root, depot := cwd, "//DJ01_Proj/Dev"
+		for _, line := range strings.Split(os.Getenv("P4_FAKE_CLIENT"), "\n") {
+			if value, ok := strings.CutPrefix(line, "... Root "); ok { root = strings.TrimSpace(value) }
+			if value, ok := strings.CutPrefix(line, "... Stream "); ok { depot = strings.TrimSpace(value) }
+		}
+		if value := os.Getenv("P4_FAKE_DEPOT"); value != "" { depot = value }
+		file := rest[len(rest)-1]
+		local, mapped := file, ""
+		if strings.HasPrefix(file, "//") {
+			mapped = file
+			local = filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(strings.TrimPrefix(file, depot), "/")))
+		} else {
+			if !filepath.IsAbs(local) { local = filepath.Join(cwd, local) }
+			rel, err := filepath.Rel(root, local); if err != nil { panic(err) }
+			mapped = depot + "/" + filepath.ToSlash(rel)
+		}
+		fmt.Printf("... depotFile %s\n... path %s\n", mapped, local)
+	case "diff2":
+		emit("DIFF2")
 	case "opened":
 		emit("OPENED")
 	case "changes":
 		emit("CHANGES")
 	case "describe":
+		if strings.Contains(joined, " -S ") {
+			if _, ok := os.LookupEnv("P4_FAKE_SHELF"); ok || os.Getenv("P4_FAKE_SHELF_ERR") != "" {
+				emit("SHELF")
+			} else {
+				fmt.Printf("... change %s\n... status pending\n", rest[len(rest)-1])
+			}
+			return
+		}
 		if strings.Contains(joined, " 111 ") {
 			fmt.Fprintln(os.Stderr, "111 - no such changelist.")
 			os.Exit(1)
@@ -91,11 +136,18 @@ func main() {
 			emit("DESCRIBE")
 			return
 		}
-		fmt.Print("... change 795115\n... oldChange 795095\n... status submitted\n")
+		fmt.Print("... change 795115\n... oldChange 795095\n... status submitted\n... time 1700000000\n")
 	case "change":
 		switch {
 		case strings.Contains(joined, " -i "):
-			io.Copy(io.Discard, os.Stdin)
+			if path := os.Getenv("P4_FAKE_SPEC"); path != "" {
+				f, err := os.Create(path)
+				if err != nil { panic(err) }
+				io.Copy(f, os.Stdin)
+				f.Close()
+			} else {
+				io.Copy(io.Discard, os.Stdin)
+			}
 			emit("CHANGEIN")
 		case strings.Contains(joined, " -o "):
 			emit("CHANGEOUT")

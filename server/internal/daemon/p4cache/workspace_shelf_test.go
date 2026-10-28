@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestFinishChangeReplacesAndRemovesOldShelves(t *testing.T) {
+func TestFinishChangeRetainsShelfOnlyFiles(t *testing.T) {
 	buildDir := t.TempDir()
 	source := filepath.Join(buildDir, "fake.go")
 	program := `package main
@@ -28,6 +28,9 @@ func main(){
     }
     if len(args)==0{panic("missing verb")}
     switch args[0] {
+    case "describe":
+        fmt.Print("... change 1001\n... status pending\n")
+        for i,f:=range s.Shelf{fmt.Printf("... depotFile%d %s\n... action%d edit\n... type%d text\n",i,f,i,i)}
     case "revert":
     case "opened","fstat":
         for _,f:=range s.Open{fmt.Printf("... depotFile %s\n... clientFile X\n... action edit\n... change 1001\n... headType text\n... headRev 1\n... haveRev 1\n\n",f)}
@@ -67,8 +70,9 @@ func main(){
 		name   string
 		opened []string
 	}{
-		{"drop reverted file from reused shelf", []string{"//depot/Dev/A.cpp"}},
-		{"delete a previously shelved empty changelist", nil},
+		{"retain reverted file from reused shelf", []string{"//depot/Dev/A.cpp"}},
+		{"retain a previously shelved empty changelist", nil},
+		{"merge new file into existing shelf", []string{"//depot/Dev/C.cpp"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -78,15 +82,28 @@ func main(){
 			t.Setenv("P4_REVIEW_STATE", path)
 			c := &Cache{P4Path: bin}
 			ws := &Workspace{Port: "p4.example:1666", User: "alice", Client: "alice_DEV", Root: root, Dir: root}
-			result, err := c.FinishChange(t.Context(), ws, "1001")
+			result, err := c.FinishChange(t.Context(), ws, "1001", FinishChangeOptions{RevertFiles: []string{"//" + ws.Client + "/..."}})
 			if err != nil {
-				t.Fatalf("finish did not clean up existing shelf: %v", err)
+				t.Fatalf("finish did not preserve existing shelf: %v", err)
 			}
 			raw, _ := os.ReadFile(path)
 			var got shelfState
 			json.Unmarshal(raw, &got)
-			if len(got.Shelf) != len(tc.opened) {
-				t.Errorf("shelf still has %v, but changelist has %v; reported file count=%d", got.Shelf, tc.opened, len(result.Files))
+			want := map[string]bool{"//depot/Dev/A.cpp": true, "//depot/Dev/B.cpp": true}
+			for _, file := range tc.opened {
+				want[file] = true
+			}
+			if !result.Shelved || result.Deleted || len(got.Shelf) != len(want) || len(result.Files) != len(want) {
+				t.Fatalf("shelf=%v result=%+v, want %v", got.Shelf, result, want)
+			}
+			for _, file := range got.Shelf {
+				if !want[file] {
+					t.Errorf("unexpected shelf file %s", file)
+				}
+				delete(want, file)
+			}
+			if len(want) > 0 {
+				t.Errorf("lost shelf files %v", want)
 			}
 		})
 	}

@@ -29,13 +29,17 @@ func TestP4SwarmDestinationMustBeConfigured(t *testing.T) {
 				}
 				ref := configured
 				ref.SwarmURL = requested
+				wantURL := ""
+				if scope == "workspace" {
+					wantURL = configured.SwarmURL
+				}
 				rec := httptest.NewRecorder()
 				got, ok := d.allowP4Ref(rec, httptest.NewRequest(http.MethodPost, "/p4/swarm", nil), "ws", "task", ref)
-				if requested == "https://untrusted.example" {
+				if requested != "" && requested != wantURL {
 					if ok || rec.Code != http.StatusForbidden {
 						t.Fatalf("unconfigured credential destination accepted: %+v, status %d", got, rec.Code)
 					}
-				} else if !ok || got.SwarmURL != configured.SwarmURL {
+				} else if !ok || got.SwarmURL != wantURL {
 					t.Fatalf("configured destination lost: %+v, status %d", got, rec.Code)
 				}
 			})
@@ -91,11 +95,16 @@ func TestP4SwarmShelvesOnlyTheBoundChange(t *testing.T) {
 		{"other change", "9999", true, false, http.StatusConflict},
 		{"pending task change", "1001", true, false, http.StatusOK},
 		{"submitted task change", "1001", true, true, http.StatusOK},
+		{"omitted resource fields", "", true, false, http.StatusOK},
+		{"verified local endpoint", "1001", true, false, http.StatusOK},
+		{"read-only binding rejects create", "1001", true, false, http.StatusConflict},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			logPath := filepath.Join(root, "p4.log")
 			t.Setenv("P4_FAKE_LOG", logPath)
+			t.Setenv("P4_FAKE_OPENED", "... depotFile //depot/main/A.cpp\n... action edit\n... change 1001\n")
+			t.Setenv("P4_FAKE_DEPOT", "//depot/main")
 			t.Setenv("P4_FAKE_TICKETS", "p4:1666 (alice) TESTTICKET\n")
 			var creates atomic.Int32
 			swarm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -109,15 +118,31 @@ func TestP4SwarmShelvesOnlyTheBoundChange(t *testing.T) {
 			defer swarm.Close()
 			ref := p4depot.Ref{Port: "p4:1666", Depot: "//depot/main", User: "alice", SwarmURL: swarm.URL}
 			d := &Daemon{workspaces: map[string]*workspaceState{"ws": {}}, logger: slog.Default(), p4Cache: &p4cache.Cache{P4Path: bin, HTTPClient: swarm.Client()}}
+			d.workspaces["ws"].setP4Depots([]P4DepotData{P4DepotData(ref)})
 			d.registerTaskP4Depots("ws", "task", []P4DepotData{P4DepotData(ref)})
 			d.registerActiveRepoCheckoutTask("mat_test", activeRepoCheckoutTask{WorkspaceID: "ws", TaskID: "task", WorkDir: root})
 			if tc.bound {
+				localPort := ref.Port
+				if tc.name == "verified local endpoint" {
+					localPort = "p4-alias:1666"
+				}
 				d.rememberP4Binding(&p4TaskBinding{
-					ws:  &p4cache.Workspace{Port: ref.Port, Client: "alice_main", User: "alice", Root: root, Dir: root},
-					ref: ref, taskID: "task", change: "1001", submitted: tc.submitted,
+					ws:        &p4cache.Workspace{Port: localPort, Client: "alice_main", User: "alice", Root: root, Dir: root},
+					ref:       ref,
+					taskID:    "task",
+					change:    "1001",
+					submitted: tc.submitted,
+					readOnly:  tc.name == "read-only binding rejects create",
 				})
 			}
-			body, _ := json.Marshal(p4SwarmRequest{Port: ref.Port, Depot: ref.Depot, WorkspaceID: "ws", TaskID: "task", WorkDir: root, Action: "create", Changelist: tc.change, Shelve: true})
+			request := p4SwarmRequest{Port: ref.Port, Depot: ref.Depot, WorkspaceID: "ws", TaskID: "task", WorkDir: root, Action: "create", Changelist: tc.change, Shelve: tc.name != "read-only binding rejects create"}
+			if tc.name == "omitted resource fields" {
+				request.Port, request.Depot = "", ""
+			}
+			if tc.name == "verified local endpoint" {
+				request.Port = "p4-alias:1666"
+			}
+			body, _ := json.Marshal(request)
 			req := httptest.NewRequest(http.MethodPost, "/p4/swarm", bytes.NewReader(body))
 			req.Header.Set("Authorization", "Bearer mat_test")
 			rec := httptest.NewRecorder()
@@ -135,7 +160,7 @@ func TestP4SwarmShelvesOnlyTheBoundChange(t *testing.T) {
 				}
 				return
 			}
-			if creates.Load() != 1 || strings.Contains(string(log), "shelve -r -c 1001") == tc.submitted {
+			if creates.Load() != 1 || strings.Contains(string(log), "shelve -f -Af -c 1001") == tc.submitted {
 				t.Fatalf("wrong shelf/review behavior: creates=%d calls=%s", creates.Load(), log)
 			}
 		})

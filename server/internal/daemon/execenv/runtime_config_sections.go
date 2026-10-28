@@ -2,6 +2,7 @@ package execenv
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/issuestatus"
@@ -265,7 +266,7 @@ func writeAvailableCommands(b *strings.Builder, provider string, ctx TaskContext
 	// task holds no Perforce workspace and may not open files at all, so the
 	// edit command is withheld rather than contradicted by a later rule.
 	if !ctx.PlanMode {
-		b.WriteString("- `multica p4 edit --port <P4PORT> --depot <//depot/path> -- <files>` — checkout files for edit (`checkout` is an alias). Also: `add-files`, `delete`, `revert`, `reopen`, `opened`, `reconcile`, `change`, `shelve`, `status`. Swarm: `multica p4 swarm create --changelist <n>`. Follow the action permissions in `## Perforce workspace`; without that section, file operations are unavailable. Never create a Perforce client for the task.\n\n")
+		b.WriteString("- `multica p4 edit -- <files>` — checkout files for edit (`checkout` is an alias). Do not pass `--port` or `--depot`, and do not look up P4PORT: the daemon fills both from the bound workspace. Also: `add-files`, `delete`, `revert`, `reopen`, `opened`, `reconcile`, `change`, `shelve`, `status`. Swarm: `multica p4 swarm create`. Follow the action permissions in `## Perforce workspace`; without that section, file operations are unavailable. Never create a Perforce client for the task.\n\n")
 	}
 	if !p4OnlyTask(ctx) {
 		b.WriteString("Git commits use the user's configured identity. Preserve it unless the user requests another identity. In a managed checkout, use `git config --worktree user.name` / `user.email` for an intentional task-local override; plain `git config` or `--local` can write into a shared cache and affect other tasks. Never change global Git identity for a task.\n\n")
@@ -559,6 +560,10 @@ func writeP4Workspace(b *strings.Builder, ws *P4WorkspaceForEnv) {
 	}
 	b.WriteString(". Their other work lives in the same tree, so touch only what this task needs.\n\n")
 
+	if ws.ReadOnly {
+		b.WriteString("This chat or coordination task has read-only Perforce access. Do not modify workspace files or run P4 write commands. Create or use an issue to request file changes.\n\n")
+		return
+	}
 	if ws.Ticket == "" {
 		// I7: no ticket, no changelist, no opened files. Stated before the
 		// command list so an agent reading top-down never reaches `p4 edit`
@@ -568,7 +573,7 @@ func writeP4Workspace(b *strings.Builder, ws *P4WorkspaceForEnv) {
 	}
 
 	fmt.Fprintf(b, "The task changelist is described `refs #%s`; the daemon writes that trailer, so do not edit it away.\n\n", ws.Ticket)
-	b.WriteString("- Open a file with `multica p4 edit -- <files>` BEFORE you change it, and create new files with `multica p4 add-files -- <files>`. Files on disk are read-only until Helix opens them — never clear the read-only bit to write one: Helix would not know the file changed, and the change would be lost.\n")
+	b.WriteString("- Open a file with `multica p4 edit -- <files>` BEFORE you change it, and create new files with `multica p4 add-files -- <files>`. Do not pass `--port` or `--depot`, and do not copy the port out of Project Context, `p4 set`, or `p4 info` — the daemon already has it. Files on disk are read-only until Helix opens them — never clear the read-only bit to write one: Helix would not know the file changed, and the change would be lost.\n")
 	b.WriteString("- Everything you open goes into this task's changelist automatically. `multica p4 status` reports its number and the files in it; you do not pass `--changelist`.\n")
 	b.WriteString("- Do not use raw `p4` to write. Read-only queries (`p4 files`, `p4 print`, `p4 filelog`, `p4 describe`, `p4 changes`) are fine and often the fastest way to understand history.\n")
 	writeP4WorkspaceActionPolicy(b, ws)
@@ -576,7 +581,7 @@ func writeP4Workspace(b *strings.Builder, ws *P4WorkspaceForEnv) {
 	if ws.AllowExclusive {
 		b.WriteString("- This depot allows opening exclusive-lock (`+l`) files. You still hold the lock while they are open, so open them late and keep the list short.\n")
 	}
-	b.WriteString("- When the task ends with a pending changelist, the daemon reverts the files you opened but did not change, shelves the rest, and opens a Helix Swarm review unless auto review is disabled. Pending changes stay open for the human to verify. A submitted changelist is reported with its actual submitted number and is not shelved again.\n")
+	b.WriteString("- When the task ends with a pending changelist, the daemon reverts the files you opened but did not change, shelves the rest while retaining existing shelf-only files, and opens a Helix Swarm review unless auto review is disabled. Pending changes stay open for the human to verify. A read-only continuation leaves existing opens and shelves untouched. A submitted changelist is reported with its actual submitted number and is not shelved again.\n")
 	b.WriteString("- Your final reply must state what you changed, the changelist number (`multica p4 status`), and how to verify it in Unreal Editor.\n")
 	b.WriteString("- Read `Game/DJ01/AGENTS.md` first when it is present: it carries the project's own rules from the depot and overrides general guidance here.\n\n")
 }
@@ -636,7 +641,11 @@ func writeProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 		b.WriteString("\n\n")
 	}
 	if len(ctx.ProjectResources) > 0 {
-		b.WriteString("Project resources (also written to `.multica/project/resources.json`):\n\n")
+		resourcePath := ".multica/project/resources.json"
+		if ctx.PrivateRuntimeDir != "" {
+			resourcePath = projectResourcesPath("", ctx)
+		}
+		fmt.Fprintf(b, "Project resources (also written to `%s`):\n\n", resourcePath)
 		for _, r := range ctx.ProjectResources {
 			fmt.Fprintf(b, "- %s\n", formatProjectResource(r))
 		}
@@ -888,27 +897,22 @@ func builtinSlug(skills []SkillContextForEnv, name string) (string, bool) {
 
 // writeSkills emits the Skills section: an index of invocable skill names.
 //
-// Names only, deliberately. Every runtime CLI discovers the SKILL.md files the
-// daemon writes and builds its own listing from their frontmatter, so repeating
-// the descriptions here bought a second, more expensive copy of what the model
-// already had — measured at ~3,100 tokens per brief on a real task, 40% of the
-// whole brief — and no extra routing signal (MUL-5529).
-//
-// The index itself stays because it is the one skill listing Multica controls.
-// Each CLI's own listing is theirs: its format, and whether it exists at all,
-// can change with any release.
-//
-// There is no per-provider branch. The old fallback told providers outside a
-// hardcoded list to read `.agent_context/skills/`, which was the wrong path for
-// every provider that actually reached it — grok and traecli write to
-// `.grok/skills` and `.traecli/skills` — while both discover natively and never
-// needed the pointer.
+// Native discovery needs only skill names. P4 tasks keep managed skills outside
+// the repository and receive explicit paths instead, preserving repository rules.
 func writeSkills(b *strings.Builder, ctx TaskContextForEnv) {
 	skills := modelVisibleSkills(ctx.AgentSkills)
 	if len(skills) == 0 {
 		return
 	}
 	b.WriteString("## Skills\n\n")
+	if ctx.PrivateRuntimeDir != "" {
+		b.WriteString("Load the task skills below by reading their SKILL.md files before using them. Repository skills and rules remain in their native locations.\n\n")
+		for _, skill := range skills {
+			fmt.Fprintf(b, "- **%s**: `%s`\n", skill.Name, filepath.Join(ctx.PrivateRuntimeDir, "skills", skill.Name, "SKILL.md"))
+		}
+		b.WriteString("\n")
+		return
+	}
 	b.WriteString("You have the following skills installed (discovered automatically):\n\n")
 	for _, skill := range skills {
 		fmt.Fprintf(b, "- **%s**\n", skill.Name)

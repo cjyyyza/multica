@@ -41,7 +41,7 @@ type Ref struct {
 }
 
 var (
-	portPrefix = regexp.MustCompile(`(?i)^(ssl|ssl4|ssl6|tcp|tcp4|tcp6):`)
+	portPrefix = regexp.MustCompile(`(?i)^(ssl|ssl4|ssl6|ssl46|ssl64|tcp|tcp4|tcp6|tcp46|tcp64):`)
 	hostPort   = regexp.MustCompile(`^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._-]+)(:[0-9]{1,5})?$`)
 	depotPath  = regexp.MustCompile(`^//[A-Za-z0-9][A-Za-z0-9_.-]*(/[^ \t\n]*)?$`)
 	tokenName  = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -57,7 +57,28 @@ func Identity(r Ref) string {
 }
 
 // Normalize trims fields and rejects values the daemon cannot sync.
+// Port and depot are required. Task commands that may omit them use
+// ValidateProvided instead.
 func Normalize(r Ref) (Ref, error) {
+	r = trimRef(r)
+	if r.Port == "" {
+		return Ref{}, fmt.Errorf("port is required")
+	}
+	if r.Depot == "" {
+		return Ref{}, fmt.Errorf("depot is required")
+	}
+	return validateTrimmed(r)
+}
+
+// ValidateProvided trims fields and checks any the caller set. Empty port and
+// depot are legal: a task bound to a Helix workspace omits them, and the
+// daemon fills both. Requiring the pair here is what made an agent that had
+// only a depot path fail with "port is required" and go look the port up.
+func ValidateProvided(r Ref) (Ref, error) {
+	return validateTrimmed(trimRef(r))
+}
+
+func trimRef(r Ref) Ref {
 	r.Port = strings.TrimSpace(r.Port)
 	r.Depot = strings.TrimSpace(r.Depot)
 	r.Stream = strings.TrimSpace(r.Stream)
@@ -66,17 +87,14 @@ func Normalize(r Ref) (Ref, error) {
 	r.Changelist = strings.TrimSpace(r.Changelist)
 	r.Description = strings.TrimSpace(r.Description)
 	r.SwarmURL = strings.TrimRight(strings.TrimSpace(r.SwarmURL), "/")
+	return r
+}
 
-	if r.Port == "" {
-		return Ref{}, fmt.Errorf("port is required")
-	}
-	if !ValidPort(r.Port) {
+func validateTrimmed(r Ref) (Ref, error) {
+	if r.Port != "" && !ValidPort(r.Port) {
 		return Ref{}, fmt.Errorf("port must be a P4PORT (host, host:port, or ssl:host:port)")
 	}
-	if r.Depot == "" {
-		return Ref{}, fmt.Errorf("depot is required")
-	}
-	if !ValidDepot(r.Depot) {
+	if r.Depot != "" && !ValidDepot(r.Depot) {
 		return Ref{}, fmt.Errorf("depot must be a Perforce depot path starting with //")
 	}
 	if r.Stream != "" && !ValidDepot(r.Stream) {

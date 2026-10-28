@@ -11,6 +11,45 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimP4ChangelistPoll = `-- name: ClaimP4ChangelistPoll :one
+UPDATE p4_changelist cl SET
+    daemon_id = $3,
+    poll_generation = cl.poll_generation + 1,
+    poll_lease_until = now() + interval '2 minutes'
+WHERE cl.id = $1 AND cl.workspace_id = $2
+  AND cl.status IN ('pending', 'shelved')
+  AND cl.poll_generation = $4
+  AND (cl.daemon_id = $3 OR cl.daemon_id = '' OR (
+      COALESCE(cl.poll_lease_until, cl.updated_at + interval '2 minutes') <= now()
+      AND NOT EXISTS (
+          SELECT 1 FROM agent_runtime ar
+          WHERE ar.workspace_id = cl.workspace_id AND ar.daemon_id = cl.daemon_id
+            AND ar.status = 'online' AND ar.last_seen_at > now() - interval '90 seconds'
+      )
+  ))
+RETURNING poll_generation
+`
+
+type ClaimP4ChangelistPollParams struct {
+	ID                 pgtype.UUID `json:"id"`
+	WorkspaceID        pgtype.UUID `json:"workspace_id"`
+	DaemonID           string      `json:"daemon_id"`
+	ExpectedGeneration int64       `json:"expected_generation"`
+}
+
+// The generation fences observations made before another daemon takes over.
+func (q *Queries) ClaimP4ChangelistPoll(ctx context.Context, arg ClaimP4ChangelistPollParams) (int64, error) {
+	row := q.db.QueryRow(ctx, claimP4ChangelistPoll,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.DaemonID,
+		arg.ExpectedGeneration,
+	)
+	var poll_generation int64
+	err := row.Scan(&poll_generation)
+	return poll_generation, err
+}
+
 const deleteOrphanP4Changelist = `-- name: DeleteOrphanP4Changelist :exec
 DELETE FROM p4_changelist
 WHERE p4_changelist.id = $1
@@ -33,7 +72,7 @@ func (q *Queries) DeleteOrphanP4Changelist(ctx context.Context, arg DeleteOrphan
 }
 
 const findP4ChangelistIdentityRows = `-- name: FindP4ChangelistIdentityRows :many
-SELECT id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at FROM p4_changelist
+SELECT id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at, poll_generation, poll_lease_until FROM p4_changelist
 WHERE workspace_id = $1 AND (
     (server_key = $2 AND original_number = $3)
     OR id = $4
@@ -93,6 +132,8 @@ func (q *Queries) FindP4ChangelistIdentityRows(ctx context.Context, arg FindP4Ch
 			&i.SubmittedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PollGeneration,
+			&i.PollLeaseUntil,
 		); err != nil {
 			return nil, err
 		}
@@ -105,7 +146,7 @@ func (q *Queries) FindP4ChangelistIdentityRows(ctx context.Context, arg FindP4Ch
 }
 
 const findP4ChangelistsByPortNumber = `-- name: FindP4ChangelistsByPortNumber :many
-SELECT id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at FROM p4_changelist
+SELECT id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at, poll_generation, poll_lease_until FROM p4_changelist
 WHERE workspace_id = $1 AND lower(port) = lower($2)
   AND (number = $3 OR original_number = $3)
 ORDER BY (server_key <> lower(port)) DESC, (task_id IS NOT NULL) DESC, created_at
@@ -149,6 +190,8 @@ func (q *Queries) FindP4ChangelistsByPortNumber(ctx context.Context, arg FindP4C
 			&i.SubmittedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PollGeneration,
+			&i.PollLeaseUntil,
 		); err != nil {
 			return nil, err
 		}
@@ -161,7 +204,7 @@ func (q *Queries) FindP4ChangelistsByPortNumber(ctx context.Context, arg FindP4C
 }
 
 const getP4ChangelistInWorkspace = `-- name: GetP4ChangelistInWorkspace :one
-SELECT id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at FROM p4_changelist WHERE id = $1 AND workspace_id = $2
+SELECT id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at, poll_generation, poll_lease_until FROM p4_changelist WHERE id = $1 AND workspace_id = $2
 `
 
 type GetP4ChangelistInWorkspaceParams struct {
@@ -194,6 +237,8 @@ func (q *Queries) GetP4ChangelistInWorkspace(ctx context.Context, arg GetP4Chang
 		&i.SubmittedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PollGeneration,
+		&i.PollLeaseUntil,
 	)
 	return i, err
 }
@@ -206,7 +251,7 @@ INSERT INTO p4_changelist (
 )
 ON CONFLICT (workspace_id, server_key, original_number) DO UPDATE SET
     updated_at = now()
-RETURNING id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at
+RETURNING id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at, poll_generation, poll_lease_until
 `
 
 type InsertManualP4ChangelistParams struct {
@@ -250,6 +295,8 @@ func (q *Queries) InsertManualP4Changelist(ctx context.Context, arg InsertManual
 		&i.SubmittedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PollGeneration,
+		&i.PollLeaseUntil,
 	)
 	return i, err
 }
@@ -348,6 +395,12 @@ const listOpenP4ChangelistsForDaemon = `-- name: ListOpenP4ChangelistsForDaemon 
 SELECT
     cl.id,
     cl.port,
+    cl.server_key,
+    cl.daemon_id,
+    cl.client,
+    cl.poll_generation,
+    cl.p4_user,
+    cl.charset,
     cl.number,
     cl.original_number,
     cl.status,
@@ -357,7 +410,14 @@ FROM p4_changelist cl
 LEFT JOIN swarm_review sr ON sr.id = cl.swarm_review_id
 WHERE cl.workspace_id = $1
   AND cl.status IN ('pending', 'shelved')
-  AND (cl.daemon_id = $2 OR cl.daemon_id = '')
+  AND (cl.daemon_id = $2 OR cl.daemon_id = '' OR (
+      COALESCE(cl.poll_lease_until, cl.updated_at + interval '2 minutes') <= now()
+      AND NOT EXISTS (
+          SELECT 1 FROM agent_runtime ar
+          WHERE ar.workspace_id = cl.workspace_id AND ar.daemon_id = cl.daemon_id
+            AND ar.status = 'online' AND ar.last_seen_at > now() - interval '90 seconds'
+      )
+  ))
 ORDER BY cl.original_number
 `
 
@@ -369,6 +429,12 @@ type ListOpenP4ChangelistsForDaemonParams struct {
 type ListOpenP4ChangelistsForDaemonRow struct {
 	ID                pgtype.UUID `json:"id"`
 	Port              string      `json:"port"`
+	ServerKey         string      `json:"server_key"`
+	DaemonID          string      `json:"daemon_id"`
+	Client            string      `json:"client"`
+	PollGeneration    int64       `json:"poll_generation"`
+	P4User            string      `json:"p4_user"`
+	Charset           string      `json:"charset"`
 	Number            int32       `json:"number"`
 	OriginalNumber    int32       `json:"original_number"`
 	Status            string      `json:"status"`
@@ -391,6 +457,12 @@ func (q *Queries) ListOpenP4ChangelistsForDaemon(ctx context.Context, arg ListOp
 		if err := rows.Scan(
 			&i.ID,
 			&i.Port,
+			&i.ServerKey,
+			&i.DaemonID,
+			&i.Client,
+			&i.PollGeneration,
+			&i.P4User,
+			&i.Charset,
 			&i.Number,
 			&i.OriginalNumber,
 			&i.Status,
@@ -709,7 +781,7 @@ func (q *Queries) MoveIssueFromP4Changelists(ctx context.Context, arg MoveIssueF
 
 const setP4ChangelistIdentity = `-- name: SetP4ChangelistIdentity :one
 UPDATE p4_changelist SET server_key = $3, original_number = $4, updated_at = now()
-WHERE id = $1 AND workspace_id = $2 RETURNING id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at
+WHERE id = $1 AND workspace_id = $2 RETURNING id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at, poll_generation, poll_lease_until
 `
 
 type SetP4ChangelistIdentityParams struct {
@@ -749,6 +821,8 @@ func (q *Queries) SetP4ChangelistIdentity(ctx context.Context, arg SetP4Changeli
 		&i.SubmittedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PollGeneration,
+		&i.PollLeaseUntil,
 	)
 	return i, err
 }
@@ -782,16 +856,19 @@ UPDATE p4_changelist SET
 WHERE id = $1
   AND workspace_id = $2
   AND (daemon_id = '' OR daemon_id = $6)
-RETURNING id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at
+  AND poll_generation = $7
+  AND (poll_generation = 0 OR poll_lease_until > now())
+RETURNING id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at, poll_generation, poll_lease_until
 `
 
 type UpdateP4ChangelistStatusParams struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Status      string             `json:"status"`
-	Number      int32              `json:"number"`
-	SubmittedAt pgtype.Timestamptz `json:"submitted_at"`
-	DaemonID    string             `json:"daemon_id"`
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	Status         string             `json:"status"`
+	Number         int32              `json:"number"`
+	SubmittedAt    pgtype.Timestamptz `json:"submitted_at"`
+	DaemonID       string             `json:"daemon_id"`
+	PollGeneration int64              `json:"poll_generation"`
 }
 
 // One poll result. A zero number means the poll had nothing new to say about
@@ -805,6 +882,7 @@ func (q *Queries) UpdateP4ChangelistStatus(ctx context.Context, arg UpdateP4Chan
 		arg.Number,
 		arg.SubmittedAt,
 		arg.DaemonID,
+		arg.PollGeneration,
 	)
 	var i P4Changelist
 	err := row.Scan(
@@ -829,6 +907,8 @@ func (q *Queries) UpdateP4ChangelistStatus(ctx context.Context, arg UpdateP4Chan
 		&i.SubmittedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PollGeneration,
+		&i.PollLeaseUntil,
 	)
 	return i, err
 }
@@ -880,8 +960,11 @@ ON CONFLICT (workspace_id, server_key, original_number) DO UPDATE SET
     swarm_review_id = COALESCE(EXCLUDED.swarm_review_id, p4_changelist.swarm_review_id),
     task_id = COALESCE(EXCLUDED.task_id, p4_changelist.task_id),
     submitted_at = COALESCE(EXCLUDED.submitted_at, p4_changelist.submitted_at),
+    poll_generation = p4_changelist.poll_generation + CASE WHEN $19::boolean THEN 1 ELSE 0 END,
+    poll_lease_until = CASE WHEN $19::boolean THEN NULL ELSE p4_changelist.poll_lease_until END,
     updated_at = now()
-RETURNING id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at
+WHERE p4_changelist.poll_generation = 0 OR $19::boolean
+RETURNING id, workspace_id, daemon_id, server_key, port, charset, number, original_number, client, p4_user, status, description, ticket, files_count, exclusive_files, warnings, swarm_review_id, task_id, submitted_at, created_at, updated_at, poll_generation, poll_lease_until
 `
 
 type UpsertP4ChangelistParams struct {
@@ -903,6 +986,7 @@ type UpsertP4ChangelistParams struct {
 	SwarmReviewID  pgtype.UUID        `json:"swarm_review_id"`
 	TaskID         pgtype.UUID        `json:"task_id"`
 	SubmittedAt    pgtype.Timestamptz `json:"submitted_at"`
+	FencePolls     bool               `json:"fence_polls"`
 }
 
 // A task reporting its changelist. Identity is (workspace_id, server_key,
@@ -912,6 +996,8 @@ type UpsertP4ChangelistParams struct {
 // The three COALESCEd columns are facts a later report may not carry: a report
 // made before the Swarm review exists must not unset the review a previous one
 // attached, and the same holds for the submit timestamp and the owning task.
+// Lease-aware daemons fence in-flight polls when they report newer task work.
+// The opt-in flag preserves generation-zero polling for installed older daemons.
 func (q *Queries) UpsertP4Changelist(ctx context.Context, arg UpsertP4ChangelistParams) (P4Changelist, error) {
 	row := q.db.QueryRow(ctx, upsertP4Changelist,
 		arg.WorkspaceID,
@@ -932,6 +1018,7 @@ func (q *Queries) UpsertP4Changelist(ctx context.Context, arg UpsertP4Changelist
 		arg.SwarmReviewID,
 		arg.TaskID,
 		arg.SubmittedAt,
+		arg.FencePolls,
 	)
 	var i P4Changelist
 	err := row.Scan(
@@ -956,6 +1043,8 @@ func (q *Queries) UpsertP4Changelist(ctx context.Context, arg UpsertP4Changelist
 		&i.SubmittedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PollGeneration,
+		&i.PollLeaseUntil,
 	)
 	return i, err
 }

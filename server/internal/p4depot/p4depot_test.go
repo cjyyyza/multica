@@ -33,6 +33,23 @@ func TestNormalizeAcceptsCommonPortsAndDepots(t *testing.T) {
 	}
 }
 
+func TestValidateProvidedAllowsOmittedPort(t *testing.T) {
+	t.Parallel()
+	got, err := ValidateProvided(Ref{Depot: " //depot/UE "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Port != "" || got.Depot != "//depot/UE" {
+		t.Fatalf("partial ref = %+v", got)
+	}
+	if _, err := ValidateProvided(Ref{Depot: "//depot/UE", Port: "https://p4.example"}); err == nil {
+		t.Fatal("invalid port was accepted without a depot requirement")
+	}
+	if _, err := ValidateProvided(Ref{}); err != nil {
+		t.Fatalf("empty ref should be forwarded: %v", err)
+	}
+}
+
 func TestNormalizeRejectsInvalidValues(t *testing.T) {
 	t.Parallel()
 

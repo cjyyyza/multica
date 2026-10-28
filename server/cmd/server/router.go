@@ -1679,6 +1679,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// server trigger we have no admin rights to install.
 		r.Post("/tasks/{taskId}/p4/changelists", h.ReportTaskP4Changelist)
 		r.Get("/p4/changelists/open", h.ListOpenP4ChangelistsForDaemon)
+		r.Post("/p4/changelists/{changelistId}/claim", h.ClaimP4ChangelistPoll)
 		r.Post("/p4/changelists/status", h.UpdateP4ChangelistStatuses)
 
 		r.Post("/workspaces/{workspaceId}/issues/gc-check", h.BatchIssueGCCheck)

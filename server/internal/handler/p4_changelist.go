@@ -189,6 +189,8 @@ type p4SwarmReviewReport struct {
 }
 
 type reportTaskP4ChangelistRequest struct {
+	FencePolls     bool                  `json:"fence_polls"`
+	SubmittedAt    string                `json:"submitted_at"`
 	Port           string                `json:"port"`
 	ServerKey      string                `json:"server_key"`
 	Charset        string                `json:"charset"`
@@ -277,9 +279,19 @@ func (h *Handler) ReportTaskP4Changelist(w http.ResponseWriter, r *http.Request)
 	}
 	var submittedAt pgtype.Timestamptz
 	if status == p4ChangelistStatusSubmitted {
-		submittedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
+		stamp := time.Now()
+		if raw := strings.TrimSpace(req.SubmittedAt); raw != "" {
+			var err error
+			stamp, err = time.Parse(time.RFC3339, raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "submitted_at must be an RFC3339 timestamp")
+				return
+			}
+		}
+		submittedAt = pgtype.Timestamptz{Time: stamp, Valid: true}
 	}
 	row, err := qtx.UpsertP4Changelist(r.Context(), db.UpsertP4ChangelistParams{
+		FencePolls:     req.FencePolls,
 		WorkspaceID:    wsUUID,
 		DaemonID:       middleware.DaemonIDFromContext(r.Context()),
 		ServerKey:      serverKey,
@@ -299,6 +311,10 @@ func (h *Handler) ReportTaskP4Changelist(w http.ResponseWriter, r *http.Request)
 		TaskID:         task.ID,
 		SubmittedAt:    submittedAt,
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusConflict, "this changelist has a newer poll generation; update the daemon before reporting task changes")
+		return
+	}
 	if err != nil {
 		slog.Error("upsert p4 changelist", "error", err, "task_id", uuidToString(task.ID))
 		writeError(w, http.StatusInternalServerError, "failed to save changelist")
@@ -431,19 +447,24 @@ func (h *Handler) ListOpenP4ChangelistsForDaemon(w http.ResponseWriter, r *http.
 		return
 	}
 	for _, row := range rows {
-		allowed := false
-		for _, depot := range depots {
-			if strings.EqualFold(depot.Port, row.Port) {
-				allowed = true
-				break
-			}
+		rowDepots, err := h.p4PollingDepots(r.Context(), wsUUID, []db.ListOpenP4ChangelistsForDaemonRow{row})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load Perforce resources")
+			return
 		}
-		if !allowed {
+		if !p4PollResourceAllowed(row.Port, row.ServerKey, row.Client, row.DaemonID, rowDepots) {
 			continue
 		}
 		out = append(out, map[string]any{
 			"id":                  uuidToString(row.ID),
 			"port":                row.Port,
+			"p4_user":             row.P4User,
+			"charset":             row.Charset,
+			"server_key":          row.ServerKey,
+			"client":              row.Client,
+			"daemon_id":           row.DaemonID,
+			"poll_generation":     row.PollGeneration,
+			"p4_depots":           rowDepots,
 			"number":              row.Number,
 			"original_number":     row.OriginalNumber,
 			"status":              row.Status,
@@ -451,7 +472,72 @@ func (h *Handler) ListOpenP4ChangelistsForDaemon(w http.ResponseWriter, r *http.
 			"swarm_url":           textPtr(row.SwarmUrl),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"changelists": out, "p4_depots": depots})
+	writeJSON(w, http.StatusOK, map[string]any{"changelists": out, "p4_depots": depots, "lease_required": true})
+}
+
+func p4PollResourceAllowed(port, key, client, owner string, depots []P4DepotData) bool {
+	for _, depot := range depots {
+		if p4depot.SameEndpoint(depot.Port, port) {
+			return true
+		}
+		// Only a daemon-reported workspace has an observed cluster identity.
+		// The receiving daemon must verify the configured endpoint against it;
+		// a manually typed port never authorizes a background connection.
+		if client != "" && owner != "" && p4depot.ClusterKey(key, port) && p4depot.SameTransport(port, depot.Port) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Handler) ClaimP4ChangelistPoll(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		WorkspaceID string `json:"workspace_id"`
+		Generation  int64  `json:"poll_generation"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Generation < 0 {
+		writeError(w, http.StatusBadRequest, "invalid poll lease request")
+		return
+	}
+	ws, ok := parseUUIDOrBadRequest(w, req.WorkspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	id, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "changelistId"), "changelist id")
+	if !ok {
+		return
+	}
+	if !h.requireDaemonWorkspaceAccess(w, r, req.WorkspaceID) {
+		return
+	}
+	row, err := h.Queries.GetP4ChangelistInWorkspace(r.Context(), db.GetP4ChangelistInWorkspaceParams{ID: id, WorkspaceID: ws})
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "changelist not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load changelist")
+		return
+	}
+	depots, err := h.p4PollingDepots(r.Context(), ws, []db.ListOpenP4ChangelistsForDaemonRow{{ID: id}})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load Perforce resources")
+		return
+	}
+	if !p4PollResourceAllowed(row.Port, row.ServerKey, row.Client, row.DaemonID, depots) {
+		writeError(w, http.StatusForbidden, "no current Perforce resource authorizes this poll")
+		return
+	}
+	generation, err := h.Queries.ClaimP4ChangelistPoll(r.Context(), db.ClaimP4ChangelistPollParams{ID: id, WorkspaceID: ws, DaemonID: middleware.DaemonIDFromContext(r.Context()), ExpectedGeneration: req.Generation})
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusConflict, "poll ownership changed or is still active")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to claim poll lease")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"poll_generation": generation})
 }
 
 // Project depots do not belong in the daemon's workspace-wide task allowlist.
@@ -511,6 +597,7 @@ type p4ChangelistStatusUpdate struct {
 	ServerKey        string `json:"server_key"`
 	SubmittedAt      string `json:"submitted_at"`
 	SwarmReviewState string `json:"swarm_review_state"`
+	PollGeneration   int64  `json:"poll_generation"`
 }
 
 type updateP4ChangelistStatusesRequest struct {

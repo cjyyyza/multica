@@ -34,11 +34,11 @@ multica runtime delete <runtime-id>
 multica repo checkout <url>
 multica repo checkout <url> --ref <branch-or-sha>
 multica repo checkout <url> --fresh
-multica p4 edit --port <p4port> --depot <depot-path> -- <files>
-multica p4 add-files --port <p4port> --depot <depot-path> -- <files>
+multica p4 edit -- <files>
+multica p4 add-files -- <files>
 multica p4 status --output json
-multica p4 swarm create --port <p4port> --depot <depot-path> --changelist <n> --output json
-multica p4 swarm link --port <p4port> --depot <depot-path> --review <id>
+multica p4 swarm create --output json
+multica p4 swarm link --review <id>
 ```
 
 Runtime and repo commands affect active agent execution. Do not restart daemons,
@@ -128,8 +128,11 @@ can be opened**: `p4 edit` returns `ticket_required`, and the fix is to ask a
 human to put `refs #<ticket>` in the issue description, not to invent a
 number.
 
-`--port` and `--depot` are optional here; the daemon fills them from the
-binding, and `--changelist` may only name the task changelist. `multica p4
+Do not pass `--port` or `--depot`, and do not look up P4PORT from Project
+Context, `p4 set`, or `p4 info`. The daemon fills both from the binding.
+Passing either flag is optional and, if you do pass it, must match that
+binding; a spelling that only looks equivalent is rejected. `--changelist`
+may only name the task changelist, so omit it too. `multica p4
 status --output json` reports the client, root, stream, ticket, changelist
 number, its files, and any warnings. Submit, sync, and unshelve are off
 unless that depot turns on `allow_submit`, `allow_sync`, or `allow_unshelve`

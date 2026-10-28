@@ -1419,6 +1419,10 @@ func (c *Client) ListOpenP4Changelists(ctx context.Context, workspaceID string, 
 	return c.getJSON(ctx, path, out)
 }
 
+func (c *Client) ClaimP4ChangelistPoll(ctx context.Context, workspaceID, id string, generation int64, out any) error {
+	return c.postJSON(ctx, "/api/daemon/p4/changelists/"+url.PathEscape(id)+"/claim", map[string]any{"workspace_id": workspaceID, "poll_generation": generation}, out)
+}
+
 // ReportP4ChangelistStatus posts one poll's worth of submit, renumber, and
 // review-state updates.
 func (c *Client) ReportP4ChangelistStatus(ctx context.Context, body, out any) error {

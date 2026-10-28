@@ -38,6 +38,7 @@ type P4DepotForEnv struct {
 // P4WorkspaceForEnv describes the human-owned Helix client a task edits in
 // place (workspace mode). Nil when the task is not bound to one.
 type P4WorkspaceForEnv struct {
+	ReadOnly       bool
 	Port           string
 	User           string
 	Client         string
@@ -189,6 +190,7 @@ type TaskContextForEnv struct {
 	Repos                         []RepoContextForEnv     // workspace repos available for checkout
 	P4Depots                      []P4DepotForEnv         // Perforce depots available for `multica p4 sync`
 	P4Workspace                   *P4WorkspaceForEnv      // human-owned Helix client this task edits in place; nil otherwise
+	PrivateRuntimeDir             string                  // task-owned runtime instructions and skills outside the P4 client
 	ProjectID                     string                  // active project for this task, when present
 	ProjectTitle                  string                  // human-readable project title
 	ProjectDescription            string                  // durable project-level context, rendered into the brief's Project Context section
@@ -315,6 +317,7 @@ type Environment struct {
 	// child CLI invocations. It prevents implicit discovery of the daemon
 	// owner's ~/.multica profile without changing the provider-facing HOME.
 	MulticaConfigRoot string
+	PrivateRuntimeDir string
 	// LocalWorktree is set when the task runs in worktree mode against a
 	// local_directory resource. The daemon calls Finalize on it after the
 	// agent exits to commit leftovers, drop the worktree, and learn the
@@ -593,6 +596,14 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 	}
 
 	// Write context files into workdir (skills go to provider-native paths).
+	if params.Task.P4Workspace != nil {
+		privateDir, err := os.MkdirTemp(envRoot, "p4-context-")
+		if err != nil {
+			return nil, fmt.Errorf("create private P4 context: %w", err)
+		}
+		env.PrivateRuntimeDir = privateDir
+		params.Task.PrivateRuntimeDir = env.PrivateRuntimeDir
+	}
 	// Track every file/dir we create in a manifest so CleanupSidecars can
 	// roll a local_directory workdir back to its pre-Prepare state. Cloud
 	// tasks don't need the manifest (the GC loop wipes envRoot wholesale),
@@ -864,6 +875,11 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 		// (GC writes meta from Prepare's result, not Reuse's).
 		rootDir = ""
 	}
+	if params.Task.P4Workspace != nil && rootDir == "" {
+		// A local P4 directory is not a place to reconstruct task scratch.
+		// Prepare allocates a known private root before refreshing the brief.
+		return nil
+	}
 	env := &Environment{
 		RootDir:        rootDir,
 		WorkDir:        params.WorkDir,
@@ -929,6 +945,14 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 	// manifest being current after either path. RootDir is empty on the
 	// legacy local_directory Reuse fallback — skip the persist in that
 	// case to avoid creating a stray manifest at the filesystem root.
+	if params.Task.P4Workspace != nil {
+		privateDir, err := os.MkdirTemp(env.RootDir, "p4-context-")
+		if err != nil {
+			return nil
+		}
+		env.PrivateRuntimeDir = privateDir
+		params.Task.PrivateRuntimeDir = env.PrivateRuntimeDir
+	}
 	manifest := &sidecarManifest{}
 	if err := writeContextFiles(params.WorkDir, params.Provider, params.Task, manifest); err != nil {
 		logger.Warn("execenv: refresh context files failed", "error", err)

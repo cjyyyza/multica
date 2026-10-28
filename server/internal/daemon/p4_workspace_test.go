@@ -236,7 +236,7 @@ func TestWorkspaceRunInvariants(t *testing.T) {
 			action:  "shelve",
 			change:  "1001",
 			edge:    true,
-			wantLog: "shelve -r -p -c 1001",
+			wantLog: "shelve -f -p -Af -c 1001",
 		},
 	}
 
@@ -247,6 +247,9 @@ func TestWorkspaceRunInvariants(t *testing.T) {
 			t.Setenv("P4_FAKE_FSTAT", tc.fstat)
 			t.Setenv("P4_FAKE_WHERE", "... depotFile //DJ01_Proj/Dev/.multica/run.json\n... path "+filepath.Join(root, ".multica", "run.json")+"\n")
 			t.Setenv("P4_FAKE_MUTATE", "ok\n")
+			if tc.action == "shelve" {
+				t.Setenv("P4_FAKE_OPENED", "... depotFile //DJ01_Proj/Dev/Game/A.cpp\n... action edit\n... change 1001\n")
+			}
 			t.Setenv("P4_FAKE_CHANGEIN", "Change 1001 created.\n")
 			t.Setenv("P4USER", "alice")
 
@@ -275,6 +278,7 @@ func TestWorkspaceRunInvariants(t *testing.T) {
 				logger:     slog.Default(),
 				p4Cache:    &p4cache.Cache{P4Path: bin},
 				workspaces: map[string]*workspaceState{"ws": {}},
+				client:     p4RegistrationTestClient(t),
 			}
 			d.rememberP4Binding(binding)
 			d.registerActiveRepoCheckoutTask("mat_p4_ws", activeRepoCheckoutTask{
@@ -413,7 +417,7 @@ func TestBindRejectsDepotTrackedSidecar(t *testing.T) {
 	t.Setenv("P4_FAKE_SET", "P4PORT=ssl:p4.example:1666\nP4USER=alice\nP4CHARSET=utf8\n")
 	t.Setenv("P4_FAKE_INFO", "... userName alice\n... clientName alice_DEV\n... clientRoot "+abs+"\n... serverServices commit-server\n")
 	t.Setenv("P4_FAKE_CLIENT", "... Client alice_DEV\n... Owner alice\n... Root "+abs+"\n... Stream //DJ01_Proj/Dev\n")
-	t.Setenv("P4_FAKE_FSTAT", "... depotFile //DJ01_Proj/Dev/AGENTS.md\n... headType text\n")
+	t.Setenv("P4_FAKE_FSTAT", "... depotFile //DJ01_Proj/Dev/.multica/task-context.json\n... headType text\n")
 	t.Setenv("P4USER", "alice")
 
 	d := &Daemon{
@@ -422,7 +426,7 @@ func TestBindRejectsDepotTrackedSidecar(t *testing.T) {
 		p4ClientLocks: NewLocalPathLocker(),
 	}
 	task := Task{
-		ID:              "task",
+		ID: "task", IssueID: "issue",
 		P4Ticket:        "5002",
 		IssueIdentifier: "DJ-123",
 		ThreadName:      "fix",
@@ -431,13 +435,13 @@ func TestBindRejectsDepotTrackedSidecar(t *testing.T) {
 		}},
 	}
 	_, bindErr := d.bindP4Workspace(t.Context(), task, &localDirectoryAssignment{AbsPath: abs, RealPath: abs}, "codex")
-	if bindErr == nil || !strings.Contains(bindErr.Error(), "point the local directory resource at the workspace root") {
+	if bindErr == nil || !strings.Contains(bindErr.Error(), "Multica private paths are tracked") {
 		t.Fatalf("error = %v", bindErr)
 	}
 }
 
 // A real server answers "no such file(s)" for a bare directory even when it
-// tracks files under it (DJ01's Game/DJ01/.claude/skills), so a tracked skills
+// tracks files under it, so a tracked private
 // directory is only found through <dir>/....
 func TestBindRejectsSidecarDirectoryTrackedOnlyUnderneath(t *testing.T) {
 	bin := writeDaemonFakeP4(t)
@@ -450,7 +454,7 @@ func TestBindRejectsSidecarDirectoryTrackedOnlyUnderneath(t *testing.T) {
 	t.Setenv("P4_FAKE_SET", "P4PORT=ssl:p4.example:1666\nP4USER=alice\nP4CHARSET=utf8\n")
 	t.Setenv("P4_FAKE_INFO", "... userName alice\n... clientName alice_DEV\n... clientRoot "+abs+"\n... serverServices commit-server\n")
 	t.Setenv("P4_FAKE_CLIENT", "... Client alice_DEV\n... Owner alice\n... Root "+abs+"\n... Stream //DJ01_Proj/Dev\n")
-	t.Setenv("P4_FAKE_FSTAT_WILDCARD", "... depotFile //DJ01_Proj/Dev/Game/DJ01/.claude/skills/edit-flow/SKILL.md\n... headType text\n")
+	t.Setenv("P4_FAKE_FSTAT_WILDCARD", "... depotFile //DJ01_Proj/Dev/Game/DJ01/.agent_context/marker.json\n... headType text\n")
 	t.Setenv("P4USER", "alice")
 
 	d := &Daemon{
@@ -459,14 +463,14 @@ func TestBindRejectsSidecarDirectoryTrackedOnlyUnderneath(t *testing.T) {
 		p4ClientLocks: NewLocalPathLocker(),
 	}
 	task := Task{
-		ID:       "task",
+		ID: "task", IssueID: "issue",
 		P4Ticket: "5002",
 		P4Depots: []P4DepotData{{
 			Port: "ssl:p4.example:1666", Depot: "//DJ01_Proj/Dev", Stream: "//DJ01_Proj/Dev",
 		}},
 	}
 	_, bindErr := d.bindP4Workspace(t.Context(), task, &localDirectoryAssignment{AbsPath: abs, RealPath: abs}, "claude")
-	if bindErr == nil || !strings.Contains(bindErr.Error(), ".claude/skills/edit-flow/SKILL.md") {
+	if bindErr == nil || !strings.Contains(bindErr.Error(), ".agent_context/marker.json") {
 		t.Fatalf("error = %v, want the tracked skill file named", bindErr)
 	}
 }
@@ -485,15 +489,17 @@ func TestBindReusesTheIssueChangelist(t *testing.T) {
 	t.Setenv("P4_FAKE_FSTAT_ERR", "no such file(s).")
 	t.Setenv("P4_FAKE_OPENED", "")
 	t.Setenv("P4_FAKE_CHANGES", "Change 1001 on 2026/10/12 by alice@alice_DEV *pending*\n\n\trefs #5002 fix\n\n\tMultica: DJ-123\n")
+	t.Setenv("P4_FAKE_CHANGEOUT", "Change: 1001\nClient: alice_DEV\nUser: alice\nStatus: pending\nDescription:\n\trefs #5002 fix\n\tMultica: DJ-123\n")
 	t.Setenv("P4USER", "alice")
 
 	d := &Daemon{
 		logger:        slog.Default(),
 		p4Cache:       &p4cache.Cache{P4Path: bin},
 		p4ClientLocks: NewLocalPathLocker(),
+		client:        p4RegistrationTestClient(t),
 	}
 	task := Task{
-		ID: "task", P4Ticket: "5002", IssueIdentifier: "DJ-123", ThreadName: "fix",
+		ID: "task", IssueID: "issue", P4Ticket: "5002", IssueIdentifier: "DJ-123", ThreadName: "fix",
 		P4Depots: []P4DepotData{{
 			Port: "ssl:p4.example:1666", Depot: "//DJ01_Proj/Dev", Stream: "//DJ01_Proj/Dev",
 		}},
@@ -608,7 +614,7 @@ func TestConfiguredP4ActionsReachTheBoundWorkspace(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "p4.log")
 	t.Setenv("P4_FAKE_LOG", logPath)
 	t.Setenv("P4_FAKE_MUTATE", "ok\n")
-	t.Setenv("P4_FAKE_DESCRIBE", "... change 1001\n... status submitted\n... depotFile0 //DJ01_Proj/Dev/a.cpp\n... action0 edit\n... type0 text\n")
+	t.Setenv("P4_FAKE_DESCRIBE", "... change 1001\n... status submitted\n... time 1700000000\n... depotFile0 //DJ01_Proj/Dev/a.cpp\n... action0 edit\n... type0 text\n")
 	t.Setenv("P4_FAKE_SYNC", "ok\n")
 	t.Setenv("P4USER", "alice")
 	ws := &p4cache.Workspace{
