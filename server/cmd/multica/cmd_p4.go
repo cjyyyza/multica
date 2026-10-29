@@ -25,11 +25,12 @@ var p4ListCmd = &cobra.Command{
 }
 
 var p4AddCmd = &cobra.Command{
-	Use:   "add",
-	Short: "Add a Perforce depot to the workspace registry",
-	Long:  "Adds one Perforce depot (P4PORT + depot path) to the current workspace. Existing port+depot+stream identities are not duplicated.",
-	Args:  cobra.NoArgs,
-	RunE:  runP4Add,
+	Use:   "add [files...]",
+	Short: "Add files to the task changelist, or register a depot",
+	Long: "With file arguments, runs `p4 add` in the bound workspace (`add-files` is the same command). " +
+		"With no files, --port and --depot register a depot in the workspace registry. Existing port+depot+stream identities are not duplicated.",
+	Args: cobra.ArbitraryArgs,
+	RunE: runP4Add,
 }
 
 var p4RemoveCmd = &cobra.Command{
@@ -41,11 +42,12 @@ var p4RemoveCmd = &cobra.Command{
 }
 
 var p4SyncCmd = &cobra.Command{
-	Use:   "sync",
-	Short: "Sync a Perforce depot into the working directory",
+	Use:   "sync [files...]",
+	Short: "Sync the bound workspace, or individual files in it",
 	Long: "Syncs the Helix workspace this task is already bound to, and only when that depot's allow_sync switch is on in Settings → Code (default off). " +
-		"It does not create a task client or download a new copy of the depot.",
-	Args: cobra.NoArgs,
+		"Omitting files syncs the full client view, including stream imports. Named arguments must be individual files in an authorized depot; directories and wildcards are rejected. " +
+		"It does not create a task client or download a new copy of the depot. -c/--changelist and --fresh are rejected.",
+	Args: cobra.ArbitraryArgs,
 	RunE: runP4Sync,
 }
 
@@ -73,7 +75,7 @@ func init() {
 	p4SyncCmd.Flags().StringVar(&p4Stream, "stream", "", "Optional stream path")
 	p4AddCmd.Flags().StringVar(&p4User, "user", "", "Optional P4USER hint")
 	p4AddCmd.Flags().StringVar(&p4Charset, "charset", "", "Optional P4CHARSET")
-	p4AddCmd.Flags().StringVar(&p4Changelist, "changelist", "", "Optional baseline changelist")
+	p4AddCmd.Flags().StringVarP(&p4Changelist, "changelist", "c", "", "With files, this task's changelist (`p4 -c`). Without files, the depot's baseline changelist")
 	p4AddCmd.Flags().StringVar(&p4Desc, "description", "", "Optional description")
 	p4AddCmd.Flags().StringVar(&p4SwarmURL, "swarm-url", "", "Optional Helix Swarm origin (https://swarm.example.com)")
 	p4AddCmd.Flags().String("output", "json", "Output format: table or json")
@@ -82,7 +84,7 @@ func init() {
 
 	p4SyncCmd.Flags().StringVar(&p4User, "user", "", "Optional P4USER override")
 	p4SyncCmd.Flags().StringVar(&p4Charset, "charset", "", "Optional P4CHARSET")
-	p4SyncCmd.Flags().StringVar(&p4Changelist, "changelist", "", "Unsupported for workspace sync; returns an error")
+	p4SyncCmd.Flags().StringVarP(&p4Changelist, "changelist", "c", "", "Unsupported for workspace sync; returns an error")
 	p4SyncCmd.Flags().BoolVar(&p4Fresh, "fresh", false, "Unsupported for workspace sync; returns an error")
 	p4SyncCmd.Flags().String("output", "text", "Output format: text or json")
 
@@ -95,10 +97,10 @@ func init() {
 		addP4TaskFlags(cmd, true)
 		cmd.Flags().StringVar(&p4SwarmURL, "swarm-url", "", "Helix Swarm URL (must match the configured depot)")
 	}
-	p4RevertCmd.Flags().BoolVar(&p4RevertUnchanged, "unchanged", false, "revert only unchanged files (`p4 revert -a`)")
-	p4MoveCmd.Flags().StringVar(&p4Dest, "dest", "", "Destination path")
-	_ = p4MoveCmd.MarkFlagRequired("dest")
-	p4ShelveCmd.Flags().BoolVar(&p4Force, "force", false, "overwrite an existing shelf (`p4 shelve -f`)")
+	p4RevertCmd.Flags().BoolVarP(&p4RevertUnchanged, "unchanged", "a", false, "revert only unchanged files (`p4 revert -a`)")
+	p4MoveCmd.Flags().StringVar(&p4Dest, "dest", "", "Destination path (`p4 move <source> <dest>`)")
+	p4ShelveCmd.Flags().BoolVarP(&p4Force, "force", "f", false, "overwrite an existing shelf (`p4 shelve -f`)")
+	addP4FilelogFlags(p4FilelogCmd)
 
 	swarmCmds := []*cobra.Command{p4SwarmReviewsCmd, p4SwarmCreateCmd, p4SwarmShowCmd, p4SwarmCommentCmd, p4SwarmLinkCmd}
 	for _, cmd := range swarmCmds {
@@ -129,8 +131,11 @@ func init() {
 	}
 	p4Cmd.AddCommand(p4SwarmCmd)
 
+	p4Cmd.AddCommand(p4FilelogCmd)
+
 	// -F is a presentation flag, not a p4 passthrough. Persistent so both
 	// `p4 -F ... opened` and `p4 opened -F ...` parse; only opened and status honor it.
+	// -c is a per-command alias of --changelist, not a global p4 -c client.
 	p4Cmd.PersistentFlags().StringVarP(&p4Format, "format", "F", "", "Format this task's opened files with p4 -ztag field names (depotFile, clientFile, action, change, type, client). Not passed through to p4")
 	p4Cmd.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		return rejectP4FormatFor(cmd.Name(), cmd)
@@ -139,7 +144,7 @@ func init() {
 }
 
 func explainP4FlagError(_ *cobra.Command, err error) error {
-	return fmt.Errorf("%w\nmultica p4 does not pass options through to p4. List this task's opens with `multica p4 opened -F \"%%depotFile%% %%change%%\"` or `multica p4 opened --output json`", err)
+	return fmt.Errorf("%w\nmultica p4 does not pass options through to p4. -c is --changelist (`multica p4 describe -c 123`); file history is `multica p4 filelog -- <file>`. List this task's opens with `multica p4 opened -F \"%%depotFile%% %%change%%\"` or `multica p4 opened --output json`", err)
 }
 
 func setP4FlagError(cmd *cobra.Command) {
@@ -241,7 +246,16 @@ func runP4List(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-func runP4Add(cmd *cobra.Command, _ []string) error {
+func runP4Add(cmd *cobra.Command, args []string) error {
+	if len(args) > 0 {
+		// `p4 add file` is the native verb. The no-file form stays the registry
+		// command so `multica p4 add --port --depot` does not change meaning.
+		return runP4Mutate("add")(cmd, args)
+	}
+	return runP4AddDepot(cmd, args)
+}
+
+func runP4AddDepot(cmd *cobra.Command, _ []string) error {
 	ref, err := requireP4PortDepot()
 	if err != nil {
 		return err
@@ -343,9 +357,9 @@ func printP4Mutation(cmd *cobra.Command, depots []p4depot.Ref, action string) er
 	return nil
 }
 
-func runP4Sync(cmd *cobra.Command, _ []string) error {
+func runP4Sync(cmd *cobra.Command, args []string) error {
 	if p4Changelist != "" || p4Fresh || cmd.Flags().Changed("changelist") || cmd.Flags().Changed("fresh") {
-		return fmt.Errorf("workspace sync does not support --changelist or --fresh; a person chooses historical revisions or resets the workspace")
+		return fmt.Errorf("workspace sync does not support -c/--changelist or --fresh; pass individual files, or omit them to sync the whole client view")
 	}
 	ref, err := optionalP4PortDepot()
 	if err != nil {
@@ -354,6 +368,9 @@ func runP4Sync(cmd *cobra.Command, _ []string) error {
 	body, err := p4TaskEnv(ref)
 	if err != nil {
 		return err
+	}
+	if len(args) > 0 {
+		body["files"] = args
 	}
 	payload, err := p4DaemonPost(cmd.Context(), "/p4/sync", body, p4DaemonTimeout())
 	if err != nil {
@@ -384,6 +401,8 @@ func resetP4Flags() {
 	p4Changelist = ""
 	p4Desc = ""
 	p4Fresh = false
+	p4FilelogMax = 0
+	p4FilelogLong = false
 	p4SwarmURL = ""
 	p4ReviewID = ""
 	p4CommentBody = ""

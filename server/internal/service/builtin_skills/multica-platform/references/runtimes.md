@@ -35,7 +35,10 @@ multica repo checkout <url>
 multica repo checkout <url> --ref <branch-or-sha>
 multica repo checkout <url> --fresh
 multica p4 edit -- <files>
+multica p4 add -- <files>
 multica p4 add-files -- <files>
+multica p4 filelog -- <files>
+multica p4 describe -c <number>
 multica p4 status --output json
 multica p4 swarm create --output json
 multica p4 swarm link --review <id>
@@ -131,15 +134,18 @@ number.
 Do not pass `--port` or `--depot`, and do not look up P4PORT from Project
 Context, `p4 set`, or `p4 info`. The daemon fills both from the binding.
 Passing either flag is optional and, if you do pass it, must match that
-binding; a spelling that only looks equivalent is rejected. `--changelist`
-may only name the task changelist, so omit it too. `multica p4
+binding; a spelling that only looks equivalent is rejected. `-c` is
+`--changelist`. On a write it may only name the task changelist, so omit it.
+`multica p4 describe -c <number>` is the exception: it only reads that
+changelist when every file is in this task's depots. `multica p4
 status --output json` reports the client, root, stream, ticket, changelist
 number, its files, and any warnings. `multica p4 opened -F "%depotFile% %change%"`
 prints each file's depot path and changelist (`%change%` is the number or
 `default`, not the words `change N`). The same rows are `files` in
 `multica p4 opened --output json`. `multica p4` does not pass other p4 flags
-through: `-a`, `-c`, and `-x` are rejected, and `p4 opened -a` is not a
-substitute. Submit, sync, and unshelve are off
+through: `opened -a` and `-x` are rejected, and `p4 opened -a` is not a
+substitute. `revert -a` and `shelve -f` are the native short forms of
+`--unchanged` and `--force`. Submit, sync, and unshelve are off
 unless that depot turns on `allow_submit`, `allow_sync`, or `allow_unshelve`
 in the admin-managed Settings → Code catalog (each defaults to off, and a
 disabled one answers `action_not_allowed`). Project resources cannot grant
@@ -152,8 +158,9 @@ locked (`exclusive_locked`), an exclusive-lock file on a depot that does not
 set `allow_exclusive` (`exclusive_not_allowed`), a revert or reconcile outside
 the task changelist (`outside_task_change`), or a path outside the client root
 (`not_in_workspace`). Raw `p4` writes are blocked in the task environment
-through `P4CONFIG` / `P4CLIENT`; read-only `p4 files` / `print` / `filelog` /
-`describe` / `changes` still work and are the right way to read history.
+through `P4CONFIG` / `P4CLIENT`. Read history with `multica p4 filelog -- <files>`
+(each revision and its changelist description) and `multica p4 describe -c <number>`.
+Raw read-only `p4 files` / `print` / `filelog` / `describe` / `changes` still work.
 
 When the task ends with a pending changelist, the daemon reverts the files that were opened but not
 changed, shelves the rest, and — unless the depot sets `no_auto_review` —
@@ -169,9 +176,9 @@ the workspace root, then stop. Credentials stay on the host (`P4USER`,
 `P4TICKETS`, `P4CONFIG`); Multica does not store a Perforce password.
 
 Open files with `multica p4 edit` (alias `checkout`) before modifying them;
-exclusive-lock files will fail otherwise. `multica p4 add` still registers a
-workspace depot — use `add-files` to `p4 add` new files. Shelve through
-`multica p4 shelve`.
+exclusive-lock files will fail otherwise. `multica p4 add <files>` is `p4 add`
+(`add-files` is the same command). `multica p4 add` with no files still
+registers a workspace depot. Shelve through `multica p4 shelve`.
 
 ### Swarm
 
@@ -259,10 +266,11 @@ checkout.
 
 For Perforce work, check the brief for the mode first. In workspace mode you
 are already inside the human's client — open files with `multica p4 edit`,
-add new ones with `add-files`, and read the changelist number from
-`multica p4 status`. Submit, sync, and unshelve require the corresponding
+add new ones with `multica p4 add` (or `add-files`), and read the changelist
+number from `multica p4 status`. Read file history with `multica p4 filelog`.
+Submit, sync, and unshelve require the corresponding
 permission in the runtime brief. Open and add through
-`multica p4 edit` / `add-files` and never through a host `p4` client, which may
+`multica p4 edit` / `add` and never through a host `p4` client, which may
 belong to another UE workspace. Record the changelist, Swarm review
 id, and the actual editor/build validation in the task; without submit permission,
 a human submits.

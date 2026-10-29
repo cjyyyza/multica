@@ -28,6 +28,9 @@ type p4MutateRequest struct {
 	RevertUnchanged bool     `json:"revert_unchanged,omitempty"`
 	Force           bool     `json:"force,omitempty"`
 	Fresh           bool     `json:"fresh,omitempty"`
+	// Max and Long are filelog bounds. They are not p4 flags from the caller.
+	Max  int  `json:"max,omitempty"`
+	Long bool `json:"long,omitempty"`
 }
 
 type p4SwarmRequest struct {

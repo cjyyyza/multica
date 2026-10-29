@@ -89,7 +89,7 @@ Re-running the same issue on the same client reuses the pending changelist, matc
 
 ### What the agent can and cannot do
 
-The agent opens files with `multica p4 edit` and `multica p4 add-files`, and reads the changelist with `multica p4 status`. Everything it opens lands in the task changelist. Omit `--port` and `--depot`; the daemon fills both from the binding. Do not look up P4PORT and retry. Passing only one of them is forwarded, but a port spelling that does not match the binding is rejected.
+The agent opens files with `multica p4 edit` and adds new ones with `multica p4 add` (or `add-files`), and reads the changelist with `multica p4 status`. History is `multica p4 filelog` and `multica p4 describe -c <number>`. Everything it opens lands in the task changelist. Omit `--port` and `--depot`; the daemon fills both from the binding. Do not look up P4PORT and retry. Passing only one of them is forwarded, but a port spelling that does not match the binding is rejected.
 
 The daemon refuses, with an explanation the agent has to report rather than work around:
 
@@ -103,7 +103,7 @@ The daemon refuses, with an explanation the agent has to report rather than work
 | `action_not_allowed` | submit, sync, or unshelve without the corresponding permission |
 | `not_in_workspace` | a path outside the client Root |
 
-Raw `p4` writes are blocked in the agent's environment (`P4CONFIG` and `P4CLIENT` are pointed at names that do not exist), so `p4 edit`, `p4 sync`, and `p4 submit` fail there. Read-only queries — `p4 files`, `p4 print`, `p4 filelog`, `p4 describe`, `p4 changes` — keep working, and the agent uses them to read history. This is a guardrail, not a security boundary: the real enforcement is in the daemon routes above.
+Raw `p4` writes are blocked in the agent's environment (`P4CONFIG` and `P4CLIENT` are pointed at names that do not exist), so `p4 edit`, `p4 sync`, and `p4 submit` fail there. Read history through `multica p4 filelog` and `multica p4 describe -c`. Raw read-only queries — `p4 files`, `p4 print`, `p4 filelog`, `p4 describe`, `p4 changes` — still work. This is a guardrail, not a security boundary: the real enforcement is in the daemon routes above.
 
 One agent task runs per client at a time, so two tasks pointed at the same workspace are serialised rather than interleaved.
 
@@ -126,7 +126,7 @@ Two depot switches change this, and are set through a JSON `--ref` payload on th
 
 ## No task client
 
-`multica p4 sync` updates the full bound client view, including stream imports, only when its depot enables `allow_sync`. Without that permission or a workspace binding, the daemon returns `action_not_allowed`. It never creates a task client or a separate depot copy. `--changelist` and `--fresh` are rejected; a person selects historical revisions or resets the workspace.
+`multica p4 sync` updates the bound client, only when its depot enables `allow_sync`. With no file arguments it syncs the full client view, including stream imports. Named arguments must be individual files in an authorized depot; directories and `...` wildcards are rejected. Without that permission or a workspace binding, the daemon returns `action_not_allowed`. It never creates a task client or a separate depot copy. `-c`/`--changelist` and `--fresh` are rejected; a person selects historical revisions or resets the workspace.
 
 ## Edit, checkout, and shelve
 
@@ -135,15 +135,20 @@ In your workspace, agents open files through the daemon:
 ```bash
 multica p4 edit --port perforce.example.com:1666 --depot //depot/project -- Source/Foo.cpp
 multica p4 checkout --port perforce.example.com:1666 --depot //depot/project -- Source/Foo.cpp
-multica p4 add-files --port perforce.example.com:1666 --depot //depot/project -- Source/New.cpp
+multica p4 add --port perforce.example.com:1666 --depot //depot/project -- Source/New.cpp
+multica p4 add-files -- Source/New.cpp
+multica p4 filelog --output text -- Source/Foo.gbd
+multica p4 describe -c 12345
 multica p4 change --port perforce.example.com:1666 --depot //depot/project --description "Fix the crash"
-multica p4 shelve --port perforce.example.com:1666 --depot //depot/project --changelist 12345
+multica p4 shelve -c 12345 -f
 multica p4 status --output json
 ```
 
-`checkout` is an alias of `edit`. `multica p4 add` still adds a depot to the workspace registry; `add-files` is `p4 add`. Other verbs: `delete`, `revert`, `opened`, `reconcile` (`rec`), `move --dest`, `reopen --changelist`, `describe`. Exclusive-lock (`+l`) files must be edited before they can be written.
+`checkout` is an alias of `edit`. `multica p4 add <files>` is `p4 add` (`add-files` is the same command). `multica p4 add` with no files still registers a depot. `-c` is `--changelist`. `revert -a` is `--unchanged`. `shelve -f` is `--force`. `move <source> <dest>` is the same as `--dest`. Other verbs: `delete`, `opened`, `reconcile` (`rec`), `reopen`. Exclusive-lock (`+l`) files must be edited before they can be written.
 
-`opened` lists only this task's changelist. `multica p4 opened -F "%depotFile% %change%"` prints each file's depot path and changelist; `%change%` is the number or `default`, matching `p4 -ztag`, not the words `change N` from plain `p4 opened`. The flag may also precede the verb. `--output json` returns the same rows as `files`. Other p4 options are not forwarded, so `-a`, `-c`, and `-x` stay rejected.
+`multica p4 filelog -- <files>` prints each revision and its changelist description (`-L`, or the full text with `--long`). `--max` limits revisions (default 20, at most 200). It does not take `-c`. `multica p4 describe` with no number describes this task's changelist. `describe <number>` or `describe -c <number>` reads that changelist, including its description, only when every listed file is in this task's authorized depots. If those files cannot be confirmed, the description is not returned.
+
+`opened` lists only this task's changelist. `multica p4 opened -F "%depotFile% %change%"` prints each file's depot path and changelist; `%change%` is the number or `default`, matching `p4 -ztag`, not the words `change N` from plain `p4 opened`. The flag may also precede the verb. `--output json` returns the same rows as `files`. Other p4 options are not forwarded, so `opened -a` and `-x` stay rejected.
 
 `multica p4 submit` submits only this task's changelist and requires `allow_submit` from a human workspace administrator. Machine credentials cannot edit workspace depot settings. Before submitting, the daemon re-reads the pending client, owner, task marker and `refs #` ticket, reverts unchanged files, rejects an empty changelist, and deletes the whole shelf. Whole-shelf deletion preserves the associated Swarm review's files and link; Multica does not approve or archive it. Turning the switch off cannot undo a submission. `multica p4 unshelve` restores only this task's own shelf and requires `allow_unshelve`.
 

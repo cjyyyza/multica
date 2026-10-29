@@ -30,8 +30,11 @@ var (
 	p4NoShelve        bool
 	p4Reviewers       []string
 	// p4Format formats this task's opened files in the CLI. It is not forwarded
-	// to p4: a passthrough would also accept -c, -a, and -x.
-	p4Format string
+	// to p4. -c is the changelist alias, not a passthrough: opened -a and -x
+	// stay rejected.
+	p4Format      string
+	p4FilelogMax  int
+	p4FilelogLong bool
 )
 
 var p4EditCmd = &cobra.Command{
@@ -46,7 +49,7 @@ var p4EditCmd = &cobra.Command{
 var p4AddFilesCmd = &cobra.Command{
 	Use:   "add-files [files...]",
 	Short: "Mark new files for add in the task Perforce client",
-	Long:  "Runs `p4 add` through the daemon. `multica p4 add` still adds a depot to the workspace registry.",
+	Long:  "Runs `p4 add` through the daemon. `multica p4 add <files>` is the same command; `multica p4 add` with no files still registers a depot.",
 	Args:  cobra.MinimumNArgs(1),
 	RunE:  runP4Mutate("add"),
 }
@@ -82,10 +85,11 @@ var p4ReconcileCmd = &cobra.Command{
 }
 
 var p4MoveCmd = &cobra.Command{
-	Use:   "move [source]",
+	Use:   "move <source> [dest]",
 	Short: "Move or rename an opened file in the task Perforce client",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runP4Mutate("move"),
+	Long:  "Runs `p4 move`. The destination is the second argument or --dest.",
+	Args:  cobra.RangeArgs(1, 2),
+	RunE:  runP4Move,
 }
 
 var p4ReopenCmd = &cobra.Command{
@@ -125,10 +129,21 @@ var p4UnshelveCmd = &cobra.Command{
 }
 
 var p4DescribeCmd = &cobra.Command{
-	Use:   "describe",
-	Short: "Describe a changelist",
-	Args:  cobra.NoArgs,
-	RunE:  runP4Mutate("describe"),
+	Use:   "describe [changelist]",
+	Short: "Describe a changelist, including its description",
+	Long:  "With no number, describes this task's changelist. A positional number or -c/--changelist reads that changelist when every file is in this task's authorized depots. The description is not returned if those files cannot be confirmed.",
+	Args:  cobra.MaximumNArgs(1),
+	RunE:  runP4Describe,
+}
+
+var p4FilelogCmd = &cobra.Command{
+	Use:   "filelog [files...]",
+	Short: "Show file history and each revision's changelist description",
+	Long: "Runs `p4 filelog` on individual files in this task's authorized depots. " +
+		"Output includes each revision's changelist and description (-L, or the full text with --long). " +
+		"It does not take -c; describe a number with `multica p4 describe -c <number>`.",
+	Args: cobra.MinimumNArgs(1),
+	RunE: runP4Filelog,
 }
 
 var p4StatusCmd = &cobra.Command{
@@ -208,17 +223,28 @@ func rejectP4FormatJSON(cmd *cobra.Command) error {
 	return nil
 }
 
-func addP4TaskFlags(cmd *cobra.Command, files bool) {
+func addP4DepotFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&p4Port, "port", "", "P4PORT. Omit in a bound workspace; the daemon fills it. Do not look it up")
 	cmd.Flags().StringVar(&p4DepotPath, "depot", "", "Depot path. Omit in a bound workspace; the daemon fills it")
 	cmd.Flags().StringVar(&p4Stream, "stream", "", "Optional stream path")
 	cmd.Flags().StringVar(&p4User, "user", "", "Optional P4USER override")
 	cmd.Flags().StringVar(&p4Charset, "charset", "", "Optional P4CHARSET")
-	cmd.Flags().StringVar(&p4Changelist, "changelist", "", "Pending changelist number")
+}
+
+func addP4TaskFlags(cmd *cobra.Command, files bool) {
+	addP4DepotFlags(cmd)
+	cmd.Flags().StringVarP(&p4Changelist, "changelist", "c", "", "Changelist number (`p4 -c`). A write must name this task's changelist; describe may read another")
 	cmd.Flags().String("output", "json", "Output format: json or text")
 	if files {
 		cmd.Flags().StringVar(&p4Desc, "description", "", "Changelist description")
 	}
+}
+
+func addP4FilelogFlags(cmd *cobra.Command) {
+	addP4DepotFlags(cmd)
+	cmd.Flags().String("output", "text", "Output format: text or json")
+	cmd.Flags().IntVarP(&p4FilelogMax, "max", "m", 0, "Maximum revisions per file (default 20, at most 200)")
+	cmd.Flags().BoolVarP(&p4FilelogLong, "long", "l", false, "Full changelist description (`p4 filelog -l`). Default is -L, truncated at 250 characters")
 }
 
 // p4DaemonTimeout mirrors the daemon's own per-command Perforce budget plus a
@@ -393,6 +419,14 @@ func runP4Mutate(action string) func(*cobra.Command, []string) error {
 		if p4Force {
 			body["force"] = true
 		}
+		if action == "filelog" {
+			if p4FilelogMax > 0 {
+				body["max"] = p4FilelogMax
+			}
+			if p4FilelogLong {
+				body["long"] = true
+			}
+		}
 		if len(args) > 0 {
 			body["files"] = args
 		}
@@ -429,7 +463,7 @@ func runP4Mutate(action string) func(*cobra.Command, []string) error {
 		}
 		// Empty opened/describe text is a real result. Falling through would
 		// print the JSON envelope and look like --output text was ignored.
-		if (action == "opened" || action == "describe") && p4OutputText(cmd) {
+		if (action == "opened" || action == "describe" || action == "filelog") && p4OutputText(cmd) {
 			if result.Output != "" {
 				fmt.Fprintln(os.Stdout, result.Output)
 			}
@@ -441,6 +475,39 @@ func runP4Mutate(action string) func(*cobra.Command, []string) error {
 		}
 		return printP4JSONOrText(cmd, payload, text)
 	}
+}
+
+func runP4Describe(cmd *cobra.Command, args []string) error {
+	if len(args) > 0 {
+		if p4Changelist != "" && p4Changelist != args[0] {
+			return fmt.Errorf("changelist specified both as %s and -c %s", args[0], p4Changelist)
+		}
+		p4Changelist = args[0]
+	}
+	return runP4Mutate("describe")(cmd, nil)
+}
+
+func runP4Move(cmd *cobra.Command, args []string) error {
+	if len(args) == 2 {
+		if p4Dest != "" && p4Dest != args[1] {
+			return fmt.Errorf("destination specified both as %s and --dest %s", args[1], p4Dest)
+		}
+		p4Dest = args[1]
+	}
+	if strings.TrimSpace(p4Dest) == "" {
+		return fmt.Errorf("move requires a destination: `multica p4 move <source> <dest>` or --dest")
+	}
+	return runP4Mutate("move")(cmd, args[:1])
+}
+
+func runP4Filelog(cmd *cobra.Command, args []string) error {
+	if strings.TrimSpace(p4Changelist) != "" {
+		return fmt.Errorf("filelog does not take -c/--changelist; describe that number with `multica p4 describe -c %s`", p4Changelist)
+	}
+	if cmd.Flags().Changed("max") && (p4FilelogMax < 1 || p4FilelogMax > 200) {
+		return fmt.Errorf("filelog --max must be between 1 and 200")
+	}
+	return runP4Mutate("filelog")(cmd, args)
 }
 
 func p4OutputText(cmd *cobra.Command) bool {

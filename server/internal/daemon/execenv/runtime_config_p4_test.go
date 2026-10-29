@@ -13,6 +13,9 @@ func TestP4ReadOnlyWorkspaceBrief(t *testing.T) {
 	if !strings.Contains(out, "read-only Perforce access") || strings.Contains(out, "Open a file with") {
 		t.Fatalf("coordination task received editing instructions:\n%s", out)
 	}
+	if !strings.Contains(out, "multica p4 filelog -- <files>") {
+		t.Fatalf("read-only brief did not offer filelog:\n%s", out)
+	}
 }
 
 // A task configured with Perforce and no repository has nothing to check out
@@ -128,7 +131,9 @@ func TestP4WorkspaceSectionNamesTheClientAndItsRules(t *testing.T) {
 		// How to write, and why the read-only bit is not the way.
 		"multica p4 edit -- <files>",
 		"Do not pass `--port`",
+		"multica p4 add -- <files>",
 		"multica p4 add-files -- <files>",
+		"multica p4 filelog -- <files>",
 		"never clear the read-only bit",
 		// The task changelist is implicit, and discoverable.
 		"multica p4 status",

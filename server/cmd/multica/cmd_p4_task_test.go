@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -150,6 +151,79 @@ func runP4Command(t *testing.T, args []string, payload string, inspect ...func(*
 		rootCmd.SetErr(nil)
 	})
 	return captureStdout(t, rootCmd.Execute)
+}
+
+func TestP4NativeArgvMapsOntoGuardedFields(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		path string
+		want map[string]any
+	}{
+		{"add files", []string{"add", "New.cpp"}, "/p4/run", map[string]any{"action": "add"}},
+		{"add-files", []string{"add-files", "New.cpp"}, "/p4/run", map[string]any{"action": "add"}},
+		{"edit -c", []string{"edit", "-c", "123", "--", "A.cpp"}, "/p4/run", map[string]any{"action": "edit", "changelist": "123"}},
+		{"describe number", []string{"describe", "12345"}, "/p4/run", map[string]any{"action": "describe", "changelist": "12345"}},
+		{"describe -c", []string{"describe", "-c", "12345"}, "/p4/run", map[string]any{"action": "describe", "changelist": "12345"}},
+		{"filelog", []string{"filelog", "Foo.gbd"}, "/p4/run", map[string]any{"action": "filelog"}},
+		{"filelog max", []string{"filelog", "-m", "5", "--long", "--", "Foo.gbd"}, "/p4/run", map[string]any{"action": "filelog", "max": float64(5), "long": true}},
+		{"revert -a", []string{"revert", "-a", "--", "A.cpp"}, "/p4/run", map[string]any{"action": "revert", "revert_unchanged": true}},
+		{"shelve -f", []string{"shelve", "-f"}, "/p4/run", map[string]any{"action": "shelve", "force": true}},
+		{"move dest", []string{"move", "A.cpp", "B.cpp"}, "/p4/run", map[string]any{"action": "move", "dest": "B.cpp"}},
+		{"sync file", []string{"sync", "A.cpp"}, "/p4/sync", map[string]any{"files": []any{"A.cpp"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var body map[string]any
+			_, err := runP4Command(t, tc.args, `{"action":"ok","output":"history","changelist":"12345"}`, func(r *http.Request) {
+				if r.URL.Path != tc.path {
+					t.Errorf("path = %s, want %s", r.URL.Path, tc.path)
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for key, want := range tc.want {
+				if fmt.Sprint(body[key]) != fmt.Sprint(want) {
+					t.Errorf("%s = %#v, want %#v", key, body[key], want)
+				}
+			}
+			if tc.name == "filelog" {
+				if _, ok := body["changelist"]; ok {
+					t.Errorf("filelog forwarded a changelist: %#v", body)
+				}
+				if _, ok := body["max"]; ok {
+					t.Errorf("default max was forwarded: %#v", body)
+				}
+			}
+			if tc.name == "add files" {
+				files, _ := body["files"].([]any)
+				if len(files) != 1 || files[0] != "New.cpp" {
+					t.Fatalf("files = %#v", body["files"])
+				}
+			}
+		})
+	}
+
+	_, err := runP4Command(t, []string{"opened", "-a"}, `{"action":"opened"}`)
+	if err == nil || !strings.Contains(err.Error(), "does not pass options through") {
+		t.Fatalf("opened -a error = %v", err)
+	}
+	_, err = runP4Command(t, []string{"sync", "-c", "9"}, `{"path":"x"}`)
+	if err == nil || !strings.Contains(err.Error(), "does not support") {
+		t.Fatalf("sync -c error = %v", err)
+	}
+	_, err = runP4Command(t, []string{"filelog", "-m", "0", "A.cpp"}, `{"action":"filelog"}`)
+	if err == nil || !strings.Contains(err.Error(), "--max") {
+		t.Fatalf("filelog max error = %v", err)
+	}
+	_, err = runP4Command(t, []string{"describe", "1", "-c", "2"}, `{"action":"describe"}`)
+	if err == nil || !strings.Contains(err.Error(), "both") {
+		t.Fatalf("describe both error = %v", err)
+	}
 }
 
 func TestP4SwarmReportsEffectiveURLAndLinkFailure(t *testing.T) {

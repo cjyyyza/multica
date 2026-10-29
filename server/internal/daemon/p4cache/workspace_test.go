@@ -77,6 +77,8 @@ func main() {
 		emit("OPENED")
 	case rest[0] == "changes":
 		emit("CHANGES")
+	case rest[0] == "filelog":
+		emit("FILELOG")
 	case rest[0] == "describe":
 		if strings.Contains(joined, " -S ") {
 			if _, ok := os.LookupEnv("P4_FAKE_SHELF"); ok || os.Getenv("P4_FAKE_SHELF_ERR") != "" {

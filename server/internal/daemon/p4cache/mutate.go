@@ -20,6 +20,14 @@ const (
 	ActionShelve    = "shelve"
 	ActionUnshelve  = "unshelve"
 	ActionDescribe  = "describe"
+	ActionFilelog   = "filelog"
+)
+
+const (
+	// FilelogDefaultMax is enough precedent to identify a changelist without
+	// dumping an entire ancient history. FilelogMaxMax is the hard cap.
+	FilelogDefaultMax = 20
+	FilelogMaxMax     = 200
 )
 
 // MutateResult is the daemon /p4/run response.

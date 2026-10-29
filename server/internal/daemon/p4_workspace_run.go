@@ -33,8 +33,10 @@ type p4Rejection struct {
 
 type p4WorkspaceResult struct {
 	p4cache.MutateResult
-	Warnings []p4Warning    `json:"warnings,omitempty"`
-	Files    []p4OpenedFile `json:"files,omitempty"`
+	Warnings    []p4Warning               `json:"warnings,omitempty"`
+	Files       []p4OpenedFile            `json:"files,omitempty"`
+	Revisions   []p4cache.FilelogRevision `json:"revisions,omitempty"`
+	Description string                    `json:"description,omitempty"`
 }
 
 // p4OpenedFile is one file from this task's changelist. JSON is snake_case;
@@ -71,20 +73,31 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 		return nil, rejectP4(p4CodeActionNotAllowed, "this task's Perforce workspace is already closing", nil, nil), nil
 	}
 	action := strings.ToLower(strings.TrimSpace(req.Action))
-	if b.readOnly && action != p4cache.ActionOpened && action != p4cache.ActionDescribe {
+	if b.readOnly && !p4ReadOnlyAction(action) {
 		return nil, rejectP4(p4CodeActionNotAllowed, "chat and tasks without an issue may only read the Perforce workspace", nil, nil), nil
 	}
-	if b.isSubmitted() && action != p4cache.ActionOpened && action != p4cache.ActionDescribe && action != "sync" {
+	if b.isSubmitted() && !p4ReadOnlyAction(action) && action != "sync" {
 		return nil, rejectP4(p4CodeActionNotAllowed, "this task's changelist has already been submitted", nil, nil), nil
 	}
-	if action == "sync" {
+	switch action {
+	case "sync":
 		if req.Changelist != "" || req.Fresh {
-			return nil, rejectP4(p4CodeActionNotAllowed, "workspace sync does not support --changelist or --fresh; a person chooses historical revisions or resets the workspace", nil, nil), nil
+			return nil, rejectP4(p4CodeActionNotAllowed, "workspace sync does not support -c/--changelist or --fresh; pass individual files, or omit them to sync the whole client view", nil, nil), nil
 		}
-	} else if rej := b.rejectForeignChangelist(req.Changelist); rej != nil {
-		return nil, rej, nil
+	case p4cache.ActionFilelog:
+		// Native `p4 filelog -c` means "revisions in that changelist", which is
+		// not this field. A number here would also look like a write target.
+		if strings.TrimSpace(req.Changelist) != "" {
+			return nil, rejectP4(p4CodeActionNotAllowed, "filelog does not take a changelist; describe that number with `multica p4 describe -c <number>`", nil, nil), nil
+		}
+	case p4cache.ActionDescribe:
+		// A number selects a read, including history outside this task's CL.
+	default:
+		if rej := b.rejectForeignChangelist(req.Changelist); rej != nil {
+			return nil, rej, nil
+		}
 	}
-	if b.registrationPending && action != p4cache.ActionOpened && action != p4cache.ActionDescribe {
+	if b.registrationPending && !p4ReadOnlyAction(action) {
 		if err := d.registerPendingP4Change(ctx, b); err != nil {
 			return nil, nil, err
 		}
@@ -107,7 +120,8 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 		return d.workspaceUnshelve(ctx, b)
 	case p4cache.ActionEdit, p4cache.ActionAdd, p4cache.ActionDelete, p4cache.ActionMove,
 		p4cache.ActionReopen, p4cache.ActionRevert, p4cache.ActionReconcile,
-		p4cache.ActionShelve, p4cache.ActionChange, p4cache.ActionOpened, p4cache.ActionDescribe:
+		p4cache.ActionShelve, p4cache.ActionChange, p4cache.ActionOpened, p4cache.ActionDescribe,
+		p4cache.ActionFilelog:
 	default:
 		return nil, rejectP4(p4CodeActionNotAllowed, fmt.Sprintf("perforce action %q is not available in workspace mode", req.Action), nil, nil), nil
 	}
@@ -119,7 +133,9 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 	case p4cache.ActionOpened:
 		return d.workspaceOpened(ctx, b)
 	case p4cache.ActionDescribe:
-		return d.workspaceDescribe(ctx, b)
+		return d.workspaceDescribe(ctx, b, req.Changelist)
+	case p4cache.ActionFilelog:
+		return d.workspaceFilelog(ctx, b, cwd, req)
 	case p4cache.ActionChange:
 		return d.workspaceRetitle(ctx, b, req.Description)
 	case p4cache.ActionShelve:
@@ -390,6 +406,21 @@ func (d *Daemon) workspaceSync(ctx context.Context, b *p4TaskBinding, cwd string
 	paths, _, rej := b.resolveWorkspacePaths(cwd, files, "")
 	if rej != nil {
 		return nil, rej, nil
+	}
+	// Empty means the full client view. Named arguments are individual files
+	// in an authorized depot, same as every other workspace path. Directories
+	// and wildcards stay rejected: a path/... sync is a person's choice.
+	if len(files) > 0 {
+		if len(paths) == 0 {
+			return nil, rejectP4(p4CodeActionNotAllowed, "sync file arguments were empty; omit them to sync the whole client view", nil, nil), nil
+		}
+		for i, path := range paths {
+			resolved, rejection, err := d.workspaceLocalPath(ctx, b, path)
+			if rejection != nil || err != nil {
+				return nil, rejection, err
+			}
+			paths[i] = resolved
+		}
 	}
 	output, err := d.p4Cache.SyncClient(ctx, b.ws, paths)
 	if err != nil {
@@ -798,24 +829,105 @@ func (d *Daemon) workspaceOpened(ctx context.Context, b *p4TaskBinding) (*p4Work
 	}, nil, nil
 }
 
-func (d *Daemon) workspaceDescribe(ctx context.Context, b *p4TaskBinding) (*p4WorkspaceResult, *p4Rejection, error) {
-	change := b.changelist()
-	if change == "" {
-		return nil, rejectP4(p4CodeActionNotAllowed, "this task has no changelist yet", nil, nil), nil
+func p4ReadOnlyAction(action string) bool {
+	switch action {
+	case p4cache.ActionOpened, p4cache.ActionDescribe, p4cache.ActionFilelog:
+		return true
+	default:
+		return false
 	}
-	info, err := d.p4Cache.DescribeChange(ctx, b.ws.Ref(), change)
+}
+
+func (d *Daemon) workspaceDescribe(ctx context.Context, b *p4TaskBinding, requested string) (*p4WorkspaceResult, *p4Rejection, error) {
+	requested = strings.TrimSpace(requested)
+	taskChange := b.changelist()
+	if requested == "" {
+		requested = taskChange
+	}
+	if requested == "" {
+		return nil, rejectP4(p4CodeActionNotAllowed, "this task has no changelist yet; pass a number to read another changelist", nil, nil), nil
+	}
+	if !p4cache.ValidChangeNumber(requested) {
+		return nil, rejectP4(p4CodeActionNotAllowed, "describe requires a changelist number", []string{requested}, nil), nil
+	}
+	text, err := d.p4Cache.DescribeText(ctx, b.ws, requested)
 	if err != nil {
 		return nil, nil, err
 	}
-	output := "change " + info.Change + " " + info.Status
-	return &p4WorkspaceResult{
+	parsed, ok := p4cache.ParseDescribe(text)
+	// The task changelist is already this run's. Another number is a history
+	// read: return it only when every listed file is in an authorized depot,
+	// and never return an unparsed body that might name another depot.
+	if requested != taskChange {
+		if !ok || len(parsed.Files) == 0 {
+			return nil, rejectP4(p4CodeActionNotAllowed, "could not confirm that changelist's files are in this task's authorized depots", []string{requested}, nil), nil
+		}
+		for _, file := range parsed.Files {
+			if _, allowed := b.depotRef(file.DepotFile); !allowed {
+				return nil, rejectP4(p4CodeNotInWorkspace, "changelist includes files outside this task's authorized depots", []string{requested}, nil), nil
+			}
+		}
+	}
+	result := &p4WorkspaceResult{
 		MutateResult: p4cache.MutateResult{
 			Path:       b.ws.Dir,
 			Client:     b.ws.Client,
 			Action:     p4cache.ActionDescribe,
-			Changelist: change,
-			Output:     output,
+			Changelist: requested,
+			Output:     text,
 		},
+	}
+	if ok {
+		result.Description = parsed.Description
+		result.Changelist = firstNonEmpty(parsed.Change, requested)
+		for _, file := range parsed.Files {
+			result.Files = append(result.Files, p4OpenedFile{
+				DepotFile: file.DepotFile,
+				Action:    file.Action,
+				Change:    result.Changelist,
+			})
+		}
+	}
+	return result, nil, nil
+}
+
+func (d *Daemon) workspaceFilelog(ctx context.Context, b *p4TaskBinding, cwd string, req p4MutateRequest) (*p4WorkspaceResult, *p4Rejection, error) {
+	if len(req.Files) == 0 {
+		return nil, rejectP4(p4CodeActionNotAllowed, "filelog requires at least one file", nil, nil), nil
+	}
+	max := req.Max
+	if max == 0 {
+		max = p4cache.FilelogDefaultMax
+	}
+	if max < 1 || max > p4cache.FilelogMaxMax {
+		return nil, rejectP4(p4CodeActionNotAllowed, fmt.Sprintf("filelog --max must be between 1 and %d", p4cache.FilelogMaxMax), nil, nil), nil
+	}
+	files, _, rej := b.resolveWorkspacePaths(cwd, req.Files, "")
+	if rej != nil {
+		return nil, rej, nil
+	}
+	if len(files) == 0 {
+		return nil, rejectP4(p4CodeActionNotAllowed, "filelog requires at least one file", nil, nil), nil
+	}
+	for i, path := range files {
+		resolved, rejection, err := d.workspaceLocalPath(ctx, b, path)
+		if rejection != nil || err != nil {
+			return nil, rejection, err
+		}
+		files[i] = resolved
+	}
+	text, revs, err := d.p4Cache.Filelog(ctx, b.ws, files, max, req.Long)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &p4WorkspaceResult{
+		MutateResult: p4cache.MutateResult{
+			Path:   b.ws.Dir,
+			Client: b.ws.Client,
+			Action: p4cache.ActionFilelog,
+			Output: text,
+		},
+		Revisions: revs,
 	}, nil, nil
 }
 
