@@ -113,6 +113,62 @@ func (q *Queries) BindRequirementChatSession(ctx context.Context, arg BindRequir
 	return i, err
 }
 
+const bindRequirementDelegationIssue = `-- name: BindRequirementDelegationIssue :one
+UPDATE requirement
+SET issue_id = $1,
+    revision = revision + 1,
+    last_error = NULL,
+    updated_at = now()
+WHERE id = $2
+  AND workspace_id = $3
+  AND revision = $4
+  AND source_host = 'multica'
+  AND issue_id IS NULL
+  AND cancelled_at IS NULL
+RETURNING id, workspace_id, source_host, external_id, source_url, source_snapshot, source_digest, source_lock_version, requester_id, agent_id, project_id, chat_session_id, issue_id, intake_operation_id, intake_state, revision, cancelled_at, cancel_reason, last_error, created_at, updated_at
+`
+
+type BindRequirementDelegationIssueParams struct {
+	IssueID          pgtype.UUID `json:"issue_id"`
+	ID               pgtype.UUID `json:"id"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	ExpectedRevision int64       `json:"expected_revision"`
+}
+
+func (q *Queries) BindRequirementDelegationIssue(ctx context.Context, arg BindRequirementDelegationIssueParams) (Requirement, error) {
+	row := q.db.QueryRow(ctx, bindRequirementDelegationIssue,
+		arg.IssueID,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.ExpectedRevision,
+	)
+	var i Requirement
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SourceHost,
+		&i.ExternalID,
+		&i.SourceUrl,
+		&i.SourceSnapshot,
+		&i.SourceDigest,
+		&i.SourceLockVersion,
+		&i.RequesterID,
+		&i.AgentID,
+		&i.ProjectID,
+		&i.ChatSessionID,
+		&i.IssueID,
+		&i.IntakeOperationID,
+		&i.IntakeState,
+		&i.Revision,
+		&i.CancelledAt,
+		&i.CancelReason,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const bindRequirementIssue = `-- name: BindRequirementIssue :one
 UPDATE requirement
 SET issue_id = $1,
@@ -290,6 +346,88 @@ func (q *Queries) CreateRequirement(ctx context.Context, arg CreateRequirementPa
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getLatestRequirementPlanTask = `-- name: GetLatestRequirementPlanTask :one
+SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step, mode, requirement_id FROM agent_task_queue
+WHERE requirement_id = $1 AND chat_session_id = $2 AND mode = 'plan'
+ORDER BY created_at DESC, id DESC
+LIMIT 1
+`
+
+type GetLatestRequirementPlanTaskParams struct {
+	RequirementID pgtype.UUID `json:"requirement_id"`
+	ChatSessionID pgtype.UUID `json:"chat_session_id"`
+}
+
+func (q *Queries) GetLatestRequirementPlanTask(ctx context.Context, arg GetLatestRequirementPlanTaskParams) (AgentTaskQueue, error) {
+	row := q.db.QueryRow(ctx, getLatestRequirementPlanTask, arg.RequirementID, arg.ChatSessionID)
+	var i AgentTaskQueue
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.IssueID,
+		&i.Status,
+		&i.Priority,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.CreatedAt,
+		&i.Context,
+		&i.RuntimeID,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.ChatSessionID,
+		&i.AutopilotRunID,
+		&i.Attempt,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+		&i.WaitReason,
+		&i.InitiatorUserID,
+		&i.HandoffNote,
+		&i.PrepareLeaseExpiresAt,
+		&i.SquadID,
+		&i.RuntimeMcpOverlay,
+		&i.EscalationForTaskID,
+		&i.FireAt,
+		&i.OriginatorUserID,
+		&i.RuntimeConnectedApps,
+		&i.CoalescedCommentIds,
+		&i.DeliveredCommentIds,
+		&i.ChatInputTaskID,
+		&i.ChatFinalizeDeferredAt,
+		&i.OriginatorSource,
+		&i.DelegatedFromTaskID,
+		&i.RetryOfTaskID,
+		&i.RerunOfTaskID,
+		&i.RuleVersionID,
+		&i.TriggerEvidenceKind,
+		&i.TriggerEvidenceRefID,
+		&i.AccountableUserID,
+		&i.SessionRolloutMissing,
+		&i.RetiredSessionID,
+		&i.QuickActionsDisabled,
+		&i.RegenerateQuickActionsFor,
+		&i.BranchName,
+		&i.DurableWorkDir,
+		&i.ChannelContextRevision,
+		&i.CommentThreadID,
+		&i.CancelledByType,
+		&i.CancelledByID,
+		&i.CancelledByName,
+		&i.IssueSnapshot,
+		&i.WorkflowStep,
+		&i.Mode,
+		&i.RequirementID,
 	)
 	return i, err
 }
@@ -651,6 +789,107 @@ func (q *Queries) ListRequirementIDsByChatSessions(ctx context.Context, arg List
 	for rows.Next() {
 		var i ListRequirementIDsByChatSessionsRow
 		if err := rows.Scan(&i.ChatSessionID, &i.ID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRequirementsForParticipant = `-- name: ListRequirementsForParticipant :many
+SELECT r.id, r.workspace_id, r.revision, r.intake_state, r.source_host, r.external_id,
+       COALESCE(r.source_snapshot->>'title', '')::text AS title,
+       COALESCE(r.source_snapshot->>'kind', '')::text AS source_kind,
+       COALESCE(r.source_snapshot->>'squadId', '')::text AS squad_id,
+       r.requester_id, r.agent_id, r.project_id, r.chat_session_id, r.issue_id,
+       r.cancelled_at, r.created_at, r.updated_at,
+       COALESCE(i.status, '')::text AS issue_status,
+       COALESCE(s.category, '')::text AS issue_status_category,
+       (r.issue_id IS NOT NULL AND i.id IS NULL)::boolean AS issue_deleted
+FROM requirement r
+LEFT JOIN issue i ON i.id = r.issue_id AND i.workspace_id = r.workspace_id
+LEFT JOIN issue_status s ON s.workspace_id = i.workspace_id AND s.key = i.status
+WHERE r.workspace_id = $1
+  AND EXISTS (
+      SELECT 1 FROM requirement_participant p
+      WHERE p.requirement_id = r.id AND p.workspace_id = r.workspace_id AND p.user_id = $2
+  )
+  AND ($3::text IS NULL OR (r.source_host = 'multica' AND r.external_id = $3::text))
+ORDER BY r.created_at DESC, r.id DESC
+LIMIT $5 OFFSET $4
+`
+
+type ListRequirementsForParticipantParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+	ExternalRef pgtype.Text `json:"external_ref"`
+	PageOffset  int32       `json:"page_offset"`
+	PageLimit   int32       `json:"page_limit"`
+}
+
+type ListRequirementsForParticipantRow struct {
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	Revision            int64              `json:"revision"`
+	IntakeState         string             `json:"intake_state"`
+	SourceHost          string             `json:"source_host"`
+	ExternalID          string             `json:"external_id"`
+	Title               string             `json:"title"`
+	SourceKind          string             `json:"source_kind"`
+	SquadID             string             `json:"squad_id"`
+	RequesterID         pgtype.UUID        `json:"requester_id"`
+	AgentID             pgtype.UUID        `json:"agent_id"`
+	ProjectID           pgtype.UUID        `json:"project_id"`
+	ChatSessionID       pgtype.UUID        `json:"chat_session_id"`
+	IssueID             pgtype.UUID        `json:"issue_id"`
+	CancelledAt         pgtype.Timestamptz `json:"cancelled_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	IssueStatus         string             `json:"issue_status"`
+	IssueStatusCategory string             `json:"issue_status_category"`
+	IssueDeleted        bool               `json:"issue_deleted"`
+}
+
+func (q *Queries) ListRequirementsForParticipant(ctx context.Context, arg ListRequirementsForParticipantParams) ([]ListRequirementsForParticipantRow, error) {
+	rows, err := q.db.Query(ctx, listRequirementsForParticipant,
+		arg.WorkspaceID,
+		arg.UserID,
+		arg.ExternalRef,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRequirementsForParticipantRow{}
+	for rows.Next() {
+		var i ListRequirementsForParticipantRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Revision,
+			&i.IntakeState,
+			&i.SourceHost,
+			&i.ExternalID,
+			&i.Title,
+			&i.SourceKind,
+			&i.SquadID,
+			&i.RequesterID,
+			&i.AgentID,
+			&i.ProjectID,
+			&i.ChatSessionID,
+			&i.IssueID,
+			&i.CancelledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.IssueStatus,
+			&i.IssueStatusCategory,
+			&i.IssueDeleted,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

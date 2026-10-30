@@ -157,13 +157,13 @@ func (s *TaskService) validateTaskRequirement(ctx context.Context, queries *db.Q
 	if err != nil {
 		return fmt.Errorf("load task requirement: %w", err)
 	}
-	if requirement.AgentID != task.AgentID {
-		return taskRequirementBindingErrorf("task agent does not match its requirement")
-	}
 	if requirement.CancelledAt.Valid {
 		return &RequirementChatExecutionError{Code: RequirementCancelledCode, IssueID: util.UUIDToString(requirement.IssueID)}
 	}
 	if mode == taskpolicy.ModePlan {
+		if requirement.AgentID != task.AgentID {
+			return taskRequirementBindingErrorf("plan task agent does not match its requirement")
+		}
 		if !task.ChatSessionID.Valid || task.IssueID.Valid || requirement.ChatSessionID != task.ChatSessionID {
 			return taskRequirementBindingErrorf("plan task does not belong to its requirement chat")
 		}
@@ -175,7 +175,7 @@ func (s *TaskService) validateTaskRequirement(ctx context.Context, queries *db.Q
 	if !requirement.IssueID.Valid || !task.IssueID.Valid || requirement.IssueID != task.IssueID {
 		return taskRequirementBindingErrorf("execute task would bypass its requirement approval or binding")
 	}
-	return nil
+	return validateRequirementExecuteAgent(ctx, queries, requirement, task)
 }
 
 func (s *TaskService) ValidateTaskForRequirementCandidate(ctx context.Context, taskID, requirementID, workspaceID pgtype.UUID) (db.AgentTaskQueue, error) {

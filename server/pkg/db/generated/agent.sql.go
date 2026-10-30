@@ -2548,9 +2548,15 @@ SELECT
     $11,
     jsonb_strip_nulls(jsonb_build_object(
         'head_sha', NULLIF(COALESCE($12::text, ''), ''),
-        'channel_issue_media_pending', TRUE
+        'channel_issue_media_pending', CASE
+            WHEN COALESCE($13::boolean, FALSE) THEN NULL
+            ELSE TRUE
+        END,
+        'requirement_delegation', CASE
+            WHEN COALESCE($13::boolean, FALSE) THEN TRUE
+            ELSE NULL
+        END
     )),
-    $13,
     $14,
     $15,
     $16,
@@ -2561,9 +2567,10 @@ SELECT
     $21,
     $22,
     $23,
+    $24,
     -- The issue's status as this task is queued: the workflow step it works on (MUL-7420).
     (SELECT i.status FROM issue i WHERE i.id = $3),
-    COALESCE($24::uuid, gen_random_uuid()),
+    COALESCE($25::uuid, gen_random_uuid()),
     'execute',
     (SELECT r.id FROM requirement r WHERE r.issue_id = $3)
 WHERE lock_task_owner_rows($1, $3, $2)
@@ -2580,39 +2587,40 @@ RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, c
 `
 
 type CreateDeferredChannelIssueTaskParams struct {
-	AgentID              pgtype.UUID        `json:"agent_id"`
-	RuntimeID            pgtype.UUID        `json:"runtime_id"`
-	IssueID              pgtype.UUID        `json:"issue_id"`
-	Priority             int32              `json:"priority"`
-	TriggerCommentID     pgtype.UUID        `json:"trigger_comment_id"`
-	CoalescedCommentIds  []pgtype.UUID      `json:"coalesced_comment_ids"`
-	TriggerSummary       pgtype.Text        `json:"trigger_summary"`
-	ForceFreshSession    pgtype.Bool        `json:"force_fresh_session"`
-	IsLeaderTask         pgtype.Bool        `json:"is_leader_task"`
-	HandoffNote          pgtype.Text        `json:"handoff_note"`
-	SquadID              pgtype.UUID        `json:"squad_id"`
-	HeadSha              pgtype.Text        `json:"head_sha"`
-	OriginatorUserID     pgtype.UUID        `json:"originator_user_id"`
-	AccountableUserID    pgtype.UUID        `json:"accountable_user_id"`
-	RuntimeMcpOverlay    []byte             `json:"runtime_mcp_overlay"`
-	RuntimeConnectedApps []byte             `json:"runtime_connected_apps"`
-	OriginatorSource     pgtype.Text        `json:"originator_source"`
-	DelegatedFromTaskID  pgtype.UUID        `json:"delegated_from_task_id"`
-	RuleVersionID        pgtype.UUID        `json:"rule_version_id"`
-	RerunOfTaskID        pgtype.UUID        `json:"rerun_of_task_id"`
-	TriggerEvidenceKind  pgtype.Text        `json:"trigger_evidence_kind"`
-	TriggerEvidenceRefID pgtype.UUID        `json:"trigger_evidence_ref_id"`
-	FireAt               pgtype.Timestamptz `json:"fire_at"`
-	ID                   pgtype.UUID        `json:"id"`
+	AgentID               pgtype.UUID        `json:"agent_id"`
+	RuntimeID             pgtype.UUID        `json:"runtime_id"`
+	IssueID               pgtype.UUID        `json:"issue_id"`
+	Priority              int32              `json:"priority"`
+	TriggerCommentID      pgtype.UUID        `json:"trigger_comment_id"`
+	CoalescedCommentIds   []pgtype.UUID      `json:"coalesced_comment_ids"`
+	TriggerSummary        pgtype.Text        `json:"trigger_summary"`
+	ForceFreshSession     pgtype.Bool        `json:"force_fresh_session"`
+	IsLeaderTask          pgtype.Bool        `json:"is_leader_task"`
+	HandoffNote           pgtype.Text        `json:"handoff_note"`
+	SquadID               pgtype.UUID        `json:"squad_id"`
+	HeadSha               pgtype.Text        `json:"head_sha"`
+	RequirementDelegation pgtype.Bool        `json:"requirement_delegation"`
+	OriginatorUserID      pgtype.UUID        `json:"originator_user_id"`
+	AccountableUserID     pgtype.UUID        `json:"accountable_user_id"`
+	RuntimeMcpOverlay     []byte             `json:"runtime_mcp_overlay"`
+	RuntimeConnectedApps  []byte             `json:"runtime_connected_apps"`
+	OriginatorSource      pgtype.Text        `json:"originator_source"`
+	DelegatedFromTaskID   pgtype.UUID        `json:"delegated_from_task_id"`
+	RuleVersionID         pgtype.UUID        `json:"rule_version_id"`
+	RerunOfTaskID         pgtype.UUID        `json:"rerun_of_task_id"`
+	TriggerEvidenceKind   pgtype.Text        `json:"trigger_evidence_kind"`
+	TriggerEvidenceRefID  pgtype.UUID        `json:"trigger_evidence_ref_id"`
+	FireAt                pgtype.Timestamptz `json:"fire_at"`
+	ID                    pgtype.UUID        `json:"id"`
 }
 
 // Fenced against workspace teardown: lock_task_owner_rows (migration 284)
 // locks the owners' workspace rows in the writer's own transaction and returns
 // false once they are gone, so this statement writes no row instead of stranding
 // a task in a workspace that has just been deleted (MUL-5999).
-// Channel /issue media resolves after issue creation. Persist the assigned
-// issue task up front for crash safety, but keep it inert until attachment
-// binding settles or the fire_at fallback is promoted by the normal sweeper.
+// Channel media and native Requirement approval persist the assigned issue
+// task up front for crash safety, but keep it inert until the caller promotes
+// it or the fire_at fallback is promoted by the normal sweeper.
 func (q *Queries) CreateDeferredChannelIssueTask(ctx context.Context, arg CreateDeferredChannelIssueTaskParams) (AgentTaskQueue, error) {
 	row := q.db.QueryRow(ctx, createDeferredChannelIssueTask,
 		arg.AgentID,
@@ -2627,6 +2635,7 @@ func (q *Queries) CreateDeferredChannelIssueTask(ctx context.Context, arg Create
 		arg.HandoffNote,
 		arg.SquadID,
 		arg.HeadSha,
+		arg.RequirementDelegation,
 		arg.OriginatorUserID,
 		arg.AccountableUserID,
 		arg.RuntimeMcpOverlay,
@@ -3018,7 +3027,7 @@ WHERE p.id = $1
   ))
   AND lock_task_owner_rows(p.agent_id, p.issue_id, p.runtime_id)
 ON CONFLICT (issue_id, agent_id, (COALESCE(comment_thread_id, '00000000-0000-0000-0000-000000000000'::uuid))) WHERE status IN ('queued', 'dispatched')
-       OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+       OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
 DO NOTHING
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step, mode, requirement_id
 `
@@ -4779,7 +4788,7 @@ SELECT count(*) > 0 AS has_active FROM agent_task_queue
 WHERE issue_id = $1 AND agent_id = $2
   AND (
     status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-    OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+    OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
   )
 `
 
@@ -4810,7 +4819,7 @@ SELECT count(*) > 0 AS has_active FROM agent_task_queue
 WHERE issue_id = $1 AND agent_id = $2
   AND (
     status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-    OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+    OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
   )
   AND comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id($3::uuid)
 `
@@ -4827,6 +4836,36 @@ func (q *Queries) HasActiveTaskForIssueAndAgentInThread(ctx context.Context, arg
 	var has_active bool
 	err := row.Scan(&has_active)
 	return has_active, err
+}
+
+const hasPendingRequirementDelegationWork = `-- name: HasPendingRequirementDelegationWork :one
+WITH RECURSIVE family AS (
+    SELECT root.id, ARRAY[root.id] AS path FROM issue root WHERE root.id = $2 AND root.workspace_id = $3
+    UNION ALL
+    SELECT i.id, f.path || i.id FROM issue i JOIN family f ON i.parent_issue_id = f.id
+    WHERE i.workspace_id = $3 AND NOT i.id = ANY(f.path)
+)
+SELECT EXISTS (
+    SELECT 1 FROM agent_task_queue t JOIN family f ON f.id = t.issue_id
+    WHERE t.id <> $1
+      AND (t.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+        OR (t.status = 'deferred' AND t.context->>'requirement_delegation' = 'true'))
+)
+`
+
+type HasPendingRequirementDelegationWorkParams struct {
+	SourceTaskID pgtype.UUID `json:"source_task_id"`
+	IssueID      pgtype.UUID `json:"issue_id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+}
+
+// Review covers the approved issue and delegated child issues. A turn ending
+// is not a delivery while another queued or active run still owns that work.
+func (q *Queries) HasPendingRequirementDelegationWork(ctx context.Context, arg HasPendingRequirementDelegationWorkParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasPendingRequirementDelegationWork, arg.SourceTaskID, arg.IssueID, arg.WorkspaceID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const hasPendingTaskForIssue = `-- name: HasPendingTaskForIssue :one
@@ -4850,7 +4889,7 @@ SELECT count(*) > 0 AS has_pending FROM agent_task_queue
 WHERE context->>'wakeup_id' IS NULL AND issue_id = $1 AND agent_id = $2
   AND (
     status IN ('queued', 'dispatched')
-    OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+    OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
   )
   AND (
     COALESCE($3::text, '') = ''
@@ -4865,8 +4904,8 @@ type HasPendingTaskForIssueAndAgentParams struct {
 }
 
 // Returns true if a specific agent already has a queued or dispatched task
-// for the given issue, or the explicitly-marked deferred task whose channel
-// media must bind before the issue agent runs. Used by @mention trigger dedup.
+// for the given issue, or an explicitly-marked deferred task waiting for
+// channel media or native Requirement approval. Used by @mention trigger dedup.
 //
 // head_sha keys the dedup on the commit under review (TEN-356): when a caller
 // passes a non-empty head_sha, a pending task only dedups if it was stamped
@@ -4888,7 +4927,7 @@ WHERE context->>'wakeup_id' IS NULL AND issue_id = $1
   AND agent_id = $2
   AND (
     status IN ('queued', 'dispatched')
-    OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+    OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
   )
   AND trigger_comment_id IS DISTINCT FROM $3::uuid
   AND (
@@ -4926,14 +4965,15 @@ WHERE context->>'wakeup_id' IS NULL AND issue_id = $1
   AND agent_id = $2
   AND (
     status IN ('queued', 'dispatched')
-    OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+    OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
   )
   AND trigger_comment_id IS DISTINCT FROM $3::uuid
   AND (
     COALESCE($4::text, '') = ''
     OR context->>'head_sha' = $4::text
   )
-  AND comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id($5::uuid)
+  AND (comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id($5::uuid)
+    OR (context->>'requirement_delegation' = 'true' AND trigger_comment_id IS NULL AND status IN ('queued', 'deferred')))
 `
 
 type HasPendingTaskForIssueAndAgentExcludingTriggerCommentInThreadParams struct {
@@ -4963,13 +5003,14 @@ SELECT count(*) > 0 AS has_pending FROM agent_task_queue
 WHERE context->>'wakeup_id' IS NULL AND issue_id = $1 AND agent_id = $2
   AND (
     status IN ('queued', 'dispatched')
-    OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+    OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
   )
   AND (
     COALESCE($3::text, '') = ''
     OR context->>'head_sha' = $3::text
   )
-  AND comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id($4::uuid)
+  AND (comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id($4::uuid)
+    OR (context->>'requirement_delegation' = 'true' AND trigger_comment_id IS NULL AND status IN ('queued', 'deferred')))
 `
 
 type HasPendingTaskForIssueAndAgentInThreadParams struct {
@@ -5020,7 +5061,7 @@ WHERE issue_id = $1
           id IS DISTINCT FROM $4::uuid
           AND (
               status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-              OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+              OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
           )
           AND (trigger_comment_id = $3::uuid OR $3::uuid = ANY(coalesced_comment_ids))
       )
@@ -5989,7 +6030,7 @@ WHERE recovery.author_type = 'system'
                     covering.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
                     OR (
                         covering.status = 'deferred'
-                        AND covering.context->>'channel_issue_media_pending' = 'true'
+                        AND (covering.context->>'channel_issue_media_pending' = 'true' OR covering.context->>'requirement_delegation' = 'true')
                     )
                 )
                 AND (
@@ -7205,10 +7246,11 @@ WHERE id = (
     SELECT t.id FROM agent_task_queue t
     WHERE t.context->>'wakeup_id' IS NULL AND t.issue_id = $12
       AND t.agent_id = $13
-      AND t.comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id($1::uuid)
+      AND (t.comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id($1::uuid)
+        OR (t.context->>'requirement_delegation' = 'true' AND t.trigger_comment_id IS NULL))
       AND (
           t.status = 'queued'
-          OR (t.status = 'deferred' AND t.context->>'channel_issue_media_pending' = 'true')
+          OR (t.status = 'deferred' AND (t.context->>'channel_issue_media_pending' = 'true' OR t.context->>'requirement_delegation' = 'true'))
       )
       -- Head-scoped (TEN-356, #5914): never fold across HEADs. The physical
       -- unique index is per (issue_id, agent_id, thread), so an insert-race loser can
@@ -7221,6 +7263,16 @@ WHERE id = (
       )
     ORDER BY t.created_at DESC
     LIMIT 1
+)
+AND (
+    status = 'queued'
+    OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
+)
+AND (comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id($1::uuid)
+    OR (context->>'requirement_delegation' = 'true' AND trigger_comment_id IS NULL))
+AND (
+    COALESCE($14::text, '') = ''
+    OR context->>'head_sha' = $14::text
 )
 RETURNING id, coalesced_comment_ids
 `
@@ -7264,9 +7316,9 @@ type MergeCommentIntoPendingTaskRow struct {
 // absent from that response's delivered_comment_ids receipt; completion
 // reconciliation handles it instead. Ordinary 'deferred' rows remain excluded:
 // assignee-fallback escalations have their own fire_at lifecycle and may coexist
-// with a queued primary. The one exception is a task explicitly marked
-// channel_issue_media_pending. It is the issue's sole assigned-agent task and
-// has not been claimable yet, so a new comment must merge into it instead of
+// with a queued primary. The exceptions are tasks explicitly marked
+// channel_issue_media_pending or requirement_delegation. Each is the issue's
+// sole assigned-agent task and has not been claimable yet, so a new comment must merge into it instead of
 // creating a competing queued task. coalesced_comment_ids remains the pre-claim
 // plan; the claim path records the actual embedded subset in
 // delivered_comment_ids.
@@ -7289,6 +7341,8 @@ type MergeCommentIntoPendingTaskRow struct {
 // dispatched/running). The caller must NOT blindly enqueue a fresh task in that
 // case — a dispatched sibling would trip the unique index — it defers to
 // completion reconciliation unless no active task exists at all.
+// A row-lock wait can outlive the subquery's snapshot. Recheck the current
+// tuple so a first-thread binding or a claim cannot accept stale input.
 func (q *Queries) MergeCommentIntoPendingTask(ctx context.Context, arg MergeCommentIntoPendingTaskParams) (MergeCommentIntoPendingTaskRow, error) {
 	row := q.db.QueryRow(ctx, mergeCommentIntoPendingTask,
 		arg.NewTriggerCommentID,
@@ -7327,7 +7381,7 @@ WHERE id = (
       AND t.comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id($1::uuid)
       AND (
           t.status = 'queued'
-          OR (t.status = 'deferred' AND t.context->>'channel_issue_media_pending' = 'true')
+          OR (t.status = 'deferred' AND (t.context->>'channel_issue_media_pending' = 'true' OR t.context->>'requirement_delegation' = 'true'))
       )
       AND t.trigger_comment_id IS DISTINCT FROM $1::uuid
       AND NOT ($1::uuid = ANY(t.coalesced_comment_ids))
@@ -7447,7 +7501,7 @@ WHERE t.runtime_id = ANY($1::uuid[])
         AND occupant.id <> t.id
         AND (
           occupant.status IN ('queued', 'dispatched')
-          OR (occupant.status = 'deferred' AND occupant.context->>'channel_issue_media_pending' = 'true')
+          OR (occupant.status = 'deferred' AND (occupant.context->>'channel_issue_media_pending' = 'true' OR occupant.context->>'requirement_delegation' = 'true'))
         )
     )
   )
@@ -7579,7 +7633,7 @@ WITH due AS (
           AND occupant.id <> t.id
           AND (
             occupant.status IN ('queued', 'dispatched')
-            OR (occupant.status = 'deferred' AND occupant.context->>'channel_issue_media_pending' = 'true')
+            OR (occupant.status = 'deferred' AND (occupant.context->>'channel_issue_media_pending' = 'true' OR occupant.context->>'requirement_delegation' = 'true'))
           )
       )
 )
@@ -7719,7 +7773,7 @@ WITH due AS (
           AND occupant.id <> t.id
           AND (
             occupant.status IN ('queued', 'dispatched')
-            OR (occupant.status = 'deferred' AND occupant.context->>'channel_issue_media_pending' = 'true')
+            OR (occupant.status = 'deferred' AND (occupant.context->>'channel_issue_media_pending' = 'true' OR occupant.context->>'requirement_delegation' = 'true'))
           )
       )
 )
@@ -8618,15 +8672,16 @@ SET runtime_mcp_overlay = $1,
     runtime_connected_apps = $2
 WHERE id = $3
   AND status = 'deferred'
-  AND context->>'channel_issue_media_pending' = 'true'
-  AND trigger_comment_id IS NULL
-  AND originator_user_id IS NOT DISTINCT FROM $4::uuid
+  AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true')
+  AND trigger_comment_id IS NOT DISTINCT FROM $4::uuid
+  AND originator_user_id IS NOT DISTINCT FROM $5::uuid
 `
 
 type SetDeferredChannelIssueTaskRuntimeOverlayParams struct {
 	RuntimeMcpOverlay        []byte      `json:"runtime_mcp_overlay"`
 	RuntimeConnectedApps     []byte      `json:"runtime_connected_apps"`
 	ID                       pgtype.UUID `json:"id"`
+	ExpectedTriggerCommentID pgtype.UUID `json:"expected_trigger_comment_id"`
 	ExpectedOriginatorUserID pgtype.UUID `json:"expected_originator_user_id"`
 }
 
@@ -8638,6 +8693,7 @@ func (q *Queries) SetDeferredChannelIssueTaskRuntimeOverlay(ctx context.Context,
 		arg.RuntimeMcpOverlay,
 		arg.RuntimeConnectedApps,
 		arg.ID,
+		arg.ExpectedTriggerCommentID,
 		arg.ExpectedOriginatorUserID,
 	)
 	if err != nil {

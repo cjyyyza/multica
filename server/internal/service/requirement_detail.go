@@ -59,11 +59,23 @@ func (s *RequirementService) BuildDetail(ctx context.Context, q *db.Queries, act
 		}
 	}
 	var runBody json.RawMessage
-	if row.IssueID.Valid {
+	if row.IssueID.Valid || row.ChatSessionID.Valid {
 		runBody, err = s.requirementRunProjection(ctx, q, row)
 		if err != nil {
 			return RequirementDetail{}, err
 		}
+	}
+	var squadID *string
+	blockedQuestion, err := s.requirementBlockedQuestion(ctx, q, actor, row, projection)
+	if err != nil {
+		return RequirementDetail{}, err
+	}
+	delegation, native, err := requirementDelegation(row)
+	if err != nil {
+		return RequirementDetail{}, err
+	}
+	if native && delegation.SquadID != "" {
+		squadID = requirementStringPtr(delegation.SquadID)
 	}
 	return RequirementDetail{
 		ID: util.UUIDToString(row.ID), WorkspaceID: util.UUIDToString(row.WorkspaceID), Revision: row.Revision,
@@ -71,13 +83,14 @@ func (s *RequirementService) BuildDetail(ctx context.Context, q *db.Queries, act
 		SourceHost: row.SourceHost, ExternalID: row.ExternalID,
 		SourceUrl: requirementStringPtr(row.SourceUrl), SourceSnapshot: append(json.RawMessage(nil), row.SourceSnapshot...),
 		SourceDigest: requirementStringPtr(row.SourceDigest), SourceLockVersion: requirementInt8Ptr(row.SourceLockVersion),
-		RequesterID: util.UUIDToString(row.RequesterID), AgentID: requirementUUIDPtr(row.AgentID), ProjectID: requirementUUIDPtr(row.ProjectID),
+		RequesterID: util.UUIDToString(row.RequesterID), AgentID: requirementUUIDPtr(row.AgentID), SquadID: squadID, ProjectID: requirementUUIDPtr(row.ProjectID),
 		ChatSessionID: requirementUUIDPtr(row.ChatSessionID), IssueID: requirementUUIDPtr(row.IssueID), IntakeOperationID: requirementUUIDPtr(row.IntakeOperationID),
 		CancelledAt: requirementTimePtr(row.CancelledAt), CancelReason: requirementTextPtr(row.CancelReason),
 		IssueDeleted: projection.IssueDeleted, LastError: requirementTextPtr(row.LastError),
 		CreatedAt: requirementTime(row.CreatedAt), UpdatedAt: requirementTime(row.UpdatedAt),
 		Participants: participants, LatestCandidate: latest, Permissions: permissions,
-		Issue: issueBody, Run: runBody, Operations: operations, Deliveries: deliveries,
+		BlockedQuestion: blockedQuestion,
+		Issue:           issueBody, Run: runBody, Operations: operations, Deliveries: deliveries,
 	}, nil
 }
 
@@ -139,7 +152,7 @@ func (s *RequirementService) latestRequirementCandidate(ctx context.Context, q *
 	return &RequirementCandidate{
 		ID: util.UUIDToString(row.ID), RequirementID: util.UUIDToString(row.RequirementID), Revision: row.Revision,
 		Snapshot: append(json.RawMessage(nil), row.Snapshot...), Digest: row.Digest,
-		CreatedByTaskID: util.UUIDToString(row.CreatedByTaskID), CreatedAt: requirementTime(row.CreatedAt),
+		CreatedByTaskID: requirementUUIDPtr(row.CreatedByTaskID), CreatedAt: requirementTime(row.CreatedAt),
 	}, nil
 }
 
@@ -320,7 +333,14 @@ func (s *RequirementService) requirementPermissions(ctx context.Context, q *db.Q
 			projectOK = projectErr == nil
 		}
 		sourceOK := validateStoredRequirementSource(row)
-		permissions.CanOpen = canInvoke && projectOK && sourceOK && validateRequirementPlanRuntime(ctx, q, agent) == nil
+		source, native, nativeErr := requirementDelegation(row)
+		if nativeErr != nil {
+			return permissions, nativeErr
+		}
+		permissions.CanOpen = (!native || source.hasPlan()) && canInvoke && projectOK && sourceOK && validateRequirementPlanRuntime(ctx, q, agent) == nil
+		if native {
+			permissions.CanReconcile = false
+		}
 		permissions.CanApprove = roles["approver"] && canInvoke && projectOK && sourceOK && hasCandidate &&
 			row.IntakeState == "awaiting_approval"
 	}
@@ -328,9 +348,16 @@ func (s *RequirementService) requirementPermissions(ctx context.Context, q *db.Q
 }
 
 func (s *RequirementService) requirementRunProjection(ctx context.Context, q *db.Queries, row db.Requirement) (json.RawMessage, error) {
-	task, err := q.GetLatestRequirementTaskForIssue(ctx, db.GetLatestRequirementTaskForIssueParams{
-		RequirementID: row.ID, IssueID: row.IssueID,
-	})
+	var task db.AgentTaskQueue
+	var err error
+	if row.IssueID.Valid {
+		task, err = q.GetLatestRequirementTaskForIssue(ctx, db.GetLatestRequirementTaskForIssueParams{RequirementID: row.ID, IssueID: row.IssueID})
+	} else {
+		task, err = q.GetLatestRequirementPlanTask(ctx, db.GetLatestRequirementPlanTaskParams{RequirementID: row.ID, ChatSessionID: row.ChatSessionID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		approval, approvalErr := q.GetRequirementApproval(ctx, db.GetRequirementApprovalParams{WorkspaceID: row.WorkspaceID, RequirementID: row.ID})
 		if errors.Is(approvalErr, pgx.ErrNoRows) {

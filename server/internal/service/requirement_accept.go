@@ -63,19 +63,35 @@ func (s *RequirementService) AcceptRequirement(ctx context.Context, actor Requir
 		if err != nil {
 			return RequirementActionResponse{}, fmt.Errorf("advance accepted requirement revision: %w", err)
 		}
-		operation, err := s.createRequirementAcceptWriteback(ctx, q, actor, updatedRequirement, updatedIssue, input, idempotencyKey, requestHash)
+		_, native, err := requirementDelegation(updatedRequirement)
 		if err != nil {
 			return RequirementActionResponse{}, err
 		}
-		event, err := appendRequirementEvent(ctx, q, actor, "member", updatedRequirement, "accepted", "in_review", "done", map[string]any{
+		var operationID pgtype.UUID
+		if native {
+			if input.StatusName != "" {
+				return RequirementActionResponse{}, requirementBadRequest("requirement_source_status_invalid", "native delegations do not have a source workflow")
+			}
+		} else {
+			operation, err := s.createRequirementAcceptWriteback(ctx, q, actor, updatedRequirement, updatedIssue, input, idempotencyKey, requestHash)
+			if err != nil {
+				return RequirementActionResponse{}, err
+			}
+			operationID = operation.ID
+		}
+		refs := map[string]any{
 			"requirement_id": util.UUIDToString(row.ID), "issue_id": util.UUIDToString(issue.ID),
-			"issue_revision": updatedIssue.Revision, "operation_id": util.UUIDToString(operation.ID),
-		}, requestID)
+			"issue_revision": updatedIssue.Revision,
+		}
+		if operationID.Valid {
+			refs["operation_id"] = util.UUIDToString(operationID)
+		}
+		event, err := appendRequirementEvent(ctx, q, actor, "member", updatedRequirement, "accepted", "in_review", "done", refs, requestID)
 		if err != nil {
 			return RequirementActionResponse{}, err
 		}
 		if err := s.appendRequirementOutboxWithOptions(ctx, q, updatedRequirement, event, "requirement_status", RequirementOutboxOptions{
-			OperationID:   operation.ID,
+			OperationID:   operationID,
 			IssueRevision: pgtype.Int8{Int64: updatedIssue.Revision, Valid: true},
 		}); err != nil {
 			return RequirementActionResponse{}, err

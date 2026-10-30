@@ -478,7 +478,7 @@ func TestNormalizeGOOS(t *testing.T) {
 // (handler.requestHasClientCapability), so it is asserted verbatim rather than
 // through the constant.
 func TestSetHeaders_AdvertisesStableAttachmentURLs(t *testing.T) {
-	const wantCapability = "stable_attachment_urls"
+	const wantCapability = "stable_attachment_urls,requirement-candidate-provenance-v1"
 
 	// Every verb goes through setHeaders, and an agent's read path is not only
 	// GET (comment add posts, attachment upload multiparts). Cover the shapes

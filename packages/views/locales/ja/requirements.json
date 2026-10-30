@@ -47,7 +47,15 @@
     "attachments": "添付ファイル",
     "file": "ファイル",
     "unknown_attachment": "不明な添付ファイル（{{id}}）",
-    "attachments_unavailable": "選択した添付ファイルの一部がソースプレビューに存在しないため、承認できません。"
+    "attachments_unavailable": "選択した添付ファイルの一部がソースプレビューに存在しないため、承認できません。",
+    "squad": "スクワッド",
+    "squad_leader": "リーダー",
+    "unknown_squad": "不明なスクワッド（{{id}}）",
+    "source": "候補の作成元",
+    "external_submission": "外部から提出",
+    "planned_by_agent": "エージェント {{name}} が計画",
+    "planned_by_leader": "スクワッドリーダー {{name}} が計画",
+    "loading_squad": "スクワッドを読み込み中…"
   },
   "approval": {
     "title": "要件を承認",
@@ -58,7 +66,9 @@
     "stale": "候補またはリビジョンが変更されました。最新の候補を再確認してから承認してください。",
     "review_latest": "最新の候補をレビュー",
     "cancel": "キャンセル",
-    "confirm": "タスクを作成してエージェントを開始"
+    "confirm": "タスクを作成してエージェントを開始",
+    "consequence_squad": "タスクを1件作成し、スクワッドリーダーを起動します。その後の変更は同じタスクで確認し、独立した依頼は新しいチャットで開始してください。",
+    "confirm_squad": "タスクを作成してリーダーを起動"
   },
   "review": {
     "title": "レビュー",
@@ -80,7 +90,10 @@
     "source_status": "Yixiezuo のステータス",
     "keep_source_status": "現在のステータスを維持",
     "accept_stale": "タスクが変更されました。閉じて最新の内容を確認してください。",
-    "accept_confirm": "受け入れて反映"
+    "accept_confirm": "受け入れて反映",
+    "native_accept_title": "成果を承認",
+    "native_accept_consequence": "確認後、この要件と関連する Issue を完了にします。",
+    "native_accept_confirm": "成果を承認"
   },
   "sync": {
     "title": "同期ステータス",
@@ -164,7 +177,8 @@
       "review": "成果を受け入れるか差し戻してください。",
       "done": "検収済みです。",
       "cancelled": "キャンセル済みです。",
-      "unknown": "最新の要件状態を確認してください。"
+      "unknown": "最新の要件状態を確認してください。",
+      "approve_squad": "候補を確認し、タスクを作成してスクワッドリーダーを起動します。"
     },
     "sync_alert": "ソース同期の対応が必要です。「詳細」を開いてください。",
     "sync_alert_detail": "ソース同期の対応が必要です：{{error}}"

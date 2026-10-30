@@ -7,6 +7,7 @@ import {
   useCancelRequirement,
   useRejectRequirement,
   parseYixiezuoRequirementSnapshot,
+  isNativeRequirement,
   type RequirementDetail,
 } from "@multica/core/requirements";
 import { Button } from "@multica/ui/components/ui/button";
@@ -127,6 +128,7 @@ export function RequirementReviewCard({
   const cancelled = detail.state === "cancelled" || !!detail.cancelledAt;
   const error = reject.error;
   const source = parseYixiezuoRequirementSnapshot(detail.sourceSnapshot);
+  const native = !!detail.squadId || isNativeRequirement(detail);
   const acceptStale = !!acceptReview && issueRevision !== acceptReview.issueRevision;
 
   const beginAccept = () => {
@@ -149,7 +151,7 @@ export function RequirementReviewCard({
       : createSafeId();
     acceptAttempt.current = { requirementId: detail.id, issueRevision: reviewedRevision, summary, statusName, key };
     try {
-      await accept.mutateAsync({ expectedIssueRevision: reviewedRevision, summary, statusName, idempotencyKey: key });
+      await accept.mutateAsync({ expectedIssueRevision: reviewedRevision, summary, ...(!native && { statusName }), idempotencyKey: key });
       acceptAttempt.current = null;
       setAcceptReview(null);
     } catch {
@@ -232,8 +234,8 @@ export function RequirementReviewCard({
       <AlertDialog open={!!acceptReview && inReview} onOpenChange={(open) => { if (!open && !accept.isPending) setAcceptReview(null); }}>
         <AlertDialogContent className="max-h-[90dvh] overflow-y-auto">
           <AlertDialogHeader>
-            <AlertDialogTitle>{t(($) => $.review.accept_title)}</AlertDialogTitle>
-            <AlertDialogDescription>{t(($) => $.review.accept_consequence)}</AlertDialogDescription>
+            <AlertDialogTitle>{native ? t(($) => $.review.native_accept_title) : t(($) => $.review.accept_title)}</AlertDialogTitle>
+            <AlertDialogDescription>{native ? t(($) => $.review.native_accept_consequence) : t(($) => $.review.accept_consequence)}</AlertDialogDescription>
           </AlertDialogHeader>
           <Label htmlFor={acceptFormId}>{t(($) => $.review.result_summary)}</Label>
           <Textarea
@@ -245,23 +247,27 @@ export function RequirementReviewCard({
             rows={6}
             disabled={accept.isPending}
           />
-          <Label htmlFor={`${acceptFormId}-status`}>{t(($) => $.review.source_status)}</Label>
-          <select
-            id={`${acceptFormId}-status`}
-            className="h-9 rounded-md border border-input bg-background px-3 text-body"
-            value={acceptReview?.statusName ?? ""}
-            onChange={(event) => setAcceptReview((current) => current ? { ...current, statusName: event.target.value } : null)}
-            disabled={accept.isPending}
-          >
-            <option value="">{t(($) => $.review.keep_source_status)}</option>
-            {(source?.statuses ?? []).map((status) => <option value={status.name} key={status.id}>{status.name}</option>)}
-          </select>
+          {!native && (
+            <>
+              <Label htmlFor={`${acceptFormId}-status`}>{t(($) => $.review.source_status)}</Label>
+              <select
+                id={`${acceptFormId}-status`}
+                className="h-9 rounded-md border border-input bg-background px-3 text-body"
+                value={acceptReview?.statusName ?? ""}
+                onChange={(event) => setAcceptReview((current) => current ? { ...current, statusName: event.target.value } : null)}
+                disabled={accept.isPending}
+              >
+                <option value="">{t(($) => $.review.keep_source_status)}</option>
+                {(source?.statuses ?? []).map((status) => <option value={status.name} key={status.id}>{status.name}</option>)}
+              </select>
+            </>
+          )}
           {acceptStale && <p role="alert" className="text-caption text-destructive">{t(($) => $.review.accept_stale)}</p>}
           {accept.error && <p role="alert" className="text-caption text-destructive">{accept.error.message}</p>}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={accept.isPending}>{t(($) => $.review.close)}</AlertDialogCancel>
             <Button type="button" disabled={accept.isPending || acceptStale || !acceptReview?.summary.trim() || !detail.permissions.canAccept} aria-busy={accept.isPending} onClick={() => void submitAccept()}>
-              {t(($) => $.review.accept_confirm)}
+              {native ? t(($) => $.review.native_accept_confirm) : t(($) => $.review.accept_confirm)}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
@@ -138,6 +138,41 @@ beforeEach(() => {
 });
 
 describe("RequirementApprovalCard", () => {
+  it("distinguishes external submissions from actual planning Runs", async () => {
+    const planned = makeDetail().latestCandidate!;
+    const detail = makeDetail({ latestCandidate: { ...planned, createdByTaskId: null } });
+    renderCard(<RequirementApprovalCard wsId="ws-1" detail={detail} />);
+    await userEvent.click(screen.getByRole("button", { name: "Review and approve" }));
+    expect(screen.getByText("Externally submitted")).toBeInTheDocument();
+    expect(screen.queryByText(/Planned by/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the squad loading state distinct from an unknown squad", async () => {
+    let resolveSquads!: (squads: { id: string; name: string }[]) => void;
+    const pending = new Promise<{ id: string; name: string }[]>((resolve) => { resolveSquads = resolve; });
+    renderCard(<RequirementApprovalCard wsId="ws-1" detail={makeDetail({ squadId: "squad-1" })} />, {
+      listSquads: vi.fn().mockReturnValue(pending),
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Review and approve" }));
+    expect(screen.getByText("Loading squad…")).toBeInTheDocument();
+    expect(screen.queryByText(/Unknown squad/)).not.toBeInTheDocument();
+    await act(async () => { resolveSquads([{ id: "squad-1", name: "Delivery squad" }]); });
+    expect(await screen.findByText("Delivery squad")).toBeInTheDocument();
+  });
+
+  it("shows the approved squad and its leader before native delegation approval", async () => {
+    const detail = makeDetail({ squadId: "squad-1", sourceHost: "multica", sourceSnapshot: { kind: "squad_delegation", squadId: "squad-1" } });
+    renderCard(<RequirementApprovalCard wsId="ws-1" detail={detail} />, {
+      listSquads: vi.fn().mockResolvedValue([{ id: "squad-1", name: "Delivery squad" }]),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review and approve" }));
+    expect(await screen.findByText("Delivery squad")).toBeInTheDocument();
+    expect(screen.getByText("Squad leader")).toBeInTheDocument();
+    expect(await screen.findByText("Planner")).toBeInTheDocument();
+    expect(screen.getByText("Planned by squad leader Planner")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Issue and start squad leader" })).toBeInTheDocument();
+  });
+
   it("approves the candidate reviewed by the user", async () => {
     const approveRequirement = vi.fn().mockResolvedValue({
       requirement: makeDetail(),
@@ -321,6 +356,20 @@ describe("RequirementApprovalCard", () => {
 });
 
 describe("RequirementReviewCard", () => {
+  it.each(["squad_delegation", "squad_request", "agent_request"])("accepts native %s delivery without offering source publication", async (kind) => {
+    const acceptRequirement = vi.fn().mockResolvedValue(makeDetail({ state: "done" }));
+    const detail = makeDetail({ state: "in_review", issue, issueId: issue.id, squadId: kind === "agent_request" ? null : "squad-1", sourceHost: "multica", sourceSnapshot: { kind } });
+    renderCard(<RequirementReviewCard wsId="ws-1" detail={detail} />, { acceptRequirement });
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    expect(screen.getByRole("alertdialog")).not.toHaveTextContent("Yixiezuo");
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Delivery summary and links"), { target: { value: "Squad result verified" } });
+    fireEvent.click(screen.getByRole("button", { name: "Accept delivery" }));
+    await waitFor(() => expect(acceptRequirement).toHaveBeenCalledWith("ws-1", "req-1", {
+      expectedIssueRevision: 9, summary: "Squad result verified", idempotencyKey: expect.any(String),
+    }));
+  });
+
   it("reviews the summary and source status before accepting the Issue revision", async () => {
     const acceptRequirement = vi.fn().mockResolvedValue(makeDetail());
     const detail = makeDetail({

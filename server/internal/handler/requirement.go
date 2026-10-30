@@ -161,10 +161,30 @@ func (h *Handler) GetRequirementByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	detail, err := h.requirementService().GetRequirement(r.Context(), actor, requirementID)
+	if err == nil && !requireRequirementCandidateClient(w, r, detail) {
+		return
+	}
 	h.writeRequirementResult(w, r, service.RequirementActionResult{Status: http.StatusOK, Body: mustMarshalRequirementDetail(detail)}, err)
 }
 
+func requireRequirementCandidateClient(w http.ResponseWriter, r *http.Request, detail service.RequirementDetail) bool {
+	if detail.LatestCandidate == nil || detail.LatestCandidate.CreatedByTaskID != nil ||
+		requestHasClientCapability(r, protocol.AppCapabilityRequirementCandidateProvenanceV1) {
+		return true
+	}
+	writeJSON(w, http.StatusUpgradeRequired, map[string]any{
+		"code":                "requirement_client_upgrade_required",
+		"error":               "This requirement has an externally submitted candidate. Update Multica or open it in the current web app to review it.",
+		"required_capability": protocol.AppCapabilityRequirementCandidateProvenanceV1,
+	})
+	return false
+}
+
 func (h *Handler) GetRequirementByChat(w http.ResponseWriter, r *http.Request) {
+	if _, scopedToChat := r.URL.Query()["chat_session_id"]; !scopedToChat {
+		h.ListRequirements(w, r)
+		return
+	}
 	actor, ok := h.requirementActor(w, r)
 	if !ok {
 		return
@@ -174,6 +194,9 @@ func (h *Handler) GetRequirementByChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	detail, err := h.requirementService().GetRequirementByChat(r.Context(), actor, chatSessionID)
+	if err == nil && !requireRequirementCandidateClient(w, r, detail) {
+		return
+	}
 	h.writeRequirementResult(w, r, service.RequirementActionResult{Status: http.StatusOK, Body: mustMarshalRequirementDetail(detail)}, err)
 }
 
@@ -205,6 +228,11 @@ func (h *Handler) writeRequirementResult(w http.ResponseWriter, r *http.Request,
 	}
 	for _, event := range result.Comments {
 		h.publishEvidenceComment(r.Context(), event.Issue, event.Comment, event.IssueRevision)
+	}
+	for _, message := range result.ChatMessages {
+		h.publishChat(protocol.EventChatMessage, result.WorkspaceID, result.ActorType, result.ActorID, uuidToString(message.ChatSessionID), protocol.ChatMessagePayload{
+			ChatSessionID: uuidToString(message.ChatSessionID), MessageID: uuidToString(message.ID), Role: message.Role, Content: message.Content, TaskID: uuidToString(message.TaskID), CreatedAt: timestampToString(message.CreatedAt),
+		})
 	}
 	if len(result.CancelledTasks) > 0 {
 		h.TaskService.FinalizeCancelledTasks(r.Context(), result.CancelledTasks)

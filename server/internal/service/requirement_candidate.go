@@ -85,6 +85,9 @@ func CanonicalRequirementCandidateSnapshot(raw json.RawMessage, requirement db.R
 		return RequirementCandidateSnapshot{}, nil, "", requirementBadRequest("requirement_candidate_invalid", "candidate agentId must match the requirement agent")
 	}
 	snapshot.AgentID = util.UUIDToString(agentID)
+	if _, _, delegationErr := requirementDelegation(requirement); delegationErr != nil {
+		return RequirementCandidateSnapshot{}, nil, "", delegationErr
+	}
 	if requirement.ProjectID.Valid {
 		if snapshot.ProjectID == nil {
 			return RequirementCandidateSnapshot{}, nil, "", requirementBadRequest("requirement_candidate_invalid", "candidate projectId must match the requirement project")

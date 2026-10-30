@@ -55,6 +55,7 @@ type RequirementActionResponse struct {
 	PromoteTasks   []db.AgentTaskQueue
 	IssueUpdates   []RequirementIssueUpdate
 	Comments       []RequirementCommentEvent
+	ChatMessages   []db.ChatMessage
 	CancelledTasks []db.AgentTaskQueue
 	PostCommit     func()
 }
@@ -152,7 +153,7 @@ func (s *RequirementService) ExecuteAction(ctx context.Context, input Requiremen
 	return RequirementActionResult{
 		Status: response.Status, Body: response.Body,
 		EventType: response.EventType, Realtime: response.Realtime, FinalizeTasks: response.FinalizeTasks, PromoteTasks: response.PromoteTasks,
-		IssueUpdates: response.IssueUpdates, Comments: response.Comments, CancelledTasks: response.CancelledTasks, PostCommit: response.PostCommit,
+		IssueUpdates: response.IssueUpdates, Comments: response.Comments, ChatMessages: response.ChatMessages, CancelledTasks: response.CancelledTasks, PostCommit: response.PostCommit,
 		WorkspaceID: util.UUIDToString(input.WorkspaceID), ActorType: input.ActorType, ActorID: util.UUIDToString(input.ActorID),
 	}, nil
 }

@@ -102,7 +102,7 @@ export function RequirementStageRail({
       : !detail.latestCandidate
         ? t(($) => $.flow.next.awaiting_candidate)
         : detail.permissions.canApprove
-          ? t(($) => $.flow.next.approve)
+          ? detail.squadId ? t(($) => $.flow.next.approve_squad) : t(($) => $.flow.next.approve)
           : t(($) => $.flow.next.awaiting_approver);
   } else {
     switch (detail.state) {

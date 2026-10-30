@@ -115,6 +115,15 @@ func advanceRequirementTaskStart(ctx context.Context, q *db.Queries, task db.Age
 }
 
 func advanceRequirementTaskComplete(ctx context.Context, q *db.Queries, task db.AgentTaskQueue) (*RequirementIssueUpdate, error) {
+	requirement, _, ok, err := requirementTaskIssue(ctx, q, task)
+	if err != nil || !ok {
+		return nil, err
+	}
+	if source, native, err := requirementDelegation(requirement); err != nil || (native && source.SquadID != "") {
+		// A squad turn can be dispatch or partial delivery. Its leader submits
+		// the aggregate through the guarded issue-status command.
+		return nil, err
+	}
 	return updateRequirementTaskIssue(ctx, q, task, RequirementIssueActionTaskComplete, "in_review")
 }
 

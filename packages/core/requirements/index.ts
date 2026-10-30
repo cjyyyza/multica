@@ -4,7 +4,7 @@ export {
   requirementByChatOptions,
 } from "./queries";
 export { applyRequirementEventToCache } from "./realtime";
-export { parseYixiezuoRequirementSnapshot, resolveRequirementCandidateAttachments } from "./source";
+export { isNativeRequirement, parseYixiezuoRequirementSnapshot, resolveRequirementCandidateAttachments } from "./source";
 export {
   useCreateRequirement,
   useUpdateRequirementParticipants,
@@ -33,6 +33,10 @@ export {
   RequirementOperationSchema,
   RequirementDeliverySchema,
   RequirementDetailSchema,
+  RequirementBlockedQuestionSchema,
+  RequirementReplyResponseSchema,
+  RequirementListResponseSchema,
+  RequirementSummarySchema,
   RequirementOpenResponseSchema,
   RequirementApproveResponseSchema,
 } from "./schemas";
@@ -48,14 +52,24 @@ export type {
   RequirementOperation,
   RequirementDelivery,
   RequirementDetail,
+  RequirementBlockedQuestion,
+  RequirementReplyResponse,
+  RequirementListResponse,
+  RequirementSummary,
   RequirementOpenResponse,
   RequirementApproveResponse,
 } from "./schemas";
 export type {
   RequirementParticipantInput,
   CreateRequirementRequest,
+  CreateRequirementDelegationRequest,
+  CreateNativeRequirementRequest,
+  ListRequirementsInput,
+  RequirementDelegationCandidateInput,
   UpdateRequirementParticipantsRequest,
   OpenRequirementRequest,
+  SendRequirementMessageRequest,
+  ReplyRequirementRequest,
   SubmitRequirementCandidateRequest,
   ApproveRequirementRequest,
   AcceptRequirementRequest,

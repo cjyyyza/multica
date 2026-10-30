@@ -55,7 +55,7 @@ func (s *RequirementService) RejectRequirement(ctx context.Context, actor Requir
 		if err != nil {
 			return RequirementActionResponse{}, fmt.Errorf("disable rejected requirement wakeups: %w", err)
 		}
-		task, err := s.Tasks.createDeferredChannelIssueTaskWithQueries(ctx, q, updatedIssue, time.Now().Add(time.Minute))
+		task, err := s.Tasks.createDeferredRequirementIssueTaskWithQueries(ctx, q, updatedIssue, time.Now().Add(time.Minute), actor.UserID, created.ID)
 		if err != nil {
 			return RequirementActionResponse{}, fmt.Errorf("create requirement rejection task: %w", err)
 		}

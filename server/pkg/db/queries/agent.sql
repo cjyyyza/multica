@@ -386,9 +386,9 @@ RETURNING *;
 -- locks the owners' workspace rows in the writer's own transaction and returns
 -- false once they are gone, so this statement writes no row instead of stranding
 -- a task in a workspace that has just been deleted (MUL-5999).
--- Channel /issue media resolves after issue creation. Persist the assigned
--- issue task up front for crash safety, but keep it inert until attachment
--- binding settles or the fire_at fallback is promoted by the normal sweeper.
+-- Channel media and native Requirement approval persist the assigned issue
+-- task up front for crash safety, but keep it inert until the caller promotes
+-- it or the fire_at fallback is promoted by the normal sweeper.
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, trigger_comment_id,
     coalesced_comment_ids, trigger_summary, force_fresh_session, is_leader_task, handoff_note,
@@ -407,7 +407,14 @@ SELECT
     sqlc.narg(squad_id),
     jsonb_strip_nulls(jsonb_build_object(
         'head_sha', NULLIF(COALESCE(sqlc.narg('head_sha')::text, ''), ''),
-        'channel_issue_media_pending', TRUE
+        'channel_issue_media_pending', CASE
+            WHEN COALESCE(sqlc.narg('requirement_delegation')::boolean, FALSE) THEN NULL
+            ELSE TRUE
+        END,
+        'requirement_delegation', CASE
+            WHEN COALESCE(sqlc.narg('requirement_delegation')::boolean, FALSE) THEN TRUE
+            ELSE NULL
+        END
     )),
     sqlc.narg(originator_user_id),
     sqlc.narg(accountable_user_id),
@@ -454,8 +461,8 @@ SET runtime_mcp_overlay = sqlc.narg(runtime_mcp_overlay),
     runtime_connected_apps = sqlc.narg(runtime_connected_apps)
 WHERE id = @id
   AND status = 'deferred'
-  AND context->>'channel_issue_media_pending' = 'true'
-  AND trigger_comment_id IS NULL
+  AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true')
+  AND trigger_comment_id IS NOT DISTINCT FROM sqlc.narg(expected_trigger_comment_id)::uuid
   AND originator_user_id IS NOT DISTINCT FROM sqlc.narg(expected_originator_user_id)::uuid;
 
 -- name: CreateQuickCreateTask :one
@@ -581,7 +588,7 @@ WHERE p.id = $1
   ))
   AND lock_task_owner_rows(p.agent_id, p.issue_id, p.runtime_id)
 ON CONFLICT (issue_id, agent_id, (COALESCE(comment_thread_id, '00000000-0000-0000-0000-000000000000'::uuid))) WHERE status IN ('queued', 'dispatched')
-       OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+       OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
 DO NOTHING
 RETURNING *;
 
@@ -1725,8 +1732,8 @@ WHERE context->>'wakeup_id' IS NULL AND issue_id = $1 AND status IN ('queued', '
 
 -- name: HasPendingTaskForIssueAndAgent :one
 -- Returns true if a specific agent already has a queued or dispatched task
--- for the given issue, or the explicitly-marked deferred task whose channel
--- media must bind before the issue agent runs. Used by @mention trigger dedup.
+-- for the given issue, or an explicitly-marked deferred task waiting for
+-- channel media or native Requirement approval. Used by @mention trigger dedup.
 --
 -- head_sha keys the dedup on the commit under review (TEN-356): when a caller
 -- passes a non-empty head_sha, a pending task only dedups if it was stamped
@@ -1739,7 +1746,7 @@ SELECT count(*) > 0 AS has_pending FROM agent_task_queue
 WHERE context->>'wakeup_id' IS NULL AND issue_id = $1 AND agent_id = $2
   AND (
     status IN ('queued', 'dispatched')
-    OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+    OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
   )
   AND (
     COALESCE(sqlc.narg('head_sha')::text, '') = ''
@@ -1753,13 +1760,14 @@ SELECT count(*) > 0 AS has_pending FROM agent_task_queue
 WHERE context->>'wakeup_id' IS NULL AND issue_id = $1 AND agent_id = $2
   AND (
     status IN ('queued', 'dispatched')
-    OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+    OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
   )
   AND (
     COALESCE(sqlc.narg('head_sha')::text, '') = ''
     OR context->>'head_sha' = sqlc.narg('head_sha')::text
   )
-  AND comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id(sqlc.narg('thread_comment_id')::uuid);
+  AND (comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id(sqlc.narg('thread_comment_id')::uuid)
+    OR (context->>'requirement_delegation' = 'true' AND trigger_comment_id IS NULL AND status IN ('queued', 'deferred')));
 
 -- name: HasPendingTaskForIssueAndAgentExcludingTriggerComment :one
 -- Same as HasPendingTaskForIssueAndAgent, but ignores tasks triggered by the
@@ -1771,7 +1779,7 @@ WHERE context->>'wakeup_id' IS NULL AND issue_id = @issue_id
   AND agent_id = @agent_id
   AND (
     status IN ('queued', 'dispatched')
-    OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+    OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
   )
   AND trigger_comment_id IS DISTINCT FROM @exclude_trigger_comment_id::uuid
   AND (
@@ -1786,14 +1794,15 @@ WHERE context->>'wakeup_id' IS NULL AND issue_id = @issue_id
   AND agent_id = @agent_id
   AND (
     status IN ('queued', 'dispatched')
-    OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+    OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
   )
   AND trigger_comment_id IS DISTINCT FROM @exclude_trigger_comment_id::uuid
   AND (
     COALESCE(sqlc.narg('head_sha')::text, '') = ''
     OR context->>'head_sha' = sqlc.narg('head_sha')::text
   )
-  AND comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id(sqlc.narg('thread_comment_id')::uuid);
+  AND (comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id(sqlc.narg('thread_comment_id')::uuid)
+    OR (context->>'requirement_delegation' = 'true' AND trigger_comment_id IS NULL AND status IN ('queued', 'deferred')));
 
 -- name: MergeCommentIntoPendingTask :one
 -- MUL-4195: fold a newly-arrived comment into an existing task for (issue,
@@ -1813,9 +1822,9 @@ WHERE context->>'wakeup_id' IS NULL AND issue_id = @issue_id
 -- absent from that response's delivered_comment_ids receipt; completion
 -- reconciliation handles it instead. Ordinary 'deferred' rows remain excluded:
 -- assignee-fallback escalations have their own fire_at lifecycle and may coexist
--- with a queued primary. The one exception is a task explicitly marked
--- channel_issue_media_pending. It is the issue's sole assigned-agent task and
--- has not been claimable yet, so a new comment must merge into it instead of
+-- with a queued primary. The exceptions are tasks explicitly marked
+-- channel_issue_media_pending or requirement_delegation. Each is the issue's
+-- sole assigned-agent task and has not been claimable yet, so a new comment must merge into it instead of
 -- creating a competing queued task. coalesced_comment_ids remains the pre-claim
 -- plan; the claim path records the actual embedded subset in
 -- delivered_comment_ids.
@@ -1866,10 +1875,11 @@ WHERE id = (
     SELECT t.id FROM agent_task_queue t
     WHERE t.context->>'wakeup_id' IS NULL AND t.issue_id = @issue_id
       AND t.agent_id = @agent_id
-      AND t.comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id(@new_trigger_comment_id::uuid)
+      AND (t.comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id(@new_trigger_comment_id::uuid)
+        OR (t.context->>'requirement_delegation' = 'true' AND t.trigger_comment_id IS NULL))
       AND (
           t.status = 'queued'
-          OR (t.status = 'deferred' AND t.context->>'channel_issue_media_pending' = 'true')
+          OR (t.status = 'deferred' AND (t.context->>'channel_issue_media_pending' = 'true' OR t.context->>'requirement_delegation' = 'true'))
       )
       -- Head-scoped (TEN-356, #5914): never fold across HEADs. The physical
       -- unique index is per (issue_id, agent_id, thread), so an insert-race loser can
@@ -1882,6 +1892,18 @@ WHERE id = (
       )
     ORDER BY t.created_at DESC
     LIMIT 1
+)
+-- A row-lock wait can outlive the subquery's snapshot. Recheck the current
+-- tuple so a first-thread binding or a claim cannot accept stale input.
+AND (
+    status = 'queued'
+    OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
+)
+AND (comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id(@new_trigger_comment_id::uuid)
+    OR (context->>'requirement_delegation' = 'true' AND trigger_comment_id IS NULL))
+AND (
+    COALESCE(sqlc.narg('head_sha')::text, '') = ''
+    OR context->>'head_sha' = sqlc.narg('head_sha')::text
 )
 RETURNING id, coalesced_comment_ids;
 
@@ -1956,7 +1978,7 @@ WHERE id = (
       AND t.comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id(@comment_id::uuid)
       AND (
           t.status = 'queued'
-          OR (t.status = 'deferred' AND t.context->>'channel_issue_media_pending' = 'true')
+          OR (t.status = 'deferred' AND (t.context->>'channel_issue_media_pending' = 'true' OR t.context->>'requirement_delegation' = 'true'))
       )
       AND t.trigger_comment_id IS DISTINCT FROM @comment_id::uuid
       AND NOT (@comment_id::uuid = ANY(t.coalesced_comment_ids))
@@ -1982,7 +2004,7 @@ WHERE issue_id = @issue_id
           id IS DISTINCT FROM sqlc.narg('exclude_task_id')::uuid
           AND (
               status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-              OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+              OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
           )
           AND (trigger_comment_id = @comment_id::uuid OR @comment_id::uuid = ANY(coalesced_comment_ids))
       )
@@ -2146,7 +2168,7 @@ WHERE recovery.author_type = 'system'
                     covering.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
                     OR (
                         covering.status = 'deferred'
-                        AND covering.context->>'channel_issue_media_pending' = 'true'
+                        AND (covering.context->>'channel_issue_media_pending' = 'true' OR covering.context->>'requirement_delegation' = 'true')
                     )
                 )
                 AND (
@@ -2174,7 +2196,7 @@ SELECT count(*) > 0 AS has_active FROM agent_task_queue
 WHERE issue_id = $1 AND agent_id = $2
   AND (
     status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-    OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+    OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
   );
 
 -- name: HasActiveTaskForIssueAndAgentInThread :one
@@ -2183,7 +2205,7 @@ SELECT count(*) > 0 AS has_active FROM agent_task_queue
 WHERE issue_id = $1 AND agent_id = $2
   AND (
     status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-    OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
+    OR (status = 'deferred' AND (context->>'channel_issue_media_pending' = 'true' OR context->>'requirement_delegation' = 'true'))
   )
   AND comment_thread_id IS NOT DISTINCT FROM comment_thread_root_id(sqlc.narg('thread_comment_id')::uuid);
 
@@ -2312,7 +2334,7 @@ WITH due AS (
           AND occupant.id <> t.id
           AND (
             occupant.status IN ('queued', 'dispatched')
-            OR (occupant.status = 'deferred' AND occupant.context->>'channel_issue_media_pending' = 'true')
+            OR (occupant.status = 'deferred' AND (occupant.context->>'channel_issue_media_pending' = 'true' OR occupant.context->>'requirement_delegation' = 'true'))
           )
       )
 )
@@ -2380,7 +2402,7 @@ WHERE t.runtime_id = ANY(@runtime_ids::uuid[])
         AND occupant.id <> t.id
         AND (
           occupant.status IN ('queued', 'dispatched')
-          OR (occupant.status = 'deferred' AND occupant.context->>'channel_issue_media_pending' = 'true')
+          OR (occupant.status = 'deferred' AND (occupant.context->>'channel_issue_media_pending' = 'true' OR occupant.context->>'requirement_delegation' = 'true'))
         )
     )
   );
@@ -2415,7 +2437,7 @@ WITH due AS (
           AND occupant.id <> t.id
           AND (
             occupant.status IN ('queued', 'dispatched')
-            OR (occupant.status = 'deferred' AND occupant.context->>'channel_issue_media_pending' = 'true')
+            OR (occupant.status = 'deferred' AND (occupant.context->>'channel_issue_media_pending' = 'true' OR occupant.context->>'requirement_delegation' = 'true'))
           )
       )
 )
@@ -2433,6 +2455,22 @@ RETURNING *;
 SELECT * FROM agent_task_queue
 WHERE issue_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
 ORDER BY created_at DESC;
+
+-- name: HasPendingRequirementDelegationWork :one
+-- Review covers the approved issue and delegated child issues. A turn ending
+-- is not a delivery while another queued or active run still owns that work.
+WITH RECURSIVE family AS (
+    SELECT root.id, ARRAY[root.id] AS path FROM issue root WHERE root.id = @issue_id AND root.workspace_id = @workspace_id
+    UNION ALL
+    SELECT i.id, f.path || i.id FROM issue i JOIN family f ON i.parent_issue_id = f.id
+    WHERE i.workspace_id = @workspace_id AND NOT i.id = ANY(f.path)
+)
+SELECT EXISTS (
+    SELECT 1 FROM agent_task_queue t JOIN family f ON f.id = t.issue_id
+    WHERE t.id <> @source_task_id
+      AND (t.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+        OR (t.status = 'deferred' AND t.context->>'requirement_delegation' = 'true'))
+);
 
 -- name: ListActiveTasksByIssueFamily :many
 -- Cross-issue coordination read for parallel sub-issue work (#7768). Given a

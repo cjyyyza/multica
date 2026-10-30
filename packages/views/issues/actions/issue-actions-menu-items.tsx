@@ -111,7 +111,7 @@ export function IssueActionsMenuItems({
 }: IssueActionsMenuItemsProps) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
-  const lifecycleActionsDisabled = issue.origin_type === "requirement_chat";
+  const lifecycleActionsDisabled = !!issue.requirement_id || issue.origin_type === "requirement_chat" || issue.origin_type === "requirement_delegation";
   // Only the statuses the issue's workflow allows; entering a step that hands
   // the issue off confirms first, as in the status picker. (MUL-7420)
   const { options: statusOptions, workflow } = useIssueStatusOptions(wsId, issue.project_id, issue.status);

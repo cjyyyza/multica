@@ -32,6 +32,25 @@ func GateRequirementIssueCreation(ctx context.Context, q *db.Queries, p IssueCre
 			return err
 		}
 	}
+	if p.OriginType.Valid && p.OriginType.String == "requirement_delegation" {
+		requirement, err := q.GetRequirement(ctx, db.GetRequirementParams{ID: p.OriginID, WorkspaceID: p.WorkspaceID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return &RequirementChatExecutionError{Code: RequirementApprovalRequiredCode}
+		}
+		if err != nil {
+			return err
+		}
+		if _, native, err := requirementDelegation(requirement); err != nil || !native {
+			return &RequirementChatExecutionError{Code: RequirementApprovalRequiredCode}
+		}
+		if err := requirementCreationGateError(requirement); err != nil {
+			return err
+		}
+		if opts.RequirementApproval == nil || opts.RequirementApproval.RequirementID != requirement.ID {
+			return &RequirementChatExecutionError{Code: RequirementApprovalRequiredCode, IssueID: util.UUIDToString(requirement.IssueID)}
+		}
+		return nil
+	}
 	if p.OriginType.Valid && p.OriginType.String == "requirement_chat" {
 		requirement, err := q.GetRequirementByChatSession(ctx, db.GetRequirementByChatSessionParams{
 			WorkspaceID: p.WorkspaceID, ChatSessionID: p.OriginID,
@@ -145,6 +164,13 @@ func UpdateIssueWithRequirementGate(ctx context.Context, q *db.Queries, params d
 		loaded, loadErr := q.GetIssue(ctx, params.ID)
 		if loadErr == nil {
 			previous = loaded
+			if !params.RequirementAction.Valid && params.Status.String == "in_review" && previous.Status != "in_review" {
+				action, err := requirementSquadReviewAction(ctx, q, previous, params.SourceTaskID)
+				if err != nil {
+					return db.Issue{}, err
+				}
+				params.RequirementAction = action
+			}
 		} else if !errors.Is(loadErr, pgx.ErrNoRows) {
 			return db.Issue{}, loadErr
 		}

@@ -164,6 +164,9 @@ var concurrentIndexCleanups = map[string]string{
 	"9043_requirement_outbox_requirement_index":                 "idx_requirement_outbox_requirement",
 	"9044_requirement_outbox_claim_index":                       "idx_requirement_outbox_claim",
 	"9047_issue_requirement_chat_origin_index":                  "idx_issue_requirement_chat_origin",
+	"9096_issue_requirement_delegation_origin_index":            "idx_issue_requirement_delegation_origin",
+	"9098_agent_task_requirement_delegation_pending_unique":     "idx_one_pending_task_per_issue_agent_thread",
+	"9099_requirement_delegation_pending_guard":                 "idx_requirement_delegation_pending_guard",
 	"9050_agent_task_requirement_index":                         "idx_agent_task_queue_requirement",
 	"9052_requirement_outbox_transport_command_index":           "idx_requirement_outbox_transport_command",
 	"9053_requirement_outbox_retry_index":                       "idx_requirement_outbox_retry",
@@ -453,31 +456,33 @@ var concurrentIndexCleanups = map[string]string{
 // the retry, while a bare CREATE would stay wedged on "already exists"; both
 // cases need direction-specific cleanup before the rollback can retry safely.
 var concurrentDownIndexCleanups = map[string]string{
-	"9070_popo_inbound_legacy_unique_index":                 "idx_popo_inbound_event_install_event",
-	"9075_requirement_outbox_transport_command_unique_down": "idx_requirement_outbox_transport_command",
-	"144_drop_agent_task_queue_chat_pending_v1":             "idx_agent_task_queue_chat_pending",
-	"171_drop_legacy_label_namespace_index":                 "issue_label_workspace_name_lower_idx",
-	"256_drop_agent_task_queue_chat_pending_v2":             "idx_agent_task_queue_chat_pending_v2",
-	"258_drop_pending_issue_agent_v1":                       "idx_one_pending_task_per_issue_agent",
-	"262_drop_agent_task_queue_terminal_completed_at_v1":    "idx_agent_task_queue_terminal_completed_at",
-	"422_channel_chat_route_history":                        "channel_chat_session_binding_installation_id_channel_chat_i_key",
-	"300_drop_redundant_issue_workspace_number_index":       "idx_issue_workspace_number",
-	"301_drop_redundant_sys_cron_job_plan_index":            "idx_sys_cron_exec_job_plan",
-	"302_drop_redundant_channel_chat_session_binding_index": "idx_channel_chat_session_binding_session",
-	"303_drop_redundant_lark_chat_session_binding_index":    "idx_lark_chat_session_binding_session",
-	"312_drop_global_plugin_identity_key_index":             "idx_plugin_identity_key",
-	"371_comment_content_search_index_strategy":             "idx_comment_content_trgm",
-	"375_drop_issue_last_activity_index":                    "idx_issue_workspace_last_activity",
-	"391_drop_agent_task_queue_dispatched_prepare_index":    "idx_agent_task_queue_dispatched_prepare",
-	"437_drop_agent_runtime_last_seen_at_index":             "idx_agent_runtime_last_seen_at",
-	"450_drop_comment_delegated_failure_pending_index":      "idx_comment_delegated_failure_pending",
-	"453_drop_pending_issue_agent_unique":                   "idx_one_pending_task_per_issue_agent_v2",
-	"548_task_supplement_comment_task_index":                "task_supplement_comment_uidx",
-	"454_drop_comment_content_bigm_index":                   "idx_comment_content_bigm",
-	"455_drop_comment_content_trgm_index":                   "idx_comment_content_trgm",
-	"463_drop_issue_description_bigm_index":                 "idx_issue_description_bigm",
-	"464_drop_issue_description_trgm_index":                 "idx_issue_description_trgm",
-	"473_drop_agent_task_queue_chat_with_session_index":     "idx_agent_task_queue_chat_with_session_created_at",
+	"9070_popo_inbound_legacy_unique_index":                      "idx_popo_inbound_event_install_event",
+	"9075_requirement_outbox_transport_command_unique_down":      "idx_requirement_outbox_transport_command",
+	"144_drop_agent_task_queue_chat_pending_v1":                  "idx_agent_task_queue_chat_pending",
+	"171_drop_legacy_label_namespace_index":                      "issue_label_workspace_name_lower_idx",
+	"256_drop_agent_task_queue_chat_pending_v2":                  "idx_agent_task_queue_chat_pending_v2",
+	"258_drop_pending_issue_agent_v1":                            "idx_one_pending_task_per_issue_agent",
+	"262_drop_agent_task_queue_terminal_completed_at_v1":         "idx_agent_task_queue_terminal_completed_at",
+	"422_channel_chat_route_history":                             "channel_chat_session_binding_installation_id_channel_chat_i_key",
+	"300_drop_redundant_issue_workspace_number_index":            "idx_issue_workspace_number",
+	"301_drop_redundant_sys_cron_job_plan_index":                 "idx_sys_cron_exec_job_plan",
+	"302_drop_redundant_channel_chat_session_binding_index":      "idx_channel_chat_session_binding_session",
+	"303_drop_redundant_lark_chat_session_binding_index":         "idx_lark_chat_session_binding_session",
+	"312_drop_global_plugin_identity_key_index":                  "idx_plugin_identity_key",
+	"371_comment_content_search_index_strategy":                  "idx_comment_content_trgm",
+	"375_drop_issue_last_activity_index":                         "idx_issue_workspace_last_activity",
+	"391_drop_agent_task_queue_dispatched_prepare_index":         "idx_agent_task_queue_dispatched_prepare",
+	"437_drop_agent_runtime_last_seen_at_index":                  "idx_agent_runtime_last_seen_at",
+	"450_drop_comment_delegated_failure_pending_index":           "idx_comment_delegated_failure_pending",
+	"453_drop_pending_issue_agent_unique":                        "idx_one_pending_task_per_issue_agent_v2",
+	"9097_agent_task_requirement_delegation_pending_unique_drop": "idx_one_pending_task_per_issue_agent_thread",
+	"9100_requirement_delegation_pending_index_retire":           "idx_one_pending_task_per_issue_agent_thread",
+	"548_task_supplement_comment_task_index":                     "task_supplement_comment_uidx",
+	"454_drop_comment_content_bigm_index":                        "idx_comment_content_bigm",
+	"455_drop_comment_content_trgm_index":                        "idx_comment_content_trgm",
+	"463_drop_issue_description_bigm_index":                      "idx_issue_description_bigm",
+	"464_drop_issue_description_trgm_index":                      "idx_issue_description_trgm",
+	"473_drop_agent_task_queue_chat_with_session_index":          "idx_agent_task_queue_chat_with_session_created_at",
 }
 
 var preMigrationHooks = func() map[string]preMigrationHook {
@@ -554,6 +559,9 @@ func refuseChannelChatRouteHistoryRollbackWith(ctx context.Context, query rowQue
 }
 
 var upMigrationConditions = map[string]migrationCondition{
+	// Keep the live guard until its replacement has finished building.
+	"9097_agent_task_requirement_delegation_pending_unique_drop": skipMigration("superseded by online index replacement in 9099 and 9100"),
+	"9098_agent_task_requirement_delegation_pending_unique":      whenRequirementPendingIndexMissing,
 	// Preserve applied history; pending 469 is superseded by the bounded expand
 	// migration. SaaS backfills separately; self-host converges in 491.
 	"469_issue_status_lifecycle_categories": skipMigration("superseded by 478 expansion and 491 convergence (MUL-7365)"),
@@ -580,9 +588,11 @@ var upMigrationConditions = map[string]migrationCondition{
 // Migration 463 independently restores the optional issue-description bigram;
 // migration 464's portable trigram rollback is unconditional.
 var downMigrationConditions = map[string]migrationCondition{
-	"454_drop_comment_content_bigm_index":   whenOperatorClassAvailable(pgBigmOperatorClass),
-	"455_drop_comment_content_trgm_index":   whenOperatorClassUnavailable(pgBigmOperatorClass),
-	"463_drop_issue_description_bigm_index": whenOperatorClassAvailable(pgBigmOperatorClass),
+	"9097_agent_task_requirement_delegation_pending_unique_drop": whenRequirementPendingIndexMissing,
+	"9098_agent_task_requirement_delegation_pending_unique":      skipMigration("baseline index is restored before 9099 rolls back"),
+	"454_drop_comment_content_bigm_index":                        whenOperatorClassAvailable(pgBigmOperatorClass),
+	"455_drop_comment_content_trgm_index":                        whenOperatorClassUnavailable(pgBigmOperatorClass),
+	"463_drop_issue_description_bigm_index":                      whenOperatorClassAvailable(pgBigmOperatorClass),
 }
 
 func hooksForDirection(direction string) map[string]preMigrationHook {
@@ -637,6 +647,18 @@ func skipMigration(reason string) migrationCondition {
 	return func(context.Context, *pgxpool.Conn) (bool, string, error) {
 		return false, reason, nil
 	}
+}
+
+func whenRequirementPendingIndexMissing(ctx context.Context, conn *pgxpool.Conn) (bool, string, error) {
+	var exists bool
+	if err := conn.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM pg_index
+		WHERE indexrelid=to_regclass('idx_one_pending_task_per_issue_agent_thread')
+		  AND indisvalid AND indisready AND indisunique
+	)`).Scan(&exists); err != nil {
+		return false, "", fmt.Errorf("inspect pending Run guard: %w", err)
+	}
+	return !exists, "a usable pending Run guard already exists", nil
 }
 
 func whenIndexUsable(requirement usableIndexRequirement) migrationCondition {

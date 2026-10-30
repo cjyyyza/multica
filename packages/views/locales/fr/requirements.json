@@ -47,7 +47,15 @@
     "attachments": "Pièces jointes",
     "file": "Fichier",
     "unknown_attachment": "Pièce jointe inconnue ({{id}})",
-    "attachments_unavailable": "Certaines pièces jointes sélectionnées sont absentes de l’aperçu de la source. L’approbation est indisponible."
+    "attachments_unavailable": "Certaines pièces jointes sélectionnées sont absentes de l’aperçu de la source. L’approbation est indisponible.",
+    "squad": "Squad",
+    "squad_leader": "Chef du Squad",
+    "unknown_squad": "Squad inconnu ({{id}})",
+    "source": "Origine du candidat",
+    "external_submission": "Soumis depuis un outil externe",
+    "planned_by_agent": "Planifié par l’agent {{name}}",
+    "planned_by_leader": "Planifié par le chef du Squad {{name}}",
+    "loading_squad": "Chargement du Squad…"
   },
   "approval": {
     "title": "Approuver l’exigence",
@@ -58,7 +66,9 @@
     "stale": "Le candidat ou la révision a changé. Examinez le dernier candidat avant d’approuver.",
     "review_latest": "Examiner le dernier candidat",
     "cancel": "Annuler",
-    "confirm": "Créer la tâche et démarrer l’agent"
+    "confirm": "Créer la tâche et démarrer l’agent",
+    "consequence_squad": "Crée une tâche et démarre le chef du Squad. Confirmez les modifications dans cette tâche ; ouvrez une nouvelle discussion pour une demande indépendante.",
+    "confirm_squad": "Créer la tâche et démarrer le chef du Squad"
   },
   "review": {
     "title": "Revue",
@@ -80,7 +90,10 @@
     "source_status": "Statut Yixiezuo",
     "keep_source_status": "Conserver le statut actuel",
     "accept_stale": "La tâche a changé. Fermez cette fenêtre et examinez la dernière version.",
-    "accept_confirm": "Valider et publier"
+    "accept_confirm": "Valider et publier",
+    "native_accept_title": "Accepter la livraison",
+    "native_accept_consequence": "Marque cette demande et son ticket comme terminés après votre vérification.",
+    "native_accept_confirm": "Accepter la livraison"
   },
   "sync": {
     "title": "État de synchronisation",
@@ -164,7 +177,8 @@
       "review": "Acceptez le résultat ou demandez des modifications.",
       "done": "Acceptée.",
       "cancelled": "Annulée.",
-      "unknown": "Consultez l’état actuel de la demande avant de continuer."
+      "unknown": "Consultez l’état actuel de la demande avant de continuer.",
+      "approve_squad": "Vérifiez le candidat, puis créez la tâche et démarrez le chef du Squad."
     },
     "sync_alert": "La synchronisation de la source nécessite une action. Ouvrez les détails.",
     "sync_alert_detail": "La synchronisation de la source nécessite une action : {{error}}"

@@ -191,8 +191,14 @@ func validateRequirementExecuteTask(ctx context.Context, q *db.Queries, actor Re
 	if err != nil {
 		return fmt.Errorf("load requirement block task: %w", err)
 	}
-	if task.AgentID != actor.UserID || task.AgentID != row.AgentID || task.RequirementID != row.ID || task.IssueID != row.IssueID || task.Mode != "execute" || task.Status != "running" {
+	if task.AgentID != actor.UserID || task.RequirementID != row.ID || task.IssueID != row.IssueID || task.Mode != "execute" || task.Status != "running" {
 		return newRequirementError(http.StatusForbidden, RequirementTaskScopeCode, "task is not a running execute task for this requirement issue")
+	}
+	if err := validateRequirementExecuteAgent(ctx, q, row, task); err != nil {
+		if errors.Is(err, ErrTaskRequirementBinding) || errors.Is(err, pgx.ErrNoRows) {
+			return newRequirementError(http.StatusForbidden, RequirementTaskScopeCode, "task does not belong to the approved requirement squad")
+		}
+		return err
 	}
 	return nil
 }

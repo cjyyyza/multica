@@ -20,6 +20,28 @@ SELECT * FROM requirement
 WHERE id = @id AND workspace_id = @workspace_id
 FOR UPDATE;
 
+-- name: ListRequirementsForParticipant :many
+SELECT r.id, r.workspace_id, r.revision, r.intake_state, r.source_host, r.external_id,
+       COALESCE(r.source_snapshot->>'title', '')::text AS title,
+       COALESCE(r.source_snapshot->>'kind', '')::text AS source_kind,
+       COALESCE(r.source_snapshot->>'squadId', '')::text AS squad_id,
+       r.requester_id, r.agent_id, r.project_id, r.chat_session_id, r.issue_id,
+       r.cancelled_at, r.created_at, r.updated_at,
+       COALESCE(i.status, '')::text AS issue_status,
+       COALESCE(s.category, '')::text AS issue_status_category,
+       (r.issue_id IS NOT NULL AND i.id IS NULL)::boolean AS issue_deleted
+FROM requirement r
+LEFT JOIN issue i ON i.id = r.issue_id AND i.workspace_id = r.workspace_id
+LEFT JOIN issue_status s ON s.workspace_id = i.workspace_id AND s.key = i.status
+WHERE r.workspace_id = @workspace_id
+  AND EXISTS (
+      SELECT 1 FROM requirement_participant p
+      WHERE p.requirement_id = r.id AND p.workspace_id = r.workspace_id AND p.user_id = @user_id
+  )
+  AND (sqlc.narg('external_ref')::text IS NULL OR (r.source_host = 'multica' AND r.external_id = sqlc.narg('external_ref')::text))
+ORDER BY r.created_at DESC, r.id DESC
+LIMIT @page_limit OFFSET @page_offset;
+
 -- name: GetRequirementBySource :one
 SELECT * FROM requirement
 WHERE workspace_id = @workspace_id
@@ -90,6 +112,20 @@ WHERE id = @id
   AND cancelled_at IS NULL
 RETURNING *;
 
+-- name: BindRequirementDelegationIssue :one
+UPDATE requirement
+SET issue_id = @issue_id,
+    revision = revision + 1,
+    last_error = NULL,
+    updated_at = now()
+WHERE id = @id
+  AND workspace_id = @workspace_id
+  AND revision = @expected_revision
+  AND source_host = 'multica'
+  AND issue_id IS NULL
+  AND cancelled_at IS NULL
+RETURNING *;
+
 -- name: CancelRequirement :one
 UPDATE requirement
 SET cancelled_at = now(),
@@ -122,6 +158,12 @@ WHERE requirement_id = @requirement_id
   AND chat_session_id = @chat_session_id
   AND mode = 'plan'
 ORDER BY created_at, id
+LIMIT 1;
+
+-- name: GetLatestRequirementPlanTask :one
+SELECT * FROM agent_task_queue
+WHERE requirement_id = @requirement_id AND chat_session_id = @chat_session_id AND mode = 'plan'
+ORDER BY created_at DESC, id DESC
 LIMIT 1;
 
 -- name: GetLatestRequirementTaskForIssue :one

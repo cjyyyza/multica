@@ -628,12 +628,20 @@ func (s *IssueService) CreateInTx(ctx context.Context, tx pgx.Tx, p IssueCreateP
 		}
 	}
 
-	if p.OriginType.Valid && p.OriginType.String == "requirement_chat" && opts.RequirementApproval != nil {
+	if p.OriginType.Valid && (p.OriginType.String == "requirement_chat" || p.OriginType.String == "requirement_delegation") && opts.RequirementApproval != nil {
 		approval := opts.RequirementApproval
-		bound, bindErr := qtx.BindRequirementIssue(ctx, db.BindRequirementIssueParams{
-			ID: approval.RequirementID, WorkspaceID: p.WorkspaceID, ExpectedRevision: approval.ExpectedRevision,
-			ChatSessionID: p.OriginID, IssueID: issue.ID,
-		})
+		var bound db.Requirement
+		var bindErr error
+		if p.OriginType.String == "requirement_delegation" {
+			bound, bindErr = qtx.BindRequirementDelegationIssue(ctx, db.BindRequirementDelegationIssueParams{
+				ID: approval.RequirementID, WorkspaceID: p.WorkspaceID, ExpectedRevision: approval.ExpectedRevision, IssueID: issue.ID,
+			})
+		} else {
+			bound, bindErr = qtx.BindRequirementIssue(ctx, db.BindRequirementIssueParams{
+				ID: approval.RequirementID, WorkspaceID: p.WorkspaceID, ExpectedRevision: approval.ExpectedRevision,
+				ChatSessionID: p.OriginID, IssueID: issue.ID,
+			})
+		}
 		if errors.Is(bindErr, pgx.ErrNoRows) {
 			current, loadErr := qtx.GetRequirement(ctx, db.GetRequirementParams{ID: approval.RequirementID, WorkspaceID: p.WorkspaceID})
 			if loadErr != nil {
@@ -660,12 +668,16 @@ func (s *IssueService) CreateInTx(ctx context.Context, tx pgx.Tx, p IssueCreateP
 		}
 	}
 
-	if !opts.AssignedAgentRunFireAt.IsZero() && s.shouldEnqueueAgentTaskWithQueries(ctx, qtx, issue) {
+	shouldCreateDeferredTask := s.shouldEnqueueAgentTaskWithQueries(ctx, qtx, issue)
+	if opts.RequirementApproval != nil && issue.AssigneeType.Valid && issue.AssigneeType.String == "squad" {
+		shouldCreateDeferredTask = true
+	}
+	if !opts.AssignedAgentRunFireAt.IsZero() && shouldCreateDeferredTask {
 		// The issue must never become visible without its media-gated assigned
 		// task. Inserting both rows through qtx makes the unique-index winner
 		// deterministic: any observer that can discover the committed issue also
 		// sees the inert deferred task and must merge into it.
-		assignedTask, err = s.TaskService.createDeferredChannelIssueTaskWithQueries(ctx, qtx, issue, opts.AssignedAgentRunFireAt)
+		assignedTask, err = s.TaskService.createDeferredRequirementIssueTaskWithQueries(ctx, qtx, issue, opts.AssignedAgentRunFireAt, issue.CreatorID, pgtype.UUID{})
 		if err != nil {
 			return IssueCreateResult{}, fmt.Errorf("create deferred channel issue task: %w", err)
 		}
@@ -1086,7 +1098,7 @@ func classifyOrigin(issue db.Issue, opts IssueCreateOpts) (source, taskID, autop
 		return analytics.SourceManual, originID, ""
 	case "autopilot":
 		return analytics.SourceAutopilot, "", originID
-	case "lark_chat", "slack_chat", "dingtalk_chat", "wecom_chat", "telegram_chat", "popo_chat", "requirement_chat":
+	case "lark_chat", "slack_chat", "dingtalk_chat", "wecom_chat", "telegram_chat", "popo_chat", "requirement_chat", "requirement_delegation":
 		return analytics.SourceManual, "", ""
 	default:
 		slog.Warn("analytics: unknown issue origin type",

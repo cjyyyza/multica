@@ -47,7 +47,15 @@
     "attachments": "附件",
     "file": "文件",
     "unknown_attachment": "未知附件（{{id}}）",
-    "attachments_unavailable": "部分所选附件不在来源预览中，无法批准。"
+    "attachments_unavailable": "部分所选附件不在来源预览中，无法批准。",
+    "squad": "小队",
+    "squad_leader": "队长",
+    "unknown_squad": "未知小队（{{id}}）",
+    "source": "候选来源",
+    "external_submission": "外部提交",
+    "planned_by_agent": "由智能体 {{name}} 规划",
+    "planned_by_leader": "由小队队长 {{name}} 规划",
+    "loading_squad": "正在加载小队…"
   },
   "approval": {
     "title": "批准需求",
@@ -58,7 +66,9 @@
     "stale": "候选内容或版本已变化。请重新审查最新候选后再批准。",
     "review_latest": "审查最新候选",
     "cancel": "取消",
-    "confirm": "创建任务并启动智能体"
+    "confirm": "创建任务并启动智能体",
+    "consequence_squad": "将创建唯一的任务并启动小队队长。后续变更在原任务中重新确认，独立新需求另开聊天。",
+    "confirm_squad": "创建任务并启动队长"
   },
   "review": {
     "title": "验收",
@@ -80,7 +90,10 @@
     "source_status": "易协作状态",
     "keep_source_status": "保留当前状态",
     "accept_stale": "任务已变化，请关闭后重新审查最新版本。",
-    "accept_confirm": "验收通过并回写"
+    "accept_confirm": "验收通过并回写",
+    "native_accept_title": "验收交付",
+    "native_accept_consequence": "确认交付结果后，将此需求和关联任务标记为已完成。",
+    "native_accept_confirm": "确认验收"
   },
   "sync": {
     "title": "同步状态",
@@ -164,7 +177,8 @@
       "review": "验收通过或打回修改。",
       "done": "已验收。",
       "cancelled": "已取消。",
-      "unknown": "请读取最新需求状态后继续。"
+      "unknown": "请读取最新需求状态后继续。",
+      "approve_squad": "审查候选，确认后创建任务并启动小队队长。"
     },
     "sync_alert": "来源同步需要处理，请展开详情。",
     "sync_alert_detail": "来源同步需要处理：{{error}}"

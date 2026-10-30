@@ -72,12 +72,18 @@ func (s *RequirementService) ApproveRequirement(ctx context.Context, actor Requi
 		if row.IssueID.Valid {
 			return RequirementActionResponse{}, newRequirementError(http.StatusConflict, RequirementChatIssueExistsCode, "requirement already has an issue")
 		}
-		if !row.ChatSessionID.Valid {
-			return RequirementActionResponse{}, newRequirementError(http.StatusConflict, "requirement_open_incomplete", "requirement chat must be opened before approval")
+		delegation, native, err := requirementDelegation(row)
+		if err != nil {
+			return RequirementActionResponse{}, err
 		}
-		chat, err := q.GetChatSessionInWorkspace(ctx, db.GetChatSessionInWorkspaceParams{ID: row.ChatSessionID, WorkspaceID: actor.WorkspaceID})
-		if err != nil || chat.AgentID != row.AgentID {
-			return RequirementActionResponse{}, newRequirementError(http.StatusConflict, "requirement_open_incomplete", "requirement chat binding is unavailable")
+		if !native || delegation.hasPlan() {
+			if !row.ChatSessionID.Valid {
+				return RequirementActionResponse{}, newRequirementError(http.StatusConflict, "requirement_open_incomplete", "requirement chat must be opened before approval")
+			}
+			chat, err := q.GetChatSessionInWorkspace(ctx, db.GetChatSessionInWorkspaceParams{ID: row.ChatSessionID, WorkspaceID: actor.WorkspaceID})
+			if err != nil || chat.AgentID != row.AgentID {
+				return RequirementActionResponse{}, newRequirementError(http.StatusConflict, "requirement_open_incomplete", "requirement chat binding is unavailable")
+			}
 		}
 		if row.IntakeState != "awaiting_approval" {
 			return RequirementActionResponse{}, newRequirementError(http.StatusConflict, "requirement_not_awaiting_approval", "requirement is not awaiting approval")
@@ -99,6 +105,24 @@ func (s *RequirementService) ApproveRequirement(ctx context.Context, actor Requi
 		if agentRow.ArchivedAt.Valid || !CanMemberInvokeAgent(ctx, q, agentRow, actor.UserID, actor.WorkspaceID) {
 			return RequirementActionResponse{}, newRequirementError(http.StatusForbidden, "agent_invocation_not_allowed", "agent invocation is not allowed")
 		}
+		var squadID pgtype.UUID
+		if native && delegation.SquadID != "" {
+			parsedSquadID, parseErr := util.ParseUUID(delegation.SquadID)
+			if parseErr != nil {
+				return RequirementActionResponse{}, requirementSourceLinkUnavailable("native requirement squad is invalid")
+			}
+			squadID = parsedSquadID
+			squad, squadErr := q.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{ID: squadID, WorkspaceID: actor.WorkspaceID})
+			if errors.Is(squadErr, pgx.ErrNoRows) {
+				return RequirementActionResponse{}, newRequirementError(http.StatusNotFound, "squad_not_found", "squad not found")
+			}
+			if squadErr != nil {
+				return RequirementActionResponse{}, fmt.Errorf("load requirement approve squad: %w", squadErr)
+			}
+			if squad.ArchivedAt.Valid || squad.LeaderID != row.AgentID {
+				return RequirementActionResponse{}, newRequirementError(http.StatusConflict, "squad_not_available", "requirement squad is archived or its leader changed")
+			}
+		}
 		candidate, err := q.LockLatestRequirementCandidate(ctx, db.LockLatestRequirementCandidateParams{
 			WorkspaceID: actor.WorkspaceID, RequirementID: row.ID,
 		})
@@ -119,24 +143,41 @@ func (s *RequirementService) ApproveRequirement(ctx context.Context, actor Requi
 		if err := json.Unmarshal(candidate.Snapshot, &snapshot); err != nil {
 			return RequirementActionResponse{}, requirementBadRequest("requirement_candidate_invalid", "invalid candidate snapshot")
 		}
-		snapshotSource, channelSource, err := loadRequirementApproveSource(ctx, q, row)
-		if err != nil {
-			return RequirementActionResponse{}, err
-		}
-		attachmentIDs, err := resolveRequirementCandidateAttachments(ctx, q, row, snapshot.AttachmentIDs, snapshotSource.Attachments)
-		if err != nil {
-			return RequirementActionResponse{}, err
+		var snapshotSource yixiezuo.Snapshot
+		var channelSource *ChannelIssueSource
+		var attachmentIDs []pgtype.UUID
+		if native {
+			if len(snapshot.AttachmentIDs) > 0 {
+				return RequirementActionResponse{}, requirementAttachmentUnavailable("native delegations do not have source attachments")
+			}
+		} else {
+			snapshotSource, channelSource, err = loadRequirementApproveSource(ctx, q, row)
+			if err != nil {
+				return RequirementActionResponse{}, err
+			}
+			attachmentIDs, err = resolveRequirementCandidateAttachments(ctx, q, row, snapshot.AttachmentIDs, snapshotSource.Attachments)
+			if err != nil {
+				return RequirementActionResponse{}, err
+			}
 		}
 		workspace, err := q.GetWorkspace(ctx, actor.WorkspaceID)
 		if err != nil {
 			return RequirementActionResponse{}, fmt.Errorf("load requirement approve workspace: %w", err)
 		}
+		assigneeType, assigneeID := "agent", row.AgentID
+		originType, originID := "requirement_chat", row.ChatSessionID
+		if native {
+			if squadID.Valid {
+				assigneeType, assigneeID = "squad", squadID
+			}
+			originType, originID = "requirement_delegation", row.ID
+		}
 		createParams = IssueCreateParams{
 			WorkspaceID: actor.WorkspaceID, Title: snapshot.Goal, Description: pgtype.Text{String: string(candidate.Snapshot), Valid: true},
 			Status: "todo", Priority: "medium",
-			AssigneeType: pgtype.Text{String: "agent", Valid: true}, AssigneeID: row.AgentID,
+			AssigneeType: pgtype.Text{String: assigneeType, Valid: true}, AssigneeID: assigneeID,
 			CreatorType: "member", CreatorID: actor.UserID, ProjectID: row.ProjectID,
-			AllowDuplicate: true, OriginType: pgtype.Text{String: "requirement_chat", Valid: true}, OriginID: row.ChatSessionID,
+			AllowDuplicate: true, OriginType: pgtype.Text{String: originType, Valid: true}, OriginID: originID,
 			AttachmentIDs: attachmentIDs,
 		}
 		createOpts = IssueCreateOpts{
@@ -169,8 +210,10 @@ func (s *RequirementService) ApproveRequirement(ctx context.Context, actor Requi
 				return RequirementActionResponse{}, requirementSourceLinkUnavailable("channel source association could not be verified")
 			}
 		}
-		if err := createRequirementYixiezuoImport(ctx, q, actor, created.Issue, snapshotSource); err != nil {
-			return RequirementActionResponse{}, err
+		if !native {
+			if err := createRequirementYixiezuoImport(ctx, q, actor, created.Issue, snapshotSource); err != nil {
+				return RequirementActionResponse{}, err
+			}
 		}
 		approval, err := q.CreateRequirementApproval(ctx, db.CreateRequirementApprovalParams{
 			WorkspaceID: actor.WorkspaceID, RequirementID: row.ID, CandidateID: candidate.ID,
@@ -203,6 +246,9 @@ func (s *RequirementService) ApproveRequirement(ctx context.Context, actor Requi
 		}
 		if initialTask.RequirementID != row.ID || initialTask.Mode != "execute" || initialTask.IssueID != created.Issue.ID {
 			return RequirementActionResponse{}, errors.New("requirement approve: initial task binding is invalid")
+		}
+		if native && (initialTask.AgentID != row.AgentID || initialTask.SquadID != squadID || initialTask.IsLeaderTask != squadID.Valid) {
+			return RequirementActionResponse{}, errors.New("requirement approve: initial squad leader task binding is invalid")
 		}
 		return RequirementActionResponse{
 			RequirementID: row.ID, Status: http.StatusOK, Body: body,

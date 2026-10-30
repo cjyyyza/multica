@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -18,10 +19,32 @@ import (
 var requirementCmd = newRequirementCommand()
 
 func newRequirementCommand() *cobra.Command {
-	root := &cobra.Command{Use: "requirement", Short: "Work with requirement execution"}
+	root := &cobra.Command{Use: "requirement", Short: "Plan, follow and answer requirements", PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+		strict, _ := cmd.Flags().GetBool("strict")
+		if strict {
+			if strings.TrimSpace(os.Getenv("MULTICA_TOKEN")) == "" {
+				return errors.New("strict mode requires MULTICA_TOKEN; profile credentials are disabled")
+			}
+			if strings.TrimSpace(cli.FlagOrEnv(cmd, "workspace-id", "MULTICA_WORKSPACE_ID", "")) == "" {
+				return errors.New("strict mode requires --workspace-id or MULTICA_WORKSPACE_ID; profile workspace is disabled")
+			}
+			if tryResolveExplicitServerURL(cmd) == "" {
+				return errors.New("strict mode requires --server-url or MULTICA_SERVER_URL; profile server is disabled")
+			}
+		}
+		output, _ := cmd.Flags().GetString("output")
+		if output != "json" && output != "table" {
+			return fmt.Errorf("unsupported output format %q", output)
+		}
+		if output != "json" && requirementJSONOnlyCommand(cmd.Name()) {
+			return fmt.Errorf("requirement %s supports only --output json", cmd.Name())
+		}
+		return nil
+	}}
+	root.PersistentFlags().Bool("strict", false, "Require explicit server, token and workspace; never fall back to a profile")
 	get := &cobra.Command{
 		Use:   "get <requirement-id>",
-		Short: "Read the requirement scoped to the current task",
+		Short: "Read a requirement with member credentials or the current task token",
 		Args:  exactArgs(1),
 		RunE:  runRequirementGet,
 	}
@@ -52,6 +75,7 @@ func newRequirementCommand() *cobra.Command {
 	block.Flags().Bool("allow-external-file", false, "Allow --question-file outside the current working directory")
 	block.Flags().String("output", "json", "Output format: table or json")
 	root.AddCommand(get, candidate, block)
+	addRequirementMemberCommands(root)
 	return root
 }
 
@@ -64,6 +88,11 @@ type requirementCLIDetail struct {
 	AgentID       *string `json:"agentId"`
 	ProjectID     *string `json:"projectId"`
 	ChatSessionID *string `json:"chatSessionId"`
+	IssueID       *string `json:"issueId"`
+	IssueDeleted  bool    `json:"issueDeleted"`
+	Run           *struct {
+		Status string `json:"status"`
+	} `json:"run"`
 }
 
 func newRequirementTaskAPIClient(cmd *cobra.Command, invalidTokenMessage string) (*cli.APIClient, error) {
@@ -81,30 +110,28 @@ func newRequirementTaskAPIClient(cmd *cobra.Command, invalidTokenMessage string)
 }
 
 func requirementCLIPath(client *cli.APIClient, requirementID, suffix string) string {
+	if requirementID == "" {
+		return "/api/workspaces/" + url.PathEscape(client.WorkspaceID) + "/requirements" + suffix
+	}
 	return "/api/workspaces/" + url.PathEscape(client.WorkspaceID) + "/requirements/" + url.PathEscape(requirementID) + suffix
 }
 
 func runRequirementGet(cmd *cobra.Command, args []string) error {
-	client, err := newRequirementTaskAPIClient(cmd, "requirement get requires a daemon-managed task token")
+	client, err := newRequirementAPIClient(cmd, false)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := cli.APIContext(context.Background())
+	ctx, cancel := cli.APIContext(cmd.Context())
 	defer cancel()
 	var result json.RawMessage
 	if err := client.GetJSON(ctx, requirementCLIPath(client, args[0], ""), &result); err != nil {
 		return fmt.Errorf("get requirement: %w", err)
 	}
-	output, _ := cmd.Flags().GetString("output")
-	if output == "json" {
-		return cli.PrintJSON(cmd.OutOrStdout(), result)
+	detail, err := decodeRequirementCLI(result)
+	if err != nil {
+		return err
 	}
-	var detail requirementCLIDetail
-	if err := json.Unmarshal(result, &detail); err != nil {
-		return fmt.Errorf("decode requirement: %w", err)
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\trevision %d\n", detail.ID, detail.State, detail.Revision)
-	return nil
+	return printRequirementCLI(cmd, result, &detail)
 }
 
 func runRequirementCandidate(cmd *cobra.Command, args []string) error {

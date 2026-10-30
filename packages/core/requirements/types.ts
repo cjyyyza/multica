@@ -22,6 +22,35 @@ export interface CreateRequirementRequest {
   intakeOperationId?: string | null;
 }
 
+export interface RequirementDelegationCandidateInput {
+  goal: string;
+  nonGoals: string[];
+  scope: string[];
+  constraints: string[];
+  acceptanceCriteria: string[];
+  projectId: string | null;
+}
+
+export interface CreateRequirementDelegationRequest {
+  externalRef: string;
+  squadId: string;
+  candidate: RequirementDelegationCandidateInput;
+  participants?: RequirementParticipantInput[];
+}
+
+export type CreateNativeRequirementRequest = {
+  externalRef: string;
+  idea: string;
+  projectId?: string | null;
+  participants?: RequirementParticipantInput[];
+} & ({ agentId: string; squadId?: never } | { squadId: string; agentId?: never });
+
+export interface ListRequirementsInput {
+  externalRef?: string;
+  limit?: number;
+  offset?: number;
+}
+
 export interface UpdateRequirementParticipantsRequest {
   expectedRevision: number;
   participants: RequirementParticipantInput[];
@@ -29,6 +58,17 @@ export interface UpdateRequirementParticipantsRequest {
 
 export interface OpenRequirementRequest {
   expectedRevision: number;
+}
+
+export interface SendRequirementMessageRequest {
+  expectedRevision: number;
+  content: string;
+}
+
+export interface ReplyRequirementRequest {
+  expectedIssueRevision: number;
+  questionCommentId: string;
+  content: string;
 }
 
 export interface SubmitRequirementCandidateRequest {

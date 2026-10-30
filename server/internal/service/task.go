@@ -727,15 +727,15 @@ var ErrAttributionFailClosed = errors.New("attribution: no precise accountable h
 var ErrDuplicatePendingTask = errors.New("a pending task for this issue and agent already exists")
 
 // isDuplicatePendingTaskErr reports whether err is the pending-task unique-index
-// violation (a concurrent enqueue won the race). Accept both names while v1 and
-// v2 can coexist during a rolling deploy.
+// violation (a concurrent enqueue won the race). Replacement guards overlap
+// during online migrations, so every live guard name has the same outcome.
 func isDuplicatePendingTaskErr(err error) bool {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
 		return false
 	}
 	switch pgErr.ConstraintName {
-	case "idx_one_pending_task_per_issue_agent", "idx_one_pending_task_per_issue_agent_v2", "idx_one_pending_task_per_issue_agent_thread":
+	case "idx_one_pending_task_per_issue_agent", "idx_one_pending_task_per_issue_agent_v2", "idx_one_pending_task_per_issue_agent_thread", "idx_requirement_delegation_pending_guard":
 		return true
 	default:
 		return false
@@ -1159,6 +1159,19 @@ func (s *TaskService) createDeferredChannelIssueTaskWithQueries(ctx context.Cont
 	return txService.enqueueIssueTask(ctx, issue, pgtype.UUID{}, false, "", pgtype.UUID{}, pgtype.UUID{}, pgtype.Timestamptz{Time: fireAt, Valid: true}, OriginDerived)
 }
 
+func (s *TaskService) createDeferredRequirementIssueTaskWithQueries(ctx context.Context, q *db.Queries, issue db.Issue, fireAt time.Time, actorUserID, commentID pgtype.UUID) (db.AgentTaskQueue, error) {
+	if issue.AssigneeType.Valid && issue.AssigneeType.String == "squad" {
+		squad, err := q.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{ID: issue.AssigneeID, WorkspaceID: issue.WorkspaceID})
+		if err != nil {
+			return db.AgentTaskQueue{}, fmt.Errorf("load requirement squad leader: %w", err)
+		}
+		txService := &TaskService{Queries: q}
+		return txService.enqueueMentionTaskWithCommentPlan(ctx, issue, squad.LeaderID, commentID, nil, true, squad.ID, false, "", actorUserID, pgtype.UUID{}, pgtype.Timestamptz{Time: fireAt, Valid: true}, OriginDerived)
+	}
+	txService := &TaskService{Queries: q}
+	return txService.enqueueIssueTask(ctx, issue, commentID, false, "", pgtype.UUID{}, pgtype.UUID{}, pgtype.Timestamptz{Time: fireAt, Valid: true}, OriginDerived)
+}
+
 // hydrateDeferredChannelIssueTaskOverlay fills the optional Composio overlay
 // after the issue+task transaction commits. The conditional update refuses to
 // overwrite a comment merge that won the post-commit race and already
@@ -1180,6 +1193,7 @@ func (s *TaskService) hydrateDeferredChannelIssueTaskOverlay(ctx context.Context
 		RuntimeMcpOverlay:        overlay.Overlay,
 		RuntimeConnectedApps:     overlay.ConnectedApps,
 		ExpectedOriginatorUserID: task.OriginatorUserID,
+		ExpectedTriggerCommentID: task.TriggerCommentID,
 	})
 	if err != nil {
 		return fmt.Errorf("set deferred channel issue task overlay: %w", err)
@@ -1323,30 +1337,31 @@ func (s *TaskService) enqueueIssueTaskWithCommentPlan(ctx context.Context, issue
 	var task db.AgentTaskQueue
 	if fireAt.Valid {
 		task, err = s.Queries.CreateDeferredChannelIssueTask(ctx, db.CreateDeferredChannelIssueTaskParams{
-			ID:                   dbid.NewV7(),
-			AgentID:              createParams.AgentID,
-			RuntimeID:            createParams.RuntimeID,
-			IssueID:              createParams.IssueID,
-			Priority:             createParams.Priority,
-			TriggerCommentID:     createParams.TriggerCommentID,
-			CoalescedCommentIds:  createParams.CoalescedCommentIds,
-			TriggerSummary:       createParams.TriggerSummary,
-			ForceFreshSession:    createParams.ForceFreshSession,
-			IsLeaderTask:         createParams.IsLeaderTask,
-			HandoffNote:          createParams.HandoffNote,
-			SquadID:              createParams.SquadID,
-			HeadSha:              createParams.HeadSha,
-			OriginatorUserID:     createParams.OriginatorUserID,
-			AccountableUserID:    createParams.AccountableUserID,
-			RuntimeMcpOverlay:    createParams.RuntimeMcpOverlay,
-			RuntimeConnectedApps: createParams.RuntimeConnectedApps,
-			OriginatorSource:     createParams.OriginatorSource,
-			DelegatedFromTaskID:  createParams.DelegatedFromTaskID,
-			RuleVersionID:        createParams.RuleVersionID,
-			RerunOfTaskID:        createParams.RerunOfTaskID,
-			TriggerEvidenceKind:  createParams.TriggerEvidenceKind,
-			TriggerEvidenceRefID: createParams.TriggerEvidenceRefID,
-			FireAt:               fireAt,
+			ID:                    dbid.NewV7(),
+			AgentID:               createParams.AgentID,
+			RuntimeID:             createParams.RuntimeID,
+			IssueID:               createParams.IssueID,
+			Priority:              createParams.Priority,
+			TriggerCommentID:      createParams.TriggerCommentID,
+			CoalescedCommentIds:   createParams.CoalescedCommentIds,
+			TriggerSummary:        createParams.TriggerSummary,
+			ForceFreshSession:     createParams.ForceFreshSession,
+			IsLeaderTask:          createParams.IsLeaderTask,
+			HandoffNote:           createParams.HandoffNote,
+			SquadID:               createParams.SquadID,
+			HeadSha:               createParams.HeadSha,
+			OriginatorUserID:      createParams.OriginatorUserID,
+			AccountableUserID:     createParams.AccountableUserID,
+			RuntimeMcpOverlay:     createParams.RuntimeMcpOverlay,
+			RuntimeConnectedApps:  createParams.RuntimeConnectedApps,
+			OriginatorSource:      createParams.OriginatorSource,
+			DelegatedFromTaskID:   createParams.DelegatedFromTaskID,
+			RuleVersionID:         createParams.RuleVersionID,
+			RerunOfTaskID:         createParams.RerunOfTaskID,
+			TriggerEvidenceKind:   createParams.TriggerEvidenceKind,
+			TriggerEvidenceRefID:  createParams.TriggerEvidenceRefID,
+			RequirementDelegation: pgtype.Bool{Bool: issue.OriginType.String == "requirement_delegation", Valid: true},
+			FireAt:                fireAt,
 		})
 	} else {
 		task, err = s.Queries.CreateAgentTask(ctx, createParams)
@@ -1430,10 +1445,10 @@ func (s *TaskService) EnqueueTaskForSquadLeaderWithHandoff(ctx context.Context, 
 }
 
 func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, squadID pgtype.UUID, forceFreshSession bool, handoffNote string, actorUserID pgtype.UUID, rerunOfTaskID pgtype.UUID, origin RunOrigin) (db.AgentTaskQueue, error) {
-	return s.enqueueMentionTaskWithCommentPlan(ctx, issue, agentID, triggerCommentID, nil, isLeader, squadID, forceFreshSession, handoffNote, actorUserID, rerunOfTaskID, origin)
+	return s.enqueueMentionTaskWithCommentPlan(ctx, issue, agentID, triggerCommentID, nil, isLeader, squadID, forceFreshSession, handoffNote, actorUserID, rerunOfTaskID, pgtype.Timestamptz{}, origin)
 }
 
-func (s *TaskService) enqueueMentionTaskWithCommentPlan(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, coalescedCommentIDs []pgtype.UUID, isLeader bool, squadID pgtype.UUID, forceFreshSession bool, handoffNote string, actorUserID pgtype.UUID, rerunOfTaskID pgtype.UUID, origin RunOrigin) (db.AgentTaskQueue, error) {
+func (s *TaskService) enqueueMentionTaskWithCommentPlan(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, coalescedCommentIDs []pgtype.UUID, isLeader bool, squadID pgtype.UUID, forceFreshSession bool, handoffNote string, actorUserID pgtype.UUID, rerunOfTaskID pgtype.UUID, fireAt pgtype.Timestamptz, origin RunOrigin) (db.AgentTaskQueue, error) {
 	if err := guardIssueNotInTriage(ctx, s.Queries, issue.ID, origin); err != nil {
 		return db.AgentTaskQueue{}, err
 	}
@@ -1466,7 +1481,7 @@ func (s *TaskService) enqueueMentionTaskWithCommentPlan(ctx context.Context, iss
 	originatorUserID := attr.UserID
 	runtimeMCPOverlay := s.buildRuntimeMCPOverlay(ctx, originatorUserID, agent)
 	attrSource, attrDelegatedFrom, attrEvidenceKind, attrEvidenceRef := attributionCreateParams(attr)
-	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+	createParams := db.CreateAgentTaskParams{
 		ID:                   dbid.NewV7(),
 		AgentID:              agentID,
 		RuntimeID:            agent.RuntimeID,
@@ -1492,7 +1507,39 @@ func (s *TaskService) enqueueMentionTaskWithCommentPlan(ctx context.Context, iss
 		// Stamp the reviewed head so dedup can distinguish this run's target
 		// from a later request against a new HEAD (TEN-356).
 		HeadSha: headShaText(s.ResolveIssueReviewSHA(ctx, issue.ID)),
-	})
+	}
+	var task db.AgentTaskQueue
+	if fireAt.Valid {
+		task, err = s.Queries.CreateDeferredChannelIssueTask(ctx, db.CreateDeferredChannelIssueTaskParams{
+			ID:                    dbid.NewV7(),
+			AgentID:               createParams.AgentID,
+			RuntimeID:             createParams.RuntimeID,
+			IssueID:               createParams.IssueID,
+			Priority:              createParams.Priority,
+			TriggerCommentID:      createParams.TriggerCommentID,
+			CoalescedCommentIds:   createParams.CoalescedCommentIds,
+			TriggerSummary:        createParams.TriggerSummary,
+			ForceFreshSession:     createParams.ForceFreshSession,
+			IsLeaderTask:          createParams.IsLeaderTask,
+			HandoffNote:           createParams.HandoffNote,
+			SquadID:               createParams.SquadID,
+			HeadSha:               createParams.HeadSha,
+			OriginatorUserID:      createParams.OriginatorUserID,
+			AccountableUserID:     createParams.AccountableUserID,
+			RuntimeMcpOverlay:     createParams.RuntimeMcpOverlay,
+			RuntimeConnectedApps:  createParams.RuntimeConnectedApps,
+			OriginatorSource:      createParams.OriginatorSource,
+			DelegatedFromTaskID:   createParams.DelegatedFromTaskID,
+			RuleVersionID:         createParams.RuleVersionID,
+			RerunOfTaskID:         createParams.RerunOfTaskID,
+			TriggerEvidenceKind:   createParams.TriggerEvidenceKind,
+			TriggerEvidenceRefID:  createParams.TriggerEvidenceRefID,
+			RequirementDelegation: pgtype.Bool{Bool: issue.OriginType.String == "requirement_delegation", Valid: true},
+			FireAt:                fireAt,
+		})
+	} else {
+		task, err = s.Queries.CreateAgentTask(ctx, createParams)
+	}
 	if err != nil {
 		// A concurrent enqueue for the same (issue, agent) won the race and the
 		// unique index rejected this insert. That is benign — a sibling run
@@ -1508,6 +1555,9 @@ func (s *TaskService) enqueueMentionTaskWithCommentPlan(ctx context.Context, iss
 	}
 
 	slog.Info("mention task enqueued", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "is_leader_task", isLeader)
+	if fireAt.Valid {
+		return task, nil
+	}
 	// See EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
 	s.NotifyTaskEnqueued(ctx, task)
@@ -2354,168 +2404,11 @@ func (s *TaskService) SendDirectChatMessage(
 	if err != nil {
 		return nil, err
 	}
-	attrSource, _, attrEvidenceKind, attrEvidenceRef := attributionCreateParams(attr)
-
-	var out DirectChatSendResult
+	var out *DirectChatSendResult
 	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
-		// Serialise this send against a concurrent runtime rebind of the same
-		// session (MUL-5163). The lock must be taken first and the agent re-read
-		// under it: the runtime_id the caller loaded can already be stale by the
-		// time we get here, and a send blocked behind a rebind would otherwise
-		// resume and stamp its task with the runtime the switch just moved away
-		// from — leaving the user with a "switched" confirmation and a reply
-		// running on the old runtime. Locking chat_session first also matches the
-		// delete path's lock order, so the two cannot deadlock.
-		if _, err := qtx.LockChatSessionForRuntimeBind(ctx, session.ID); err != nil {
-			return fmt.Errorf("lock chat session: %w", err)
-		}
-		currentSession, err := qtx.GetChatSession(ctx, session.ID)
-		if err != nil {
-			return fmt.Errorf("reload chat session: %w", err)
-		}
-		if currentSession.Status != "active" {
-			return ErrChatSessionArchived
-		}
-		if err := s.gateRequirementChatTask(ctx, qtx, currentSession, true); err != nil {
-			return err
-		}
-		carrier, err := qtx.GetAgentForClaimUpdate(ctx, session.AgentID)
-		if err != nil {
-			return fmt.Errorf("reload chat agent: %w", err)
-		}
-		if carrier.ArchivedAt.Valid {
-			return ErrChatTaskAgentArchived
-		}
-		if !carrier.RuntimeID.Valid {
-			return ErrChatTaskAgentNoRuntime
-		}
-
-		// The database status of every newly-created task is "queued" until a
-		// daemon claims it. Product queue semantics are positional instead: this
-		// send is a follow-up only when another visible task in the same session
-		// is already ahead of it. Deferred retries count because they resume an
-		// older turn before this one. The session + agent locks serialize sibling
-		// sends, retries, terminal writes, and claims around this read.
-		queued, err := qtx.HasPendingChatTurnForSession(ctx, session.ID)
-		if err != nil {
-			return fmt.Errorf("check direct chat queue position: %w", err)
-		}
-		out.Queued = queued
-
-		task, err := qtx.CreateChatTask(ctx, db.CreateChatTaskParams{
-			ID:                   dbid.NewV7(),
-			AgentID:              session.AgentID,
-			RuntimeID:            carrier.RuntimeID,
-			Priority:             2, // medium priority for chat; matches EnqueueChatTask
-			ChatSessionID:        session.ID,
-			InitiatorUserID:      initiatorUserID,
-			OriginatorUserID:     attr.UserID,
-			AccountableUserID:    attr.AccountableUserID,
-			ForceFreshSession:    pgtype.Bool{Bool: false, Valid: true},
-			RuntimeMcpOverlay:    overlay.Overlay,
-			RuntimeConnectedApps: overlay.ConnectedApps,
-			OriginatorSource:     attrSource,
-			TriggerEvidenceKind:  attrEvidenceKind,
-			TriggerEvidenceRefID: attrEvidenceRef,
-		})
-		if err != nil {
-			return fmt.Errorf("create direct chat task: %w", err)
-		}
-		// Claim this task's own input batch (chat_input_task_id = id) in the same
-		// transaction, before the user message is written with task_id = task.id.
-		task, err = qtx.SetChatTaskInputOwnerSelf(ctx, task.ID)
-		if err != nil {
-			return fmt.Errorf("stamp direct chat input owner: %w", err)
-		}
-		out.Task = task
-
-		// Adopt the onboarding kickoff, if this session still has an unowned one.
-		// It is written by OpenMikaOnboardingChat with no task, so this is the
-		// only thing that ever delivers it to a runtime — and it must happen
-		// before the member's own row is written, so the batch reads as
-		// "context, then their message" once ordered by created_at.
-		//
-		// A no-op for every other session: only Mika onboarding writes that kind,
-		// and only the first send of one finds it unowned.
-		if err := qtx.AdoptOrphanOnboardingKickoff(ctx, db.AdoptOrphanOnboardingKickoffParams{
-			ChatSessionID: session.ID,
-			TaskID:        task.ID,
-		}); err != nil {
-			return fmt.Errorf("adopt onboarding kickoff: %w", err)
-		}
-
-		// Initialize an explicitly empty Chat before inserting its first public
-		// user message. The CAS query also protects a manual rename and competing
-		// first send; keeping it in this transaction prevents a title-only commit.
-		if title := chattitle.Derive(content); title != "" {
-			if _, err := qtx.InitializeChatSessionTitle(ctx, db.InitializeChatSessionTitleParams{ID: session.ID, Title: title}); err == nil {
-				out.InitialTitle = title
-			} else if !errors.Is(err, pgx.ErrNoRows) {
-				return fmt.Errorf("initialize direct chat title: %w", err)
-			}
-		}
-
-		// Create the user message already owned by this task (task_id = task.id),
-		// so it belongs to this immutable input batch the instant it exists.
-		msg, err := qtx.CreateChatMessage(ctx, db.CreateChatMessageParams{
-			ID:            dbid.NewV7(),
-			ChatSessionID: session.ID,
-			Role:          "user",
-			Content:       content,
-			TaskID:        task.ID,
-			MessageKind:   pgtype.Text{String: protocol.ChatMessageKindMessage, Valid: true},
-		})
-		if err != nil {
-			return fmt.Errorf("create user chat message: %w", err)
-		}
-		out.Message = msg
-
-		if len(attachmentIDs) > 0 {
-			bound, err := qtx.LinkAttachmentsToChatMessage(ctx, db.LinkAttachmentsToChatMessageParams{
-				ChatMessageID: msg.ID,
-				ChatSessionID: session.ID,
-				WorkspaceID:   session.WorkspaceID,
-				UploaderType:  uploaderType,
-				UploaderID:    uploaderID,
-				AttachmentIds: attachmentIDs,
-			})
-			if err != nil {
-				return fmt.Errorf("link chat attachments: %w", err)
-			}
-			out.BoundAttachmentIDs = bound
-
-			// An explicitly empty /new Chat can receive its first turn from a
-			// first-party client. For an attachment-only turn, initialize the
-			// title from the first attachment that was actually bound. The media
-			// title CAS runs after the message insert by design and still refuses
-			// to overwrite a manual rename or a competing first message.
-			if out.InitialTitle == "" && strings.TrimSpace(content) == "" && len(bound) > 0 {
-				attachments, err := qtx.ListAttachmentsByChatMessage(ctx, db.ListAttachmentsByChatMessageParams{
-					ChatMessageID: msg.ID,
-					WorkspaceID:   session.WorkspaceID,
-				})
-				if err != nil {
-					return fmt.Errorf("list bound chat attachments for title: %w", err)
-				}
-				if len(attachments) > 0 {
-					title := chattitle.Derive(attachments[0].Filename)
-					if title != "" {
-						if _, err := qtx.InitializeChatSessionMediaTitle(ctx, db.InitializeChatSessionMediaTitleParams{
-							ID: session.ID, MessageID: msg.ID, Title: title,
-						}); err == nil {
-							out.InitialTitle = title
-						} else if !errors.Is(err, pgx.ErrNoRows) {
-							return fmt.Errorf("initialize direct attachment chat title: %w", err)
-						}
-					}
-				}
-			}
-		}
-
-		if err := qtx.TouchChatSession(ctx, session.ID); err != nil {
-			return fmt.Errorf("touch chat session: %w", err)
-		}
-		return nil
+		var err error
+		out, err = s.sendDirectChatMessageWithQueries(ctx, qtx, session, initiatorUserID, content, attachmentIDs, uploaderType, uploaderID, overlay, attr)
+		return err
 	}); err != nil {
 		slog.Error("direct chat send failed",
 			"chat_session_id", util.UUIDToString(session.ID),
@@ -2531,6 +2424,179 @@ func (s *TaskService) SendDirectChatMessage(
 	// Notify only after commit. See EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, out.Task)
 	s.NotifyTaskEnqueued(ctx, out.Task)
+	return out, nil
+}
+
+// SendPreparedRequirementChatMessageInTx preserves the direct-chat input batch
+// in the Requirement action transaction. The caller publishes only after commit.
+func (s *TaskService) SendPreparedRequirementChatMessageInTx(ctx context.Context, tx pgx.Tx, session db.ChatSession, actorID pgtype.UUID, content string, prepared PreparedChatTaskEnqueue) (*DirectChatSendResult, error) {
+	if tx == nil || !actorID.Valid {
+		return nil, errors.New("requirement reply requires a transaction and a member")
+	}
+	attr := attribution.DirectHumanRun(actorID, attribution.EvidenceChat, session.ID)
+	return s.sendDirectChatMessageWithQueries(ctx, s.Queries.WithTx(tx), session, actorID, content, nil, "member", actorID, prepared.runtimeOverlay, attr)
+}
+
+func (s *TaskService) sendDirectChatMessageWithQueries(ctx context.Context, qtx *db.Queries, session db.ChatSession, initiatorUserID pgtype.UUID, content string, attachmentIDs []pgtype.UUID, uploaderType string, uploaderID pgtype.UUID, overlay runtimeMCPOverlayData, attr attribution.Result) (*DirectChatSendResult, error) {
+	attrSource, _, attrEvidenceKind, attrEvidenceRef := attributionCreateParams(attr)
+	var out DirectChatSendResult
+	// Serialise this send against a concurrent runtime rebind of the same
+	// session (MUL-5163). The lock must be taken first and the agent re-read
+	// under it: the runtime_id the caller loaded can already be stale by the
+	// time we get here, and a send blocked behind a rebind would otherwise
+	// resume and stamp its task with the runtime the switch just moved away
+	// from — leaving the user with a "switched" confirmation and a reply
+	// running on the old runtime. Locking chat_session first also matches the
+	// delete path's lock order, so the two cannot deadlock.
+	if _, err := qtx.LockChatSessionForRuntimeBind(ctx, session.ID); err != nil {
+		return nil, fmt.Errorf("lock chat session: %w", err)
+	}
+	currentSession, err := qtx.GetChatSession(ctx, session.ID)
+	if err != nil {
+		return nil, fmt.Errorf("reload chat session: %w", err)
+	}
+	if currentSession.Status != "active" {
+		return nil, ErrChatSessionArchived
+	}
+	if err := s.gateRequirementChatTask(ctx, qtx, currentSession, true); err != nil {
+		return nil, err
+	}
+	carrier, err := qtx.GetAgentForClaimUpdate(ctx, session.AgentID)
+	if err != nil {
+		return nil, fmt.Errorf("reload chat agent: %w", err)
+	}
+	if carrier.ArchivedAt.Valid {
+		return nil, ErrChatTaskAgentArchived
+	}
+	if !carrier.RuntimeID.Valid {
+		return nil, ErrChatTaskAgentNoRuntime
+	}
+
+	// The database status of every newly-created task is "queued" until a
+	// daemon claims it. Product queue semantics are positional instead: this
+	// send is a follow-up only when another visible task in the same session
+	// is already ahead of it. Deferred retries count because they resume an
+	// older turn before this one. The session + agent locks serialize sibling
+	// sends, retries, terminal writes, and claims around this read.
+	queued, err := qtx.HasPendingChatTurnForSession(ctx, session.ID)
+	if err != nil {
+		return nil, fmt.Errorf("check direct chat queue position: %w", err)
+	}
+	out.Queued = queued
+
+	task, err := qtx.CreateChatTask(ctx, db.CreateChatTaskParams{
+		ID:                   dbid.NewV7(),
+		AgentID:              session.AgentID,
+		RuntimeID:            carrier.RuntimeID,
+		Priority:             2, // medium priority for chat; matches EnqueueChatTask
+		ChatSessionID:        session.ID,
+		InitiatorUserID:      initiatorUserID,
+		OriginatorUserID:     attr.UserID,
+		AccountableUserID:    attr.AccountableUserID,
+		ForceFreshSession:    pgtype.Bool{Bool: false, Valid: true},
+		RuntimeMcpOverlay:    overlay.Overlay,
+		RuntimeConnectedApps: overlay.ConnectedApps,
+		OriginatorSource:     attrSource,
+		TriggerEvidenceKind:  attrEvidenceKind,
+		TriggerEvidenceRefID: attrEvidenceRef,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create direct chat task: %w", err)
+	}
+	// Claim this task's own input batch (chat_input_task_id = id) in the same
+	// transaction, before the user message is written with task_id = task.id.
+	task, err = qtx.SetChatTaskInputOwnerSelf(ctx, task.ID)
+	if err != nil {
+		return nil, fmt.Errorf("stamp direct chat input owner: %w", err)
+	}
+	out.Task = task
+
+	// Adopt the onboarding kickoff, if this session still has an unowned one.
+	// It is written by OpenMikaOnboardingChat with no task, so this is the
+	// only thing that ever delivers it to a runtime — and it must happen
+	// before the member's own row is written, so the batch reads as
+	// "context, then their message" once ordered by created_at.
+	//
+	// A no-op for every other session: only Mika onboarding writes that kind,
+	// and only the first send of one finds it unowned.
+	if err := qtx.AdoptOrphanOnboardingKickoff(ctx, db.AdoptOrphanOnboardingKickoffParams{
+		ChatSessionID: session.ID,
+		TaskID:        task.ID,
+	}); err != nil {
+		return nil, fmt.Errorf("adopt onboarding kickoff: %w", err)
+	}
+
+	// Initialize an explicitly empty Chat before inserting its first public
+	// user message. The CAS query also protects a manual rename and competing
+	// first send; keeping it in this transaction prevents a title-only commit.
+	if title := chattitle.Derive(content); title != "" {
+		if _, err := qtx.InitializeChatSessionTitle(ctx, db.InitializeChatSessionTitleParams{ID: session.ID, Title: title}); err == nil {
+			out.InitialTitle = title
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("initialize direct chat title: %w", err)
+		}
+	}
+
+	// Create the user message already owned by this task (task_id = task.id),
+	// so it belongs to this immutable input batch the instant it exists.
+	msg, err := qtx.CreateChatMessage(ctx, db.CreateChatMessageParams{
+		ID:            dbid.NewV7(),
+		ChatSessionID: session.ID,
+		Role:          "user",
+		Content:       content,
+		TaskID:        task.ID,
+		MessageKind:   pgtype.Text{String: protocol.ChatMessageKindMessage, Valid: true},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create user chat message: %w", err)
+	}
+	out.Message = msg
+
+	if len(attachmentIDs) > 0 {
+		bound, err := qtx.LinkAttachmentsToChatMessage(ctx, db.LinkAttachmentsToChatMessageParams{
+			ChatMessageID: msg.ID,
+			ChatSessionID: session.ID,
+			WorkspaceID:   session.WorkspaceID,
+			UploaderType:  uploaderType,
+			UploaderID:    uploaderID,
+			AttachmentIds: attachmentIDs,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("link chat attachments: %w", err)
+		}
+		out.BoundAttachmentIDs = bound
+
+		// An explicitly empty /new Chat can receive its first turn from a
+		// first-party client. For an attachment-only turn, initialize the
+		// title from the first attachment that was actually bound. The media
+		// title CAS runs after the message insert by design and still refuses
+		// to overwrite a manual rename or a competing first message.
+		if out.InitialTitle == "" && strings.TrimSpace(content) == "" && len(bound) > 0 {
+			attachments, err := qtx.ListAttachmentsByChatMessage(ctx, db.ListAttachmentsByChatMessageParams{
+				ChatMessageID: msg.ID,
+				WorkspaceID:   session.WorkspaceID,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("list bound chat attachments for title: %w", err)
+			}
+			if len(attachments) > 0 {
+				title := chattitle.Derive(attachments[0].Filename)
+				if title != "" {
+					if _, err := qtx.InitializeChatSessionMediaTitle(ctx, db.InitializeChatSessionMediaTitleParams{
+						ID: session.ID, MessageID: msg.ID, Title: title,
+					}); err == nil {
+						out.InitialTitle = title
+					} else if !errors.Is(err, pgx.ErrNoRows) {
+						return nil, fmt.Errorf("initialize direct attachment chat title: %w", err)
+					}
+				}
+			}
+		}
+	}
+
+	if err := qtx.TouchChatSession(ctx, session.ID); err != nil {
+		return nil, fmt.Errorf("touch chat session: %w", err)
+	}
 	return &out, nil
 }
 
@@ -6113,7 +6179,7 @@ func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agen
 		util.UUIDToString(issue.AssigneeID) == util.UUIDToString(agentID) {
 		return s.enqueueIssueTaskWithCommentPlan(ctx, issue, triggerCommentID, coalescedCommentIDs, true, "", actorUserID, rerunOfTaskID, pgtype.Timestamptz{}, origin)
 	}
-	return s.enqueueMentionTaskWithCommentPlan(ctx, issue, agentID, triggerCommentID, coalescedCommentIDs, isLeader, squadID, true, "", actorUserID, rerunOfTaskID, origin)
+	return s.enqueueMentionTaskWithCommentPlan(ctx, issue, agentID, triggerCommentID, coalescedCommentIDs, isLeader, squadID, true, "", actorUserID, rerunOfTaskID, pgtype.Timestamptz{}, origin)
 }
 
 // The bulk terminal writes below are the sweeper, archive and daemon-recovery

@@ -20,6 +20,8 @@ daemon 在工作目录就绪、服务端确认任务进入 running 后，通过�
 
 候选仍由服务端验证并计算 digest，用户在 Multica Chat 审批后才创建唯一 Issue。此交接没有增加自动批准入口，也不改变 Execute 的文件交付方式。
 
+外部 OpenCode 可以通过原生 `requirement-requests` API 请求单 Agent 或 Squad 队长做上述 Plan，再读取候选、澄清和交付结果。OpenCode 是协调调用方，这不代表其 Multica provider 已获得原生 Plan 能力；Plan 仍按目标 provider 的能力闸门运行。原生来源不依赖易协作预览操作，后续批准与验收仍使用同一 Requirement 账本。
+
 本地目录绑定和自定义运行时仍不支持 Plan。daemon 在 P4 绑定或执行环境准备前检查这一边界，使用独立的 `plan_mode_unavailable` 原因说明本轮不会进入本地目录；修复 P4 登录不会使这一环境获得规划能力。
 
 Execute 的本轮上下文明确说明该 Issue 已由用户在 Multica Chat 批准，不能因 Issue 评论中没有批准文字而重复索要批准。任务凭证可读取自身 Requirement 的参与者和 Issue revision；读取仍校验 running 状态、Agent、Requirement、Issue 绑定及取消状态，不授予批准、验收或来源回写权限。

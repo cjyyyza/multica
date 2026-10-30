@@ -14,6 +14,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func enableRequirementFlowForTest(t *testing.T) {
@@ -123,6 +124,7 @@ func requirementRequest(userID, method, path string, body any, idempotencyKey st
 	req := testutil.JSONRequest(method, path, body)
 	req.Header.Set("X-User-ID", userID)
 	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+	req.Header.Set("X-Client-Capabilities", protocol.AppCapabilityRequirementCandidateProvenanceV1)
 	if idempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", idempotencyKey)
 	}

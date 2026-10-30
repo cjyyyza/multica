@@ -47,7 +47,15 @@
     "attachments": "Attachments",
     "file": "File",
     "unknown_attachment": "Unknown attachment ({{id}})",
-    "attachments_unavailable": "Some selected attachments are not present in the source preview. Approval is unavailable."
+    "attachments_unavailable": "Some selected attachments are not present in the source preview. Approval is unavailable.",
+    "squad": "Squad",
+    "squad_leader": "Squad leader",
+    "unknown_squad": "Unknown squad ({{id}})",
+    "source": "Candidate source",
+    "external_submission": "Externally submitted",
+    "planned_by_agent": "Planned by agent {{name}}",
+    "planned_by_leader": "Planned by squad leader {{name}}",
+    "loading_squad": "Loading squad…"
   },
   "approval": {
     "title": "Approve requirement",
@@ -58,7 +66,9 @@
     "stale": "The candidate or revision changed. Review the latest candidate before approving.",
     "review_latest": "Review latest candidate",
     "cancel": "Cancel",
-    "confirm": "Create Issue and start agent"
+    "confirm": "Create Issue and start agent",
+    "consequence_squad": "Creates one Issue and starts the squad leader. Review later changes in that Issue; start a new chat for an independent request.",
+    "confirm_squad": "Create Issue and start squad leader"
   },
   "review": {
     "title": "Review",
@@ -80,7 +90,10 @@
     "source_status": "Yixiezuo status",
     "keep_source_status": "Keep current status",
     "accept_stale": "The Issue changed. Close this dialog and review the latest version.",
-    "accept_confirm": "Accept and publish"
+    "accept_confirm": "Accept and publish",
+    "native_accept_title": "Accept delivery",
+    "native_accept_consequence": "Marks this requirement and its Issue done after your review.",
+    "native_accept_confirm": "Accept delivery"
   },
   "sync": {
     "title": "Sync status",
@@ -164,7 +177,8 @@
       "review": "Accept the delivery or request changes.",
       "done": "Accepted.",
       "cancelled": "Cancelled.",
-      "unknown": "Read the latest requirement before continuing."
+      "unknown": "Read the latest requirement before continuing.",
+      "approve_squad": "Review the candidate, then create the Issue and start the squad leader."
     },
     "sync_alert": "Source sync needs attention. Expand Details to handle it.",
     "sync_alert_detail": "Source sync needs attention: {{error}}"

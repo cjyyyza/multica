@@ -3665,11 +3665,11 @@ describe("IssueDetail requirement origin", () => {
     expect(mockApiObj.getRequirementByChat).not.toHaveBeenCalled();
   });
 
-  it("queries by requirement_id directly and routes lifecycle controls away from generic actions", async () => {
+  it.each(["requirement_chat", "requirement_delegation", "future_requirement_origin"])("queries by requirement_id and guards %s lifecycle controls", async (originType) => {
     mockApiObj.getIssue.mockResolvedValue({
       ...mockIssue,
       status: "in_review",
-      origin_type: "requirement_chat",
+      origin_type: originType,
       origin_id: "chat-1",
       requirement_id: "req-1",
     });

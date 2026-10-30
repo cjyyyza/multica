@@ -1792,8 +1792,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// disconnect are admin-gated in the group below.
 					r.Get("/vcs/connections", h.ListVCSConnections)
 					r.With(handler.RequireHumanActor).Post("/requirements", h.CreateRequirement)
+					r.With(handler.RequireHumanActor).Post("/requirement-delegations", h.CreateRequirementDelegation)
+					r.With(handler.RequireHumanActor).Post("/requirement-requests", h.CreateNativeRequirement)
 					r.Get("/requirements", h.GetRequirementByChat)
 					r.Get("/requirements/{requirementId}", h.GetRequirementByID)
+					r.With(handler.RequireHumanActor).Post("/requirements/{requirementId}/messages", h.SendRequirementMessage)
+					r.With(handler.RequireHumanActor).Post("/requirements/{requirementId}/replies", h.ReplyRequirement)
 					r.With(handler.RequireHumanActor).Post("/requirements/{requirementId}/participants", h.UpdateRequirementParticipants)
 					r.With(handler.RequireHumanActor).Post("/requirements/{requirementId}/open", h.OpenRequirement)
 					r.With(handler.RequireHumanActor).Post("/requirements/{requirementId}/approve", h.ApproveRequirement)

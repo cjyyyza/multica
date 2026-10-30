@@ -87,6 +87,22 @@ describe("RequirementCandidateSnapshotSchema", () => {
     expect(RequirementCandidateSnapshotSchema.safeParse({ ...snapshot, agentId: null }).success).toBe(false);
   });
 
+  it("accepts a native squad candidate without inventing a plan task", () => {
+    const parsed = RequirementDetailSchema.parse({
+      ...baseDetail,
+      squadId: "squad-1",
+      latestCandidate: {
+        id: "candidate-1",
+        requirementId: "req-1",
+        snapshot,
+        digest: "digest-1",
+        createdByTaskId: null,
+      },
+    });
+    expect(parsed.squadId).toBe("squad-1");
+    expect(parsed.latestCandidate?.createdByTaskId).toBeNull();
+  });
+
   it("drops a legacy candidate from detail without failing the whole record", () => {
     const parsed = RequirementDetailSchema.parse({
       ...baseDetail,

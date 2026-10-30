@@ -51,6 +51,20 @@ func createWakeupTaskFromReceipts(ctx context.Context, q *db.Queries, params cre
 	if params.RecoveryParentTaskID.Valid {
 		delegatedFromTaskID = params.RecoveryParentTaskID
 	}
+	var squadID pgtype.UUID
+	var leader pgtype.Bool
+	if w.RequirementID.Valid {
+		source, err := q.GetAgentTaskInWorkspace(ctx, db.GetAgentTaskInWorkspaceParams{ID: delegatedFromTaskID, WorkspaceID: w.WorkspaceID})
+		if err != nil {
+			return db.AgentTaskQueue{}, err
+		}
+		if source.RequirementID != w.RequirementID || source.IssueID != w.IssueID || source.AgentID != w.AgentID || source.Mode != "execute" {
+			return db.AgentTaskQueue{}, taskRequirementBindingErrorf("recovery source does not match its requirement question")
+		}
+		// A recovered leader keeps authority to dispatch and submit for review.
+		// Member and guest recoveries retain their original, narrower role.
+		squadID, leader = source.SquadID, pgtype.Bool{Bool: source.IsLeaderTask, Valid: true}
+	}
 	return q.CreateWakeupTask(ctx, db.CreateWakeupTaskParams{
 		ID: dbid.NewV7(), AgentID: w.AgentID, RuntimeID: params.Agent.RuntimeID, IssueID: w.IssueID,
 		Priority: priorityToInt(params.Issue.Priority), TriggerCommentID: triggerCommentID, CoalescedCommentIds: params.CoalescedCommentIDs,
@@ -59,5 +73,6 @@ func createWakeupTaskFromReceipts(ctx context.Context, q *db.Queries, params cre
 		OriginatorSource: pgtype.Text{String: "trigger_owner", Valid: true}, TriggerEvidenceKind: pgtype.Text{String: "issue_wakeup", Valid: true},
 		TriggerEvidenceRefID: w.ID, DelegatedFromTaskID: delegatedFromTaskID, WakeupContext: contextJSON,
 		RuntimeMcpOverlay: params.Overlay.Overlay, RuntimeConnectedApps: params.Overlay.ConnectedApps,
+		SquadID: squadID, IsLeaderTask: leader,
 	})
 }

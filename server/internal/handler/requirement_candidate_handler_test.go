@@ -89,7 +89,7 @@ func TestSubmitRequirementCandidateSuccessAndReplay(t *testing.T) {
 	if submitted.Revision != 3 || submitted.State != "awaiting_approval" || submitted.IntakeState != "awaiting_approval" {
 		t.Fatalf("candidate state = %+v", submitted)
 	}
-	if submitted.LatestCandidate == nil || submitted.LatestCandidate.Revision != 3 || submitted.LatestCandidate.CreatedByTaskID != taskID {
+	if submitted.LatestCandidate == nil || submitted.LatestCandidate.Revision != 3 || submitted.LatestCandidate.CreatedByTaskID == nil || *submitted.LatestCandidate.CreatedByTaskID != taskID {
 		t.Fatalf("latest candidate = %+v", submitted.LatestCandidate)
 	}
 	if submitted.LatestCandidate.Digest != expectedDigest {

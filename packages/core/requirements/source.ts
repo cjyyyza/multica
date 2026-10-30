@@ -2,7 +2,11 @@ import {
   YixiezuoSnapshotSchema,
   type YixiezuoSnapshot,
 } from "../yixiezuo/schemas";
-import type { RequirementCandidateSnapshot } from "./schemas";
+import type { RequirementCandidateSnapshot, RequirementDetail } from "./schemas";
+
+export function isNativeRequirement(detail: Pick<RequirementDetail, "sourceHost" | "sourceSnapshot">): boolean {
+  return detail.sourceHost === "multica" || detail.sourceSnapshot?.kind === "squad_delegation";
+}
 
 export function parseYixiezuoRequirementSnapshot(
   value: unknown,

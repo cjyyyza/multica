@@ -114,7 +114,7 @@ type RequirementCandidate struct {
 	Revision        int64           `json:"revision"`
 	Snapshot        json.RawMessage `json:"snapshot"`
 	Digest          string          `json:"digest"`
-	CreatedByTaskID string          `json:"createdByTaskId"`
+	CreatedByTaskID *string         `json:"createdByTaskId"`
 	CreatedAt       string          `json:"createdAt"`
 }
 
@@ -163,36 +163,38 @@ type RequirementDelivery struct {
 }
 
 type RequirementDetail struct {
-	ID                string                   `json:"id"`
-	WorkspaceID       string                   `json:"workspaceId"`
-	Revision          int64                    `json:"revision"`
-	State             string                   `json:"state"`
-	IntakeState       string                   `json:"intakeState"`
-	SourceHost        string                   `json:"sourceHost"`
-	ExternalID        string                   `json:"externalId"`
-	SourceUrl         *string                  `json:"sourceUrl"`
-	SourceSnapshot    json.RawMessage          `json:"sourceSnapshot"`
-	SourceDigest      *string                  `json:"sourceDigest"`
-	SourceLockVersion *int64                   `json:"sourceLockVersion"`
-	RequesterID       string                   `json:"requesterId"`
-	AgentID           *string                  `json:"agentId"`
-	ProjectID         *string                  `json:"projectId"`
-	ChatSessionID     *string                  `json:"chatSessionId"`
-	IssueID           *string                  `json:"issueId"`
-	IntakeOperationID *string                  `json:"intakeOperationId"`
-	CancelledAt       *string                  `json:"cancelledAt"`
-	CancelReason      *string                  `json:"cancelReason"`
-	IssueDeleted      bool                     `json:"issueDeleted"`
-	LastError         *string                  `json:"lastError"`
-	CreatedAt         string                   `json:"createdAt"`
-	UpdatedAt         string                   `json:"updatedAt"`
-	Participants      []RequirementParticipant `json:"participants"`
-	LatestCandidate   *RequirementCandidate    `json:"latestCandidate"`
-	Permissions       RequirementPermissions   `json:"permissions"`
-	Issue             json.RawMessage          `json:"issue"`
-	Run               json.RawMessage          `json:"run"`
-	Operations        []RequirementOperation   `json:"operations"`
-	Deliveries        []RequirementDelivery    `json:"deliveries"`
+	ID                string                      `json:"id"`
+	WorkspaceID       string                      `json:"workspaceId"`
+	Revision          int64                       `json:"revision"`
+	State             string                      `json:"state"`
+	IntakeState       string                      `json:"intakeState"`
+	SourceHost        string                      `json:"sourceHost"`
+	ExternalID        string                      `json:"externalId"`
+	SourceUrl         *string                     `json:"sourceUrl"`
+	SourceSnapshot    json.RawMessage             `json:"sourceSnapshot"`
+	SourceDigest      *string                     `json:"sourceDigest"`
+	SourceLockVersion *int64                      `json:"sourceLockVersion"`
+	RequesterID       string                      `json:"requesterId"`
+	AgentID           *string                     `json:"agentId"`
+	SquadID           *string                     `json:"squadId"`
+	ProjectID         *string                     `json:"projectId"`
+	ChatSessionID     *string                     `json:"chatSessionId"`
+	IssueID           *string                     `json:"issueId"`
+	IntakeOperationID *string                     `json:"intakeOperationId"`
+	CancelledAt       *string                     `json:"cancelledAt"`
+	CancelReason      *string                     `json:"cancelReason"`
+	IssueDeleted      bool                        `json:"issueDeleted"`
+	LastError         *string                     `json:"lastError"`
+	CreatedAt         string                      `json:"createdAt"`
+	UpdatedAt         string                      `json:"updatedAt"`
+	Participants      []RequirementParticipant    `json:"participants"`
+	LatestCandidate   *RequirementCandidate       `json:"latestCandidate"`
+	Permissions       RequirementPermissions      `json:"permissions"`
+	BlockedQuestion   *RequirementBlockedQuestion `json:"blockedQuestion"`
+	Issue             json.RawMessage             `json:"issue"`
+	Run               json.RawMessage             `json:"run"`
+	Operations        []RequirementOperation      `json:"operations"`
+	Deliveries        []RequirementDelivery       `json:"deliveries"`
 }
 
 type RequirementDetailOptions struct {
@@ -229,6 +231,7 @@ type RequirementActionResult struct {
 	PromoteTasks   []db.AgentTaskQueue
 	IssueUpdates   []RequirementIssueUpdate
 	Comments       []RequirementCommentEvent
+	ChatMessages   []db.ChatMessage
 	CancelledTasks []db.AgentTaskQueue
 	PostCommit     func()
 	WorkspaceID    string

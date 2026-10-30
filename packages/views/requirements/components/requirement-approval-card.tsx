@@ -95,7 +95,7 @@ export function RequirementApprovalAction({
         <AlertDialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
           <AlertDialogHeader>
             <AlertDialogTitle>{t(($) => $.approval.confirm_title)}</AlertDialogTitle>
-            <AlertDialogDescription>{t(($) => $.approval.consequence)}</AlertDialogDescription>
+            <AlertDialogDescription>{detail.squadId ? t(($) => $.approval.consequence_squad) : t(($) => $.approval.consequence)}</AlertDialogDescription>
           </AlertDialogHeader>
           {stale ? (
             <div className="space-y-3">
@@ -109,14 +109,14 @@ export function RequirementApprovalAction({
                 {" · "}
                 <code title={candidate.digest}>{candidate.digest.replace(/^sha256:/, "").slice(0, 12)}</code>
               </p>
-              <RequirementSnapshotView wsId={wsId} snapshot={candidate.snapshot} sourceSnapshot={sourceSnapshot} />
+              <RequirementSnapshotView wsId={wsId} snapshot={candidate.snapshot} sourceSnapshot={sourceSnapshot} squadId={detail.squadId} createdByTaskId={candidate.createdByTaskId} />
             </>
           )}
           {approve.error && <p role="alert" className="text-caption text-destructive">{approve.error.message}</p>}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={approve.isPending}>{t(($) => $.approval.cancel)}</AlertDialogCancel>
             <Button type="button" disabled={approve.isPending || stale || attachmentsUnavailable} aria-busy={approve.isPending} onClick={() => void confirm()}>
-              {t(($) => $.approval.confirm)}
+              {detail.squadId ? t(($) => $.approval.confirm_squad) : t(($) => $.approval.confirm)}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

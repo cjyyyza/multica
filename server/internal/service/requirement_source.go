@@ -72,6 +72,10 @@ func validateCreateRequirementSource(input CreateRequirementRequest) (validatedR
 }
 
 func validateStoredRequirementSource(row db.Requirement) bool {
+	if row.SourceHost == requirementDelegationSourceHost {
+		_, _, err := requirementDelegation(row)
+		return err == nil
+	}
 	var lockVersion *int64
 	if row.SourceLockVersion.Valid {
 		value := row.SourceLockVersion.Int64

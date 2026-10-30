@@ -97,6 +97,10 @@ const (
 	// synchronous restore — a client without this capability would silently
 	// drop the user's prompt, and keeps the legacy synchronous restore instead.
 	AppCapabilityChatDraftRestoreV1 = "chat-draft-restore-v1"
+
+	// AppCapabilityRequirementCandidateProvenanceV1 accepts external Candidates
+	// whose createdByTaskId is null rather than a planning Run identifier.
+	AppCapabilityRequirementCandidateProvenanceV1 = "requirement-candidate-provenance-v1"
 )
 
 // ChatQuickAction is a server-validated follow-up attached to one assistant

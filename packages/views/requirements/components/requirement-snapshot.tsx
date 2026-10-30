@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { agentListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions, squadListOptions } from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects";
 import {
   resolveRequirementCandidateAttachments,
@@ -16,20 +16,26 @@ export function RequirementSnapshotView({
   wsId,
   snapshot,
   sourceSnapshot,
+  squadId,
+  createdByTaskId,
 }: {
   wsId: string;
   snapshot: RequirementCandidateSnapshot;
   sourceSnapshot?: YixiezuoSnapshot | null;
+  squadId?: string | null;
+  createdByTaskId?: string | null;
 }) {
   const { t } = useT("requirements");
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: squads = [], isPending: squadsPending } = useQuery({ ...squadListOptions(wsId), enabled: !!wsId && !!squadId });
   const selectedAttachments = resolveRequirementCandidateAttachments(snapshot, sourceSnapshot ?? null);
   const attachmentsUnavailable = selectedAttachments.some(({ attachment }) => !attachment);
   const project = snapshot.projectId
     ? projects.find((item) => item.id === snapshot.projectId)
     : null;
   const agent = agents.find((item) => item.id === snapshot.agentId);
+  const squad = squads.find((item) => item.id === squadId);
   const empty = <span className="text-muted-foreground">{t(($) => $.candidate.empty)}</span>;
   const list = (items: string[]) => items.length > 0
     ? <ul className="list-disc space-y-1 pl-5">{items.map((item, index) => <li key={index} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{item}</li>)}</ul>
@@ -37,7 +43,21 @@ export function RequirementSnapshotView({
 
   return (
     <dl className="space-y-4 text-caption">
+      {createdByTaskId !== undefined && <div>
+        <dt className="font-medium text-muted-foreground">{t(($) => $.candidate.source)}</dt>
+        <dd className="break-words [overflow-wrap:anywhere]">
+          {createdByTaskId === null
+            ? t(($) => $.candidate.external_submission)
+            : squadId
+              ? t(($) => $.candidate.planned_by_leader, { name: agent?.name ?? shortId(snapshot.agentId) })
+              : t(($) => $.candidate.planned_by_agent, { name: agent?.name ?? shortId(snapshot.agentId) })}
+        </dd>
+      </div>}
       <div className="grid gap-3 sm:grid-cols-2">
+        {squadId && <div>
+          <dt className="font-medium text-muted-foreground">{t(($) => $.candidate.squad)}</dt>
+          <dd className="break-words [overflow-wrap:anywhere]">{squad?.name ?? (squadsPending ? t(($) => $.candidate.loading_squad) : t(($) => $.candidate.unknown_squad, { id: shortId(squadId) }))}</dd>
+        </div>}
         <div>
           <dt className="font-medium text-muted-foreground">{t(($) => $.candidate.project)}</dt>
           <dd className="break-words [overflow-wrap:anywhere]">
@@ -47,7 +67,7 @@ export function RequirementSnapshotView({
           </dd>
         </div>
         <div>
-          <dt className="font-medium text-muted-foreground">{t(($) => $.candidate.agent)}</dt>
+          <dt className="font-medium text-muted-foreground">{squadId ? t(($) => $.candidate.squad_leader) : t(($) => $.candidate.agent)}</dt>
           <dd className="break-words [overflow-wrap:anywhere]">
             {agent?.name ?? t(($) => $.candidate.unknown_agent, { id: shortId(snapshot.agentId) })}
           </dd>

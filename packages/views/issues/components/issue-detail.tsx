@@ -1529,14 +1529,14 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       return cached?.description != null ? cached : undefined;
     },
   });
-  const isRequirementIssue = issue?.origin_type === "requirement_chat";
+  const isRequirementIssue = !!issue?.requirement_id || issue?.origin_type === "requirement_chat" || issue?.origin_type === "requirement_delegation";
   const requirementSurface = useRequirementSurface({
     wsId,
     // Current backends project the Requirement id directly on the Issue.
-    requirementId: issue?.requirement_id,
+    requirementId: issue?.origin_type === "requirement_delegation" ? issue.requirement_id ?? issue.origin_id : issue?.requirement_id,
     // Old backends omit that projection; only then does the hook fall back to
     // the source chat session id (`origin_id`) through the legacy probe.
-    chatSessionId: issue?.origin_id,
+    chatSessionId: issue?.origin_type === "requirement_chat" ? issue.origin_id : undefined,
     enabled: isRequirementIssue,
   });
   // Pull requests for a Perforce project follow the issue, not the workspace

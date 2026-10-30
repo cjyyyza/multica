@@ -2,9 +2,13 @@ import { YixiezuoOperationSchema, YixiezuoImportEnvelopeSchema, YixiezuoImportSt
 import {
   RequirementApproveResponseSchema,
   RequirementDetailSchema,
+  RequirementReplyResponseSchema,
+  RequirementListResponseSchema,
   RequirementOpenResponseSchema,
   type RequirementApproveResponse,
   type RequirementDetail,
+  type RequirementReplyResponse,
+  type RequirementListResponse,
   type RequirementOpenResponse,
 } from "../requirements/schemas";
 import type {
@@ -12,7 +16,12 @@ import type {
   ApproveRequirementRequest,
   CancelRequirementRequest,
   CreateRequirementRequest,
+  CreateRequirementDelegationRequest,
+  CreateNativeRequirementRequest,
+  ListRequirementsInput,
   OpenRequirementRequest,
+  SendRequirementMessageRequest,
+  ReplyRequirementRequest,
   ReconcileRequirementRequest,
   RejectRequirementRequest,
   RequirementMutationInput,
@@ -767,6 +776,7 @@ function skillFromImportResult(raw: unknown, endpoint: string): Skill {
  * Must stay in sync with protocol.AppCapabilityChatDraftRestoreV1.
  */
 export const CHAT_DRAFT_RESTORE_CAPABILITY = "chat-draft-restore-v1";
+export const REQUIREMENT_CANDIDATE_PROVENANCE_CAPABILITY = "requirement-candidate-provenance-v1";
 
 /**
  * Body shared by both unsubscribe endpoints: an omitted target means "the
@@ -5572,9 +5582,61 @@ export class ApiClient {
     );
   }
 
+  async createRequirementDelegation(
+    wsId: string,
+    input: RequirementMutationInput<CreateRequirementDelegationRequest>,
+  ): Promise<RequirementDetail> {
+    const endpoint = `/api/workspaces/${encodeURIComponent(wsId)}/requirement-delegations`;
+    return this.requirementPost<RequirementDetail>(endpoint, input, RequirementDetailSchema);
+  }
+
+  async createNativeRequirement(
+    wsId: string,
+    input: RequirementMutationInput<CreateNativeRequirementRequest>,
+  ): Promise<RequirementDetail> {
+    const endpoint = `/api/workspaces/${encodeURIComponent(wsId)}/requirement-requests`;
+    return this.requirementPost<RequirementDetail>(endpoint, input, RequirementDetailSchema);
+  }
+
+  async listRequirements(wsId: string, input: ListRequirementsInput = {}): Promise<RequirementListResponse> {
+    const search = new URLSearchParams();
+    if (input.externalRef !== undefined) search.set("externalRef", input.externalRef);
+    if (input.limit !== undefined) search.set("limit", String(input.limit));
+    if (input.offset !== undefined) search.set("offset", String(input.offset));
+    const endpoint = `${this.requirementPath(wsId)}${search.size ? `?${search}` : ""}`;
+    const raw = await this.fetch<unknown>(endpoint);
+    return parseRequirementResponse<RequirementListResponse>(raw, RequirementListResponseSchema, endpoint);
+  }
+
+  async sendRequirementMessage(
+    wsId: string,
+    requirementId: string,
+    input: RequirementMutationInput<SendRequirementMessageRequest>,
+  ): Promise<RequirementDetail> {
+    return this.requirementPost<RequirementDetail>(
+      `${this.requirementPath(wsId, requirementId)}/messages`,
+      input,
+      RequirementDetailSchema,
+    );
+  }
+
+  async replyRequirement(
+    wsId: string,
+    requirementId: string,
+    input: RequirementMutationInput<ReplyRequirementRequest>,
+  ): Promise<RequirementReplyResponse> {
+    return this.requirementPost<RequirementReplyResponse>(
+      `${this.requirementPath(wsId, requirementId)}/replies`,
+      input,
+      RequirementReplyResponseSchema,
+    );
+  }
+
   async getRequirement(wsId: string, requirementId: string): Promise<RequirementDetail> {
     const endpoint = this.requirementPath(wsId, requirementId);
-    const raw = await this.fetch<unknown>(endpoint);
+    const raw = await this.fetch<unknown>(endpoint, {
+      headers: { "X-Client-Capabilities": REQUIREMENT_CANDIDATE_PROVENANCE_CAPABILITY },
+    });
     return parseRequirementResponse<RequirementDetail>(raw, RequirementDetailSchema, endpoint);
   }
 
@@ -5586,7 +5648,9 @@ export class ApiClient {
     const endpoint = `${this.requirementPath(wsId)}?${search.toString()}`;
     let raw: unknown;
     try {
-      raw = await this.fetch<unknown>(endpoint);
+      raw = await this.fetch<unknown>(endpoint, {
+        headers: { "X-Client-Capabilities": REQUIREMENT_CANDIDATE_PROVENANCE_CAPABILITY },
+      });
     } catch (error) {
       if (error instanceof ApiError && (error.status === 404 || error.status === 403)) {
         return null;

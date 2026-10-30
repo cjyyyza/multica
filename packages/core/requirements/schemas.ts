@@ -109,7 +109,7 @@ export const RequirementCandidateSchema = z.object({
   revision: optionalRevision,
   snapshot: RequirementCandidateSnapshotSchema,
   digest: z.string().min(1),
-  createdByTaskId: z.string().min(1),
+  createdByTaskId: z.string().min(1).nullable().optional().default(null).catch(null),
   createdAt: z.string().default("").catch(""),
 }).loose();
 export type RequirementCandidate = z.infer<typeof RequirementCandidateSchema>;
@@ -189,6 +189,16 @@ export const RequirementDeliverySchema = z.object({
 }).loose();
 export type RequirementDelivery = z.infer<typeof RequirementDeliverySchema>;
 
+export const RequirementBlockedQuestionSchema = z.object({
+  commentId: z.string().min(1),
+  wakeupId: z.string().min(1),
+  targetUserId: z.string().min(1),
+  agentId: z.string().min(1),
+  content: z.string(),
+  canReply: permission,
+}).loose();
+export type RequirementBlockedQuestion = z.infer<typeof RequirementBlockedQuestionSchema>;
+
 export const RequirementDetailSchema = z.object({
   id: z.string().min(1),
   workspaceId: z.string().min(1),
@@ -203,6 +213,7 @@ export const RequirementDetailSchema = z.object({
   sourceLockVersion: z.number().int().nonnegative().nullable().optional().default(null).catch(null),
   requesterId: z.string().min(1),
   agentId: nullableString,
+  squadId: nullableString,
   projectId: nullableString,
   chatSessionId: nullableString,
   issueId: nullableString,
@@ -215,6 +226,7 @@ export const RequirementDetailSchema = z.object({
   updatedAt: z.string().default("").catch(""),
   participants: looseArray(RequirementParticipantSchema),
   latestCandidate: RequirementCandidateSchema.nullable().optional().default(null).catch(null),
+  blockedQuestion: RequirementBlockedQuestionSchema.nullable().optional().default(null).catch(null),
   permissions: RequirementPermissionsSchema.optional().catch(undefined)
     .transform((value) => value ?? { ...DEFAULT_REQUIREMENT_PERMISSIONS }),
   issue: IssueSchema.nullable().optional().default(null).catch(null),
@@ -223,6 +235,36 @@ export const RequirementDetailSchema = z.object({
   deliveries: looseArray(RequirementDeliverySchema),
 }).loose();
 export type RequirementDetail = z.infer<typeof RequirementDetailSchema>;
+
+export const RequirementReplyResponseSchema = z.object({
+  requirement: RequirementDetailSchema,
+  reply: z.object({
+    id: z.string().min(1),
+    issueId: z.string().min(1),
+    questionCommentId: z.string().min(1),
+    content: z.string().min(1),
+    authorId: z.string().min(1),
+    issueRevision: z.number().int().positive(),
+  }).loose(),
+}).loose();
+export type RequirementReplyResponse = z.infer<typeof RequirementReplyResponseSchema>;
+
+export const RequirementSummarySchema = RequirementDetailSchema.pick({
+  id: true, workspaceId: true, revision: true, state: true, intakeState: true,
+  sourceHost: true, externalId: true, requesterId: true, agentId: true, squadId: true,
+  projectId: true, chatSessionId: true, issueId: true, issueDeleted: true, createdAt: true, updatedAt: true,
+}).extend({
+  title: z.string().optional().default("").catch(""),
+  sourceKind: z.string().optional().default("").catch(""),
+});
+export type RequirementSummary = z.infer<typeof RequirementSummarySchema>;
+
+export const RequirementListResponseSchema = z.object({
+  requirements: looseArray(RequirementSummarySchema),
+  hasMore: z.boolean().optional().default(false).catch(false),
+  nextOffset: z.number().int().nonnegative().optional().catch(undefined),
+}).loose();
+export type RequirementListResponse = z.infer<typeof RequirementListResponseSchema>;
 
 export const RequirementOpenResponseSchema = z.object({
   requirement: RequirementDetailSchema,

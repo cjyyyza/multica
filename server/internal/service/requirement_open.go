@@ -9,7 +9,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/multica-ai/multica/server/internal/integrations/yixiezuo"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -61,6 +60,11 @@ func (s *RequirementService) OpenRequirement(ctx context.Context, actor Requirem
 			if err != nil {
 				return err
 			}
+			if source, native, err := requirementDelegation(row); err != nil {
+				return err
+			} else if native && !source.hasPlan() {
+				return newRequirementError(http.StatusConflict, "requirement_open_not_supported", "squad delegations are reviewed without opening a requirement chat")
+			}
 			if row.ChatSessionID.Valid {
 				return nil
 			}
@@ -91,6 +95,11 @@ func (s *RequirementService) OpenRequirement(ctx context.Context, actor Requirem
 		if row.CancelledAt.Valid {
 			return RequirementActionResponse{}, newRequirementError(http.StatusConflict, RequirementCancelledCode, "requirement is cancelled")
 		}
+		if source, native, err := requirementDelegation(row); err != nil {
+			return RequirementActionResponse{}, err
+		} else if native && !source.hasPlan() {
+			return RequirementActionResponse{}, newRequirementError(http.StatusConflict, "requirement_open_not_supported", "squad delegations are reviewed without opening a requirement chat")
+		}
 		if row.IssueID.Valid {
 			return RequirementActionResponse{}, newRequirementError(http.StatusConflict, RequirementChatIssueExistsCode, "requirement already has an issue")
 		}
@@ -100,59 +109,8 @@ func (s *RequirementService) OpenRequirement(ctx context.Context, actor Requirem
 		if err := s.requireFlow(ctx); err != nil {
 			return RequirementActionResponse{}, err
 		}
-		if !validateStoredRequirementSource(row) {
-			return RequirementActionResponse{}, requirementBadRequest("requirement_source_invalid", "a valid source snapshot and digest are required")
-		}
-		agentRow, err := q.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: row.AgentID, WorkspaceID: actor.WorkspaceID})
-		if errors.Is(err, pgx.ErrNoRows) {
-			return RequirementActionResponse{}, newRequirementError(http.StatusNotFound, "agent_not_found", "agent not found")
-		}
+		bound, session, task, err := s.createRequirementPlanChat(ctx, tx, q, actor, row, prepared)
 		if err != nil {
-			return RequirementActionResponse{}, fmt.Errorf("load requirement open agent: %w", err)
-		}
-		if agentRow.ArchivedAt.Valid {
-			return RequirementActionResponse{}, requirementBadRequest("agent_not_available", "agent is archived")
-		}
-		if !CanMemberInvokeAgent(ctx, q, agentRow, actor.UserID, actor.WorkspaceID) {
-			return RequirementActionResponse{}, newRequirementError(http.StatusForbidden, "agent_invocation_not_allowed", "agent invocation is not allowed")
-		}
-		if row.ProjectID.Valid {
-			if _, err := q.GetProjectInWorkspace(ctx, db.GetProjectInWorkspaceParams{ID: row.ProjectID, WorkspaceID: actor.WorkspaceID}); errors.Is(err, pgx.ErrNoRows) {
-				return RequirementActionResponse{}, newRequirementError(http.StatusNotFound, "project_not_found", "project not found")
-			} else if err != nil {
-				return RequirementActionResponse{}, fmt.Errorf("load requirement open project: %w", err)
-			}
-		}
-		if err := validateRequirementPlanRuntime(ctx, q, agentRow); err != nil {
-			return RequirementActionResponse{}, err
-		}
-
-		var snapshot yixiezuo.Snapshot
-		if err := json.Unmarshal(row.SourceSnapshot, &snapshot); err != nil {
-			return RequirementActionResponse{}, requirementBadRequest("requirement_source_invalid", "invalid source snapshot")
-		}
-		session, err := q.CreateChatSession(ctx, db.CreateChatSessionParams{
-			WorkspaceID: actor.WorkspaceID, AgentID: row.AgentID, CreatorID: actor.UserID,
-			Title: snapshot.Title, IsAgentIntro: false, ProjectID: row.ProjectID, ID: dbid.NewV7(),
-		})
-		if err != nil {
-			return RequirementActionResponse{}, fmt.Errorf("create requirement chat: %w", err)
-		}
-		session, err = q.MarkChatSessionExplicitlyCreated(ctx, session.ID)
-		if err != nil {
-			return RequirementActionResponse{}, fmt.Errorf("mark requirement chat visible: %w", err)
-		}
-		bound, err := q.BindRequirementChatSession(ctx, db.BindRequirementChatSessionParams{
-			ID: row.ID, WorkspaceID: actor.WorkspaceID, ExpectedRevision: input.ExpectedRevision, ChatSessionID: session.ID,
-		})
-		if err != nil {
-			return RequirementActionResponse{}, fmt.Errorf("bind requirement chat: %w", err)
-		}
-		task, err := s.Tasks.EnqueuePreparedRequirementChatTaskInTx(ctx, tx, session, actor.UserID, prepared)
-		if err != nil {
-			return RequirementActionResponse{}, fmt.Errorf("enqueue requirement chat task: %w", err)
-		}
-		if err := createRequirementOpeningMessages(ctx, q, bound, session, task, snapshot, requirementOpeningLocale(ctx, q, actor.UserID)); err != nil {
 			return RequirementActionResponse{}, err
 		}
 		event, err := appendRequirementEvent(ctx, q, actor, "member", bound, "opened", row.IntakeState, bound.IntakeState, map[string]any{
@@ -177,6 +135,67 @@ func (s *RequirementService) OpenRequirement(ctx context.Context, actor Requirem
 			EventType: protocol.EventRequirementUpdated, Realtime: detail.RealtimePointer(), FinalizeTasks: []db.AgentTaskQueue{task},
 		}, nil
 	})
+}
+
+func (s *RequirementService) createRequirementPlanChat(ctx context.Context, tx pgx.Tx, q *db.Queries, actor RequirementActor, row db.Requirement, prepared PreparedChatTaskEnqueue) (db.Requirement, db.ChatSession, db.AgentTaskQueue, error) {
+	if !validateStoredRequirementSource(row) {
+		return db.Requirement{}, db.ChatSession{}, db.AgentTaskQueue{}, requirementBadRequest("requirement_source_invalid", "a valid source snapshot and digest are required")
+	}
+	agentRow, err := q.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: row.AgentID, WorkspaceID: actor.WorkspaceID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Requirement{}, db.ChatSession{}, db.AgentTaskQueue{}, newRequirementError(http.StatusNotFound, "agent_not_found", "agent not found")
+	}
+	if err != nil {
+		return db.Requirement{}, db.ChatSession{}, db.AgentTaskQueue{}, fmt.Errorf("load requirement open agent: %w", err)
+	}
+	if agentRow.ArchivedAt.Valid {
+		return db.Requirement{}, db.ChatSession{}, db.AgentTaskQueue{}, requirementBadRequest("agent_not_available", "agent is archived")
+	}
+	if !CanMemberInvokeAgent(ctx, q, agentRow, actor.UserID, actor.WorkspaceID) {
+		return db.Requirement{}, db.ChatSession{}, db.AgentTaskQueue{}, newRequirementError(http.StatusForbidden, "agent_invocation_not_allowed", "agent invocation is not allowed")
+	}
+	if row.ProjectID.Valid {
+		if _, err := q.GetProjectInWorkspace(ctx, db.GetProjectInWorkspaceParams{ID: row.ProjectID, WorkspaceID: actor.WorkspaceID}); errors.Is(err, pgx.ErrNoRows) {
+			return db.Requirement{}, db.ChatSession{}, db.AgentTaskQueue{}, newRequirementError(http.StatusNotFound, "project_not_found", "project not found")
+		} else if err != nil {
+			return db.Requirement{}, db.ChatSession{}, db.AgentTaskQueue{}, fmt.Errorf("load requirement open project: %w", err)
+		}
+	}
+	if err := validateRequirementPlanRuntime(ctx, q, agentRow); err != nil {
+		return db.Requirement{}, db.ChatSession{}, db.AgentTaskQueue{}, err
+	}
+
+	var snapshot struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(row.SourceSnapshot, &snapshot); err != nil {
+		return db.Requirement{}, db.ChatSession{}, db.AgentTaskQueue{}, requirementBadRequest("requirement_source_invalid", "invalid source snapshot")
+	}
+	session, err := q.CreateChatSession(ctx, db.CreateChatSessionParams{
+		WorkspaceID: actor.WorkspaceID, AgentID: row.AgentID, CreatorID: actor.UserID,
+		Title: snapshot.Title, IsAgentIntro: false, ProjectID: row.ProjectID, ID: dbid.NewV7(),
+	})
+	if err != nil {
+		return db.Requirement{}, db.ChatSession{}, db.AgentTaskQueue{}, fmt.Errorf("create requirement chat: %w", err)
+	}
+	session, err = q.MarkChatSessionExplicitlyCreated(ctx, session.ID)
+	if err != nil {
+		return db.Requirement{}, db.ChatSession{}, db.AgentTaskQueue{}, fmt.Errorf("mark requirement chat visible: %w", err)
+	}
+	bound, err := q.BindRequirementChatSession(ctx, db.BindRequirementChatSessionParams{
+		ID: row.ID, WorkspaceID: actor.WorkspaceID, ExpectedRevision: row.Revision, ChatSessionID: session.ID,
+	})
+	if err != nil {
+		return db.Requirement{}, db.ChatSession{}, db.AgentTaskQueue{}, fmt.Errorf("bind requirement chat: %w", err)
+	}
+	task, err := s.Tasks.EnqueuePreparedRequirementChatTaskInTx(ctx, tx, session, actor.UserID, prepared)
+	if err != nil {
+		return db.Requirement{}, db.ChatSession{}, db.AgentTaskQueue{}, fmt.Errorf("enqueue requirement chat task: %w", err)
+	}
+	if err := createRequirementOpeningMessages(ctx, q, bound, session, task, snapshot.Title, requirementOpeningLocale(ctx, q, actor.UserID)); err != nil {
+		return db.Requirement{}, db.ChatSession{}, db.AgentTaskQueue{}, err
+	}
+	return bound, session, task, nil
 }
 
 func (s *RequirementService) openExistingRequirement(ctx context.Context, q *db.Queries, actor RequirementActor, row db.Requirement, buildResponse RequirementOpenResponseBuilder) (RequirementActionResponse, error) {
@@ -212,10 +231,10 @@ func (s *RequirementService) openExistingRequirement(ctx context.Context, q *db.
 // frame, requirement_opening is rendered to the member, and onboarding copy is
 // a different product surface — reusing onboarding_opening here would change
 // what the requirement chat UI renders.
-func createRequirementOpeningMessages(ctx context.Context, q *db.Queries, row db.Requirement, session db.ChatSession, task db.AgentTaskQueue, snapshot yixiezuo.Snapshot, locale text.Locale) error {
+func createRequirementOpeningMessages(ctx context.Context, q *db.Queries, row db.Requirement, session db.ChatSession, task db.AgentTaskQueue, title string, locale text.Locale) error {
 	contextBody, err := json.Marshal(map[string]any{
 		"schema_version": 1, "requirement_id": util.UUIDToString(row.ID),
-		"source_snapshot": json.RawMessage(row.SourceSnapshot), "source_digest": snapshot.Digest,
+		"source_snapshot": json.RawMessage(row.SourceSnapshot), "source_digest": row.SourceDigest,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal requirement source context: %w", err)
@@ -226,10 +245,17 @@ func createRequirementOpeningMessages(ctx context.Context, q *db.Queries, row db
 	}); err != nil {
 		return fmt.Errorf("create requirement source context: %w", err)
 	}
-	opening := text.BuildRequirementOpening(locale, snapshot.Title)
+	opening := text.BuildRequirementOpening(locale, title)
+	role := "assistant"
+	kind := pgtype.Text{String: protocol.ChatMessageKindRequirementOpening, Valid: true}
+	if source, native, err := requirementDelegation(row); err != nil {
+		return err
+	} else if native && source.hasPlan() {
+		opening, role, kind = source.Idea, "user", pgtype.Text{}
+	}
 	if _, err := q.CreateChatMessage(ctx, db.CreateChatMessageParams{
-		ID: dbid.NewV7(), ChatSessionID: session.ID, Role: "assistant", Content: opening, TaskID: task.ID,
-		MessageKind: pgtype.Text{String: protocol.ChatMessageKindRequirementOpening, Valid: true},
+		ID: dbid.NewV7(), ChatSessionID: session.ID, Role: role, Content: opening, TaskID: task.ID,
+		MessageKind: kind,
 	}); err != nil {
 		return fmt.Errorf("create requirement opening: %w", err)
 	}
