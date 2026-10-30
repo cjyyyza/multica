@@ -337,6 +337,20 @@ func (b *opencodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		// OpenCode exited has returned by now. The writer sends exactly once.
 		writeErr := <-writeErrCh
 
+		// OpenCode 2.2 can omit step_finish from its compatibility JSON stream.
+		// Its persisted idle/succeeded message is the native terminal contract.
+		if usesV2 && !scanResult.sawTerminalSignal && (scanResult.noTerminalSignal || scanResult.status == "completed") && exitErr == nil && writeErr == nil && runCtx.Err() == nil {
+			if confirmed, err := opencodeV2ConfirmRun(runCtx, interruptConn, scanResult, b.cfg.Logger); err == nil {
+				scanResult = confirmed
+			} else {
+				scanResult.status, scanResult.noTerminalSignal = "failed", true
+				if scanResult.errMsg == "" {
+					scanResult.errMsg = "opencode stream ended without a terminal signal"
+				}
+				scanResult.errMsg += "; native result readback: " + err.Error()
+			}
+		}
+
 		if runCtx.Err() == context.DeadlineExceeded {
 			scanResult.status = "timeout"
 			scanResult.errMsg = fmt.Sprintf("opencode timed out after %s", timeout)
@@ -417,6 +431,7 @@ type eventResult struct {
 	// need "this run really completed" must test this field; status defaults to
 	// "completed" and cannot carry that meaning on its own.
 	sawTerminalSignal bool
+	messageIDs        map[string]struct{}
 }
 
 // processEvents reads JSON lines from r, dispatches events to ch, and returns
@@ -466,6 +481,7 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 	// back-compat regression), and voidness is orthogonal to it.
 	stepProducedOutput := false // current step emitted text, a tool call, or reported usage
 	lastStepVoid := false       // the most recently closed step produced nothing at all
+	messageIDs := make(map[string]struct{})
 
 	scanner := newAgentStreamScanner(r)
 
@@ -487,6 +503,9 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 			b.session.set(event.SessionID)
 		}
 
+		if event.Part.MessageID != "" {
+			messageIDs[event.Part.MessageID] = struct{}{}
+		}
 		switch event.Type {
 		case "text":
 			b.handleTextEvent(event, ch, &output)
@@ -576,6 +595,7 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 		usage:             usage,
 		noTerminalSignal:  noTerminalSignal,
 		sawTerminalSignal: sawStepFinish && !noTerminalSignal,
+		messageIDs:        messageIDs,
 	}
 }
 
