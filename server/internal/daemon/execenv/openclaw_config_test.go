@@ -45,6 +45,35 @@ type openclawResponse struct {
 	err    error
 }
 
+func TestPrepareOpenclawConfigAddsPrivateSkillsWithoutDroppingUserRoots(t *testing.T) {
+	userConfigPath := filepath.Join(t.TempDir(), "openclaw.json")
+	const original = "{ skills: { load: { extraDirs: ['~/own-skills'], watch: false } } }"
+	if err := os.WriteFile(userConfigPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stub := installOpenclawStub(t, map[string]openclawResponse{
+		"config file":                             {stdout: userConfigPath},
+		"config get agents.list --json":           {stdout: `[]`},
+		"config get skills.load.extraDirs --json": {stdout: `["~/own-skills","/other/skills"]`},
+	})
+	root := t.TempDir()
+	privateSkills := filepath.Join(root, "p4-context", "skills")
+	result, err := prepareOpenclawConfig(root, t.TempDir(), OpenclawConfigPrep{OpenclawBin: stub.bin, PrivateSkillsDir: privateSkills})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := mustReadJSON(t, result.ConfigPath)
+	skills, _ := got["skills"].(map[string]any)
+	load, _ := skills["load"].(map[string]any)
+	want := []any{"~/own-skills", "/other/skills", privateSkills}
+	if !reflect.DeepEqual(load["extraDirs"], want) {
+		t.Fatalf("private skill discovery dropped or replaced roots: got %#v want %#v", load["extraDirs"], want)
+	}
+	if raw, err := os.ReadFile(userConfigPath); err != nil || string(raw) != original {
+		t.Fatalf("source config changed: %q (%v)", raw, err)
+	}
+}
+
 func installOpenclawStub(t *testing.T, responses map[string]openclawResponse) *openclawCLIStub {
 	t.Helper()
 	stub := &openclawCLIStub{
@@ -2892,5 +2921,30 @@ func TestPrepareOpenclawConfigWarnsWhenActiveConfigMissing(t *testing.T) {
 	}
 	if result.IncludeRoot != "" {
 		t.Errorf("IncludeRoot = %q, want empty", result.IncludeRoot)
+	}
+}
+
+func TestOpenclawPrivateSkillRootsValidateResolvedConfiguration(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		response openclawResponse
+		wantErr  bool
+	}{
+		{"array", openclawResponse{stdout: `["/owner/skills"]`}, false},
+		{"unset", openclawResponse{stdout: `{"error":"Config path is valid but unset: skills.load.extraDirs"}`}, false},
+		{"unknown", openclawResponse{err: errors.New("Unknown config path: skills.load.extraDirs")}, true},
+		{"other-key", openclawResponse{err: errors.New("Config path is valid but unset: agents.entries")}, true},
+		{"auth-error", openclawResponse{stdout: `{"error":"authentication failed"}`}, true},
+		{"bad-array", openclawResponse{stdout: `[17]`}, true},
+		{"object", openclawResponse{stdout: `{}`}, true},
+		{"empty", openclawResponse{}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := installOpenclawStub(t, map[string]openclawResponse{"config get skills.load.extraDirs --json": tt.response})
+			_, err := openclawExtraSkillDirs(stub.bin, time.Second)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("resolved skill roots error = %v, want error %v", err, tt.wantErr)
+			}
+		})
 	}
 }

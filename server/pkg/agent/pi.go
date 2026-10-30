@@ -1139,6 +1139,13 @@ func buildPiArgs(sessionPath string, opts ExecOptions, logger *slog.Logger) []st
 	if opts.piMcpExtensionPath != "" {
 		args = append(args, "--extension", opts.piMcpExtensionPath)
 	}
+	// Each path is one skill directory. Pi treats --skill as additive, so
+	// project and user skills still load.
+	for _, dir := range opts.PiSkillDirs {
+		if dir != "" {
+			args = append(args, "--skill", dir)
+		}
+	}
 	return args
 }
 

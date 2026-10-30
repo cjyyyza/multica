@@ -7979,6 +7979,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Repos are passed as metadata only — the agent checks them out on demand
 	// via `multica repo checkout <url>`.
 	taskCtx := execenv.TaskContextForEnv{
+		RuntimeVersion:      resolvedVersion,
+		CustomRuntime:       usesCustomProfileCommand,
 		IssueID:             task.IssueID,
 		RequirementID:       task.RequirementID,
 		TriggerCommentID:    task.TriggerCommentID,
@@ -8815,6 +8817,20 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentCustomEnv = task.Agent.CustomEnv
 	}
 	layerCustomEnvAndHermesHome(agentEnv, agentCustomEnv, env.HermesHome, d.logger)
+	skillHomeEnv, err := execenv.PreparePrivateSkillHome(provider, env.PrivateRuntimeDir, env.WorkDir, resolvedVersion, len(taskCtx.AgentSkills), agentEnv)
+	if err != nil {
+		return TaskResult{}, err
+	}
+	for key, value := range skillHomeEnv {
+		agentEnv[key] = value
+	}
+	skillConfigEnv, err := execenv.PreparePrivateSkillConfigDir(provider, env.PrivateRuntimeDir, env.WorkDir, resolvedVersion, !usesCustomProfileCommand, len(taskCtx.AgentSkills), agentEnv)
+	if err != nil {
+		return TaskResult{}, err
+	}
+	for key, value := range skillConfigEnv {
+		agentEnv[key] = value
+	}
 	// custom_env is allowed to set P4PORT for a read, but it must not put the
 	// human's client back. Re-apply the shield after the overlay.
 	if d.p4Binding(task.ID) != nil {
@@ -9056,6 +9072,27 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// keep ascending seq values for the same task.
 	var msgSeq atomic.Int32
 	d.reportThinkingLevelWarning(ctx, task.ID, selection.ThinkingLevelWarning, &msgSeq, taskLog)
+	dshPatch, patchErr := execenv.DshConfigPatchForTask(provider, env.PrivateRuntimeDir, len(taskCtx.AgentSkills))
+	if patchErr != nil {
+		return TaskResult{}, patchErr
+	}
+	execOpts.DshConfigPatch = dshPatch
+	claudeAddDir, piSkillDirs, skillErr := execenv.ConfigurePrivateSkillLaunch(provider, env.PrivateRuntimeDir, len(taskCtx.AgentSkills))
+	if skillErr != nil {
+		return TaskResult{}, skillErr
+	}
+	execOpts.ClaudeAddDir = claudeAddDir
+	execOpts.PiSkillDirs = piSkillDirs
+	skillPluginDir, skillErr := execenv.PrivateSkillPluginDir(provider, env.PrivateRuntimeDir, len(taskCtx.AgentSkills))
+	if skillErr != nil {
+		return TaskResult{}, skillErr
+	}
+	execOpts.SkillPluginDir = skillPluginDir
+	skillWorkspaceDir, skillErr := execenv.PrivateSkillWorkspaceDir(provider, env.PrivateRuntimeDir, len(taskCtx.AgentSkills))
+	if skillErr != nil {
+		return TaskResult{}, skillErr
+	}
+	execOpts.SkillWorkspaceDir = skillWorkspaceDir
 	result, tools, err := d.executeAndDrain(ctx, backend, prompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
 	if err != nil {
 		return TaskResult{}, err

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,7 @@ const (
 	opencodeStdinHelperArgvFile  = "MULTICA_OPENCODE_STDIN_HELPER_ARGV_FILE"
 	opencodeStdinHelperInFile    = "MULTICA_OPENCODE_STDIN_HELPER_STDIN_FILE"
 	opencodeStdinHelperUsageOnly = "MULTICA_OPENCODE_STDIN_HELPER_USAGE_ONLY"
+	privateSkillHelperEnvFile    = "MULTICA_PRIVATE_SKILL_HELPER_ENV_FILE"
 )
 
 const (
@@ -50,6 +52,19 @@ func runFakeCodeArtsModelHelper() {
 // be invoked with OpenCode's own argv (`run --format json ...`) instead of
 // -test.* flags.
 func runFakeOpencodeStdinHelper() {
+	if path := os.Getenv(privateSkillHelperEnvFile); path != "" {
+		cwd, _ := os.Getwd()
+		data, err := json.Marshal(map[string]string{
+			"OPENCODE_CONFIG_CONTENT": os.Getenv("OPENCODE_CONFIG_CONTENT"),
+			"DEVECO_CONFIG_CONTENT":   os.Getenv("DEVECO_CONFIG_CONTENT"),
+			"OPENCODE_CONFIG_DIR":     os.Getenv("OPENCODE_CONFIG_DIR"),
+			"DEVECO_CONFIG_DIR":       os.Getenv("DEVECO_CONFIG_DIR"),
+			"cwd":                     cwd,
+		})
+		if err != nil || os.WriteFile(path, data, 0o600) != nil {
+			os.Exit(1)
+		}
+	}
 	argv := strings.Join(os.Args[1:], "\n")
 	if err := os.WriteFile(os.Getenv(opencodeStdinHelperArgvFile), []byte(argv), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "helper: write argv: %v\n", err)

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -86,12 +87,12 @@ const (
 // inside the outer preparation budget, so this is the multiplier
 // openclawCLIMaxTimeout is derived from.
 //
-// The three steps, in the order they can fire:
+// The four steps, in the order they can fire:
 //
 //  1. locate the active config — `config validate --json`, then `config file`
 //     if that did not answer. Two invocations, one deadline: they ask the same
 //     question and openclawActiveConfigPath shares a context between them
-//     precisely so the fallback cannot add a fourth budget.
+//     so the fallback cannot add another budget.
 //  2. read the per-agent config the schema is willing to show —
 //     `config get agents.list --json` (pre-2026.6 `agents.list[]`), then
 //     `config get agents.entries --json` (2026.8+ `agents.entries.<id>`) when
@@ -100,14 +101,14 @@ const (
 //     the second is only reached when the first reported no such path.
 //  3. `agents list --json`              — 2026.6+ registry fallback, only
 //     reached when (2) reports that neither config path exists
+//  4. `config get skills.load.extraDirs --json` — only when task-private
+//     skills must be appended without replacing the user's additional roots
 //
-// It was four until managed MCP stopped reading the user's config: the reset
-// stage is a file this package writes, so a managed-MCP agent now costs the same
-// CLI time as any other. Adding a fourth deadline-bearing step means re-deriving
-// the ceiling. The worst-case test counts distinct deadlines rather than calls,
+// Managed MCP uses files written by this package and adds no CLI deadline.
+// The worst-case test counts distinct deadlines rather than calls,
 // so a new invocation that shares an existing budget is free and one that brings
 // its own fails loudly.
-const openclawMaxCLIDeadlinesPerPreparation = 3
+const openclawMaxCLIDeadlinesPerPreparation = 4
 
 // ErrOpenclawCLITimeout marks a task preparation that failed because the local
 // openclaw CLI did not answer within the deadline. It is a sentinel rather
@@ -193,6 +194,8 @@ type OpenclawConfigPrep struct {
 	// Null / empty means inherit the user's global config — same three-state
 	// semantics codex uses (`hasManagedCodexMcpConfig`).
 	McpConfig json.RawMessage
+	// PrivateSkillsDir adds task skills to native discovery outside the client.
+	PrivateSkillsDir string
 	// Gateway pins a specific OpenClaw Gateway endpoint inside the per-task
 	// wrapper. Only consulted when the agent is configured for gateway-mode
 	// openclaw (see ExecOptions.OpenclawMode); zero means "inherit whatever
@@ -328,6 +331,19 @@ func prepareOpenclawConfig(envRoot, workDir string, opts OpenclawConfigPrep) (Op
 	}
 
 	cfg := buildPerTaskOpenclawConfig(activePath, exists, resetPath, resolvedList, agentsSource, workDir, managedMcp, hasManagedMcp, opts.Gateway)
+	if opts.PrivateSkillsDir != "" {
+		var dirs []string
+		if exists {
+			dirs, err = openclawExtraSkillDirs(bin, timeout)
+			if err != nil {
+				return OpenclawConfigResult{}, fmt.Errorf("read openclaw skill roots: %w", err)
+			}
+		}
+		if !slices.Contains(dirs, opts.PrivateSkillsDir) {
+			dirs = append(dirs, opts.PrivateSkillsDir)
+		}
+		cfg["skills"] = map[string]any{"load": map[string]any{"extraDirs": dirs}}
+	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -364,6 +380,35 @@ func prepareOpenclawConfig(envRoot, workDir string, opts OpenclawConfigPrep) (Op
 			"managed_mcp", hasManagedMcp)
 	}
 	return result, nil
+}
+
+// Read only this non-secret field through OpenClaw's loader so JSON5,
+// includes, and environment substitution retain the runtime's semantics.
+func openclawExtraSkillDirs(bin string, timeout time.Duration) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	const key = "skills.load.extraDirs"
+	out, err := openclawExec(ctx, bin, "config", "get", key, "--json")
+	if err != nil {
+		if !openclawUnknownConfigPath(out, err, key) && isOpenclawKeyMissingResult(out, err, key) {
+			return nil, nil
+		}
+		return nil, annotateOpenclawJSONError(err, out)
+	}
+	if message, envelope := openclawJSONErrorMessage(out); envelope {
+		if !openclawUnknownConfigPathMessage(message, key) && openclawKeyMissingMessageForPath(message, key) {
+			return nil, nil
+		}
+		return nil, openclawStdoutEnvelopeError("config get "+key+" --json", message)
+	}
+	if strings.TrimSpace(out) == "" {
+		return nil, errors.New("openclaw returned no skill root configuration")
+	}
+	var dirs []string
+	if err := json.Unmarshal([]byte(out), &dirs); err != nil {
+		return nil, fmt.Errorf("parse openclaw skill roots: %w", err)
+	}
+	return dirs, nil
 }
 
 // discoverOpenclawConfig resolves the user's active config path, the resolved
@@ -1044,7 +1089,7 @@ func openclawResolvedAgentsList(bin string, timeout time.Duration) ([]any, openc
 	// reached when the first answers "no such path", exactly like
 	// `config validate --json` and its `config file` fallback in
 	// openclawActiveConfigPath. Giving the entries probe its own budget would
-	// take the worst case from three CLI deadlines to four (see
+	// add another CLI deadline (see
 	// openclawMaxCLIDeadlinesPerPreparation) without widening what the CLI can
 	// answer in total.
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)

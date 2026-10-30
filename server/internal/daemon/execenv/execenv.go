@@ -157,6 +157,9 @@ type PrepareParams struct {
 
 // TaskContextForEnv is the subset of task context used for writing context files.
 type TaskContextForEnv struct {
+	// RuntimeVersion and CustomRuntime select versioned native discovery contracts.
+	RuntimeVersion   string
+	CustomRuntime    bool
 	IssueID          string
 	RequirementID    string // non-empty for requirement-owned issue tasks
 	TriggerCommentID string // comment that triggered this task (empty for on_assign)
@@ -765,11 +768,12 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 	// OpenClaw without the agents / providers / API keys it expects.
 	if params.Provider == "openclaw" {
 		result, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{
-			OpenclawBin: params.OpenclawBin,
-			CacheDir:    openclawProfileCacheDir(params.Profile, logger),
-			McpConfig:   params.McpConfig,
-			Gateway:     params.OpenclawGateway,
-			Logger:      logger,
+			PrivateSkillsDir: privateSkillsDirectory(env.PrivateRuntimeDir, len(params.Task.AgentSkills)),
+			OpenclawBin:      params.OpenclawBin,
+			CacheDir:         openclawProfileCacheDir(params.Profile, logger),
+			McpConfig:        params.McpConfig,
+			Gateway:          params.OpenclawGateway,
+			Logger:           logger,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("execenv: prepare openclaw config: %w", err)
@@ -1075,11 +1079,12 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 	// without the registered agents.
 	if params.Provider == "openclaw" {
 		result, err := prepareOpenclawConfig(env.RootDir, params.WorkDir, OpenclawConfigPrep{
-			OpenclawBin: params.OpenclawBin,
-			CacheDir:    openclawProfileCacheDir(params.Profile, logger),
-			McpConfig:   params.McpConfig,
-			Gateway:     params.OpenclawGateway,
-			Logger:      logger,
+			PrivateSkillsDir: privateSkillsDirectory(env.PrivateRuntimeDir, len(params.Task.AgentSkills)),
+			OpenclawBin:      params.OpenclawBin,
+			CacheDir:         openclawProfileCacheDir(params.Profile, logger),
+			McpConfig:        params.McpConfig,
+			Gateway:          params.OpenclawGateway,
+			Logger:           logger,
 		})
 		if err != nil {
 			logger.Warn("execenv: refresh openclaw config failed", "error", err)

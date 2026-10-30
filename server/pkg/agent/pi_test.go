@@ -66,6 +66,13 @@ func TestBuildPiArgsPreservesProjectTrustFlags(t *testing.T) {
 	}
 }
 
+func TestBuildPiArgsAppendsPrivateSkills(t *testing.T) {
+	args := buildPiArgs("/tmp/s.jsonl", ExecOptions{PiSkillDirs: []string{`E:\task\skills\alpha`, `E:\task\skills\beta`}}, slog.Default())
+	if !strings.Contains(strings.Join(args, "\n"), "--skill\nE:\\task\\skills\\alpha\n--skill\nE:\\task\\skills\\beta") {
+		t.Fatalf("args = %#v", args)
+	}
+}
+
 func TestBuildPiArgsAppendsMcpExtension(t *testing.T) {
 	extensionPath := "/tmp/multica-pi-mcp-test/mcp-extension.mjs"
 	args := buildPiArgs("/tmp/s.jsonl", ExecOptions{

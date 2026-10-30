@@ -700,5 +700,8 @@ func buildCopilotArgs(opts ExecOptions, logger *slog.Logger) []string {
 		args = append(args, "--resume", opts.ResumeSessionID)
 	}
 	args = append(args, filterCustomArgs(opts.CustomArgs, copilotBlockedArgs, logger)...)
+	if opts.SkillPluginDir != "" {
+		args = append(args, "--plugin-dir", opts.SkillPluginDir)
+	}
 	return args
 }

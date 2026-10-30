@@ -90,6 +90,9 @@ func buildCodebuddyArgs(opts ExecOptions, logger *slog.Logger) []string {
 	}
 	args = append(args, filterCustomArgs(opts.ExtraArgs, codebuddyBlockedArgs, logger)...)
 	args = append(args, filterCustomArgs(opts.CustomArgs, codebuddyBlockedArgs, logger)...)
+	if opts.SkillPluginDir != "" {
+		args = append(args, "--plugin-dir", opts.SkillPluginDir)
+	}
 	return args
 }
 

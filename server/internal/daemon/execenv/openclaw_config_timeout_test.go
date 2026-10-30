@@ -208,18 +208,13 @@ func TestOpenclawActiveConfigPathSpendsOneBudgetAcrossBothAttempts(t *testing.T)
 // daemon.defaultTaskPrepareTimeout — and the specific, non-retryable
 // ErrOpenclawCLITimeout collapses back into the generic retryable one.
 //
-// A managed mcp_config used to add a fifth invocation of its own. It no longer
-// reads anything (see TestPrepareOpenclawConfigManagedMcpCostsNoExtraCLICall), so
-// this drives the managed path too and still expects four invocations across
-// three deadlines: path resolution's two share one.
-//
 // The config-schema read is itself a two-invocation chain now — 2026.8 hosts are
 // asked for `agents.entries` when `agents.list` is gone — and those two share a
 // budget for the same reason path resolution's pair does: they ask one question,
 // and the second is only reached when the first says the path is not there. The
-// worst case is therefore five invocations across three deadlines, and the
-// registry fallback — a different question, answered from sqlite — still starts a
-// deadline of its own.
+// registry fallback starts a deadline of its own. Task-private skills add one
+// read of the inherited extraDirs array: six invocations across four deadlines.
+// Managed MCP adds no read (TestPrepareOpenclawConfigManagedMcpCostsNoExtraCLICall).
 func TestPrepareOpenclawConfigWorstCaseCLIBudgets(t *testing.T) {
 	envRoot := t.TempDir()
 	workDir := filepath.Join(envRoot, "workdir")
@@ -242,16 +237,15 @@ func TestPrepareOpenclawConfigWorstCaseCLIBudgets(t *testing.T) {
 		// whose agents live in the registry
 		"config get agents.entries --json": {stdout: `{"error":"Config path is valid but unset: agents.entries"}`},
 		// 3. registry fallback
-		"agents list --json": {stdout: `[{"id":"scout"}]`},
-		// No fourth entry, and the managed mcp_config below is why that is worth
-		// stating: managed MCP is prepared from a file this package writes, so it
-		// adds no invocation. The stub errors on anything unregistered, so a
-		// reintroduced read fails here instead of quietly costing a budget.
+		"agents list --json":                      {stdout: `[{"id":"scout"}]`},
+		"config get skills.load.extraDirs --json": {stdout: `[]`},
+		// Managed MCP adds no invocation. Unregistered reads fail the stub.
 	})
 
 	if _, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{
-		OpenclawBin: stub.bin,
-		McpConfig:   []byte(`{"mcpServers":{"fs":{"command":"fs-server"}}}`),
+		OpenclawBin:      stub.bin,
+		PrivateSkillsDir: filepath.Join(envRoot, "private", "skills"),
+		McpConfig:        []byte(`{"mcpServers":{"fs":{"command":"fs-server"}}}`),
 	}); err != nil {
 		t.Fatalf("prepareOpenclawConfig: %v", err)
 	}
@@ -277,6 +271,7 @@ func TestPrepareOpenclawConfigWorstCaseCLIBudgets(t *testing.T) {
 		"config get agents.list --json",
 		"config get agents.entries --json",
 		"agents list --json",
+		"config get skills.load.extraDirs --json",
 	}
 	if strings.Join(invocations, " | ") != strings.Join(wantInvocations, " | ") {
 		t.Errorf("worst-case invocations:\n got: %v\nwant: %v", invocations, wantInvocations)

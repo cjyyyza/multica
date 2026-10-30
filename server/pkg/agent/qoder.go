@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os/exec"
 	"strings"
 	"sync"
@@ -74,6 +75,14 @@ func (s *qoderMessageStream) close() {
 	close(s.ch)
 }
 
+func buildQoderArgs(opts ExecOptions, logger *slog.Logger) []string {
+	args := append([]string{"--yolo", "--acp"}, filterCustomArgs(opts.CustomArgs, qoderBlockedArgs, logger)...)
+	if opts.SkillPluginDir != "" {
+		args = append(args, "--plugin-dir", opts.SkillPluginDir)
+	}
+	return args
+}
+
 func (b *qoderBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
 	execPath := b.cfg.ExecutablePath
 	if execPath == "" {
@@ -97,10 +106,7 @@ func (b *qoderBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 	timeout := opts.Timeout
 	runCtx, cancel := runContext(ctx, timeout)
 
-	qoderArgs := append(
-		[]string{"--yolo", "--acp"},
-		filterCustomArgs(opts.CustomArgs, qoderBlockedArgs, b.cfg.Logger)...,
-	)
+	qoderArgs := buildQoderArgs(opts, b.cfg.Logger)
 	cmd := b.cfg.commandAt(execPath).exec(runCtx, qoderArgs...)
 	hideAgentWindow(cmd)
 	b.cfg.logAgentCommand(cmd, newAgentCommandLogArgs(qoderArgs))

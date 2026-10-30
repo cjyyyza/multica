@@ -142,6 +142,24 @@ type ExecOptions struct {
 	// through Claude Code's --settings flag. It currently carries restrictive
 	// runtime-skill overrides only; other providers ignore it.
 	ClaudeSettingsPath string
+	// DshConfigPatch is a task-local dsh --patch overlay. The launcher flag
+	// has to precede --stdio. Empty leaves the profile's own skill roots.
+	// Other providers ignore it.
+	DshConfigPatch string
+	// ClaudeAddDir is a directory passed to Claude Code's --add-dir so the
+	// session catalogs <dir>/.claude/skills without writing into the
+	// workspace. Empty leaves project and user skill roots unchanged.
+	ClaudeAddDir string
+	// PiSkillDirs are skill directories passed to Pi's repeatable --skill.
+	// omp shares the Pi backend. Empty leaves Pi's own discovery unchanged.
+	PiSkillDirs []string
+	// SkillPluginDir is a task-owned plugin containing only managed skills.
+	// Backends with an additive --plugin-dir load it without changing the
+	// project's skill directories or the user's installed plugins.
+	SkillPluginDir string
+	// SkillWorkspaceDir is an additional workspace containing native skills.
+	// Antigravity scans its .agents/skills alongside the primary workspace.
+	SkillWorkspaceDir string
 	// CursorHookCommand is the argv of the multica hook relay (the daemon's own
 	// binary followed by CursorHookHelperArg). The cursor backend needs it, with
 	// EnableTaskSupplement, to accept additional messages; other providers

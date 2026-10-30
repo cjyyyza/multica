@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os/exec"
 	"sort"
 	"strings"
@@ -185,6 +186,18 @@ func (s *grokMessageStream) close() {
 	close(s.ch)
 }
 
+func buildGrokArgs(opts ExecOptions, logger *slog.Logger) []string {
+	args := []string{"--no-auto-update", "agent", "--always-approve"}
+	if opts.ThinkingLevel != "" {
+		args = append(args, "--effort", opts.ThinkingLevel)
+	}
+	args = append(args, filterCustomArgs(opts.CustomArgs, grokBlockedArgs, logger)...)
+	if opts.SkillPluginDir != "" {
+		args = append(args, "--plugin-dir", opts.SkillPluginDir)
+	}
+	return append(args, "stdio")
+}
+
 func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
 	execPath := b.cfg.ExecutablePath
 	if execPath == "" {
@@ -214,12 +227,7 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 	// xAI recommends it for headless/ACP/CI runs so a background update check
 	// never interferes with an unattended daemon task. It is daemon-owned
 	// (grokBlockedArgs) so user custom_args cannot double it or strip it.
-	grokArgs := []string{"--no-auto-update", "agent", "--always-approve"}
-	if opts.ThinkingLevel != "" {
-		grokArgs = append(grokArgs, "--effort", opts.ThinkingLevel)
-	}
-	grokArgs = append(grokArgs, filterCustomArgs(opts.CustomArgs, grokBlockedArgs, b.cfg.Logger)...)
-	grokArgs = append(grokArgs, "stdio")
+	grokArgs := buildGrokArgs(opts, b.cfg.Logger)
 
 	cmd := b.cfg.commandAt(execPath).exec(runCtx, grokArgs...)
 	hideAgentWindow(cmd)

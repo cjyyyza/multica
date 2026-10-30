@@ -127,8 +127,14 @@ type dshModelFrame struct {
 	Thinking *dshThinkingFrame `json:"thinking,omitempty"`
 }
 
-func dshLaunchArgs() []string {
-	return []string{"--profile", dshProfile, "--stdio"}
+func dshLaunchArgs(configPatch string) []string {
+	args := []string{"--profile", dshProfile}
+	// Launcher flags end at the first token the launcher does not own.
+	// --stdio is an app argument, so --patch has to come before it.
+	if configPatch != "" {
+		args = append(args, "--patch", configPatch)
+	}
+	return append(args, "--stdio")
 }
 
 func parseDshModelID(value string) (*dshModelSelection, error) {
@@ -243,7 +249,7 @@ func (b *dshBackend) Execute(ctx context.Context, prompt string, opts ExecOption
 	}
 
 	runCtx, cancel := runContext(ctx, opts.Timeout)
-	args := dshLaunchArgs()
+	args := dshLaunchArgs(opts.DshConfigPatch)
 	cmd := b.cfg.commandAt(execPath).exec(runCtx, args...)
 	hideAgentWindow(cmd)
 	cmd.Cancel = func() error { return nil }

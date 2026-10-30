@@ -901,14 +901,15 @@ func builtinSlug(skills []SkillContextForEnv, name string) (string, bool) {
 // writeSkills emits the Skills section: an index of invocable skill names.
 //
 // Native discovery needs only skill names. P4 tasks keep managed skills outside
-// the repository and receive explicit paths instead, preserving repository rules.
-func writeSkills(b *strings.Builder, ctx TaskContextForEnv) {
+// the repository. Runtimes that catalog that private root get the same name
+// index as a normal workdir. The others receive explicit paths.
+func writeSkills(b *strings.Builder, provider string, ctx TaskContextForEnv) {
 	skills := modelVisibleSkills(ctx.AgentSkills)
 	if len(skills) == 0 {
 		return
 	}
 	b.WriteString("## Skills\n\n")
-	if ctx.PrivateRuntimeDir != "" {
+	if ctx.PrivateRuntimeDir != "" && !cataloguesPrivateSkills(provider, ctx) {
 		b.WriteString("Load the task skills below by reading their SKILL.md files before using them. Repository skills and rules remain in their native locations.\n\n")
 		for _, skill := range skills {
 			fmt.Fprintf(b, "- **%s**: `%s`\n", skill.Name, filepath.Join(ctx.PrivateRuntimeDir, "skills", skill.Name, "SKILL.md"))
@@ -917,6 +918,9 @@ func writeSkills(b *strings.Builder, ctx TaskContextForEnv) {
 		return
 	}
 	b.WriteString("You have the following skills installed (discovered automatically):\n\n")
+	if ctx.PrivateRuntimeDir != "" && privateSkillPluginManifest(provider) != "" {
+		b.WriteString("Task skills are supplied by the `" + privateSkillPluginName + "` plugin. Use their identifiers from the runtime's native skill catalog, including the plugin namespace where required.\n\n")
+	}
 	for _, skill := range skills {
 		fmt.Fprintf(b, "- **%s**\n", skill.Name)
 	}
@@ -1173,7 +1177,7 @@ func buildMetaSkillContentSlim(provider string, ctx TaskContextForEnv) string {
 	// Every kind, quick-create included. Quick-create used to be skipped here
 	// and carried its own names-only index in the workdir sidecar instead;
 	// that sidecar is gone (MUL-6984) and the brief is the single index.
-	writeSkills(&b, ctx)
+	writeSkills(&b, provider, ctx)
 
 	if kind == kindIssue {
 		writeMentions(&b)

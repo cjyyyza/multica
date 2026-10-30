@@ -1382,6 +1382,14 @@ func TestBuildClaudeArgsExtraArgsBeforeCustomArgsAndFiltersBoth(t *testing.T) {
 	}
 }
 
+func TestBuildClaudeArgsAddsPrivateSkillDir(t *testing.T) {
+	args := buildClaudeArgs(ExecOptions{ClaudeAddDir: `E:\task\p4-context`, CustomArgs: []string{"--add-dir", `E:\extra`}}, slog.Default())
+	joined := strings.Join(args, "\n")
+	if !strings.Contains(joined, "--add-dir\nE:\\extra") || !strings.Contains(joined, "--add-dir\nE:\\task\\p4-context") {
+		t.Fatalf("args = %#v", args)
+	}
+}
+
 func TestBuildClaudeArgsManagedSkillSettingsWins(t *testing.T) {
 	args := buildClaudeArgs(ExecOptions{
 		ClaudeSettingsPath: "/tmp/multica-claude-settings.json",

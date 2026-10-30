@@ -12,6 +12,22 @@ import (
 	"time"
 )
 
+func TestDshLaunchArgsPlacePatchBeforeStdio(t *testing.T) {
+	if got := dshLaunchArgs(""); len(got) != 3 || got[0] != "--profile" || got[1] != "multica" || got[2] != "--stdio" {
+		t.Fatalf("args = %#v", got)
+	}
+	got := dshLaunchArgs(`C:\task\dsh-skill-roots.patch.yml`)
+	want := []string{"--profile", "multica", "--patch", `C:\task\dsh-skill-roots.patch.yml`, "--stdio"}
+	if len(got) != len(want) {
+		t.Fatalf("args = %#v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("args = %#v, want %#v", got, want)
+		}
+	}
+}
+
 func TestParseDshModelID(t *testing.T) {
 	got, err := parseDshModelID("deepseek-official/deepseek-v4%2Fflash")
 	if err != nil {

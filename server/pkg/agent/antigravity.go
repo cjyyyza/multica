@@ -844,6 +844,9 @@ func buildAntigravityArgs(prompt, logPath string, timeout time.Duration, opts Ex
 	if opts.Cwd != "" {
 		args = append(args, "--add-dir", filepath.Clean(opts.Cwd))
 	}
+	if opts.SkillWorkspaceDir != "" {
+		args = append(args, "--add-dir", opts.SkillWorkspaceDir)
+	}
 	args = append(args, filterCustomArgs(opts.ExtraArgs, antigravityBlockedArgs, logger)...)
 	args = append(args, filterCustomArgs(opts.CustomArgs, antigravityBlockedArgs, logger)...)
 	return args

@@ -141,7 +141,11 @@ func writeWorkspacesRootMarkerAtomic(path string, data []byte) error {
 // Cursor:      skills → {workDir}/.cursor/skills/{name}/SKILL.md  (native discovery)
 // Kimi:        skills → {workDir}/.kimi/skills/{name}/SKILL.md  (native discovery)
 // Reasonix:    skills → {workDir}/.reasonix/skills/{name}/SKILL.md  (native discovery)
-// DSH:         skills → {workDir}/.dsh/skills/{name}/SKILL.md  (native discovery)
+// DSH:         skills → {workDir}/.dsh/skills/{name}/SKILL.md  (native discovery).
+//
+//	A P4 task writes them under its private runtime dir instead and
+//	points dsh at that dir with a --patch overlay (see dsh_private_skills.go).
+//
 // Kiro:        skills → {workDir}/.kiro/skills/{name}/SKILL.md  (native discovery)
 // Qoder/Qoder CN: skills → {workDir}/.qoder/skills/{name}/SKILL.md  (project-level; see the provider docs)
 // Qwen Code:    skills → {workDir}/.qwen/skills/{name}/SKILL.md  (native project-level discovery)
@@ -169,6 +173,28 @@ func writeContextFiles(workDir, provider string, ctx TaskContextForEnv, manifest
 		if len(ctx.AgentSkills) > 0 {
 			if err := writeSkillFiles(filepath.Join(ctx.PrivateRuntimeDir, "skills"), ctx.AgentSkills, manifest); err != nil {
 				return err
+			}
+			if err := writePrivateSkillPlugin(provider, ctx.PrivateRuntimeDir, manifest); err != nil {
+				return err
+			}
+			// dsh never catalogs a directory that is not one of its skill
+			// roots. The overlay is the root; the files stay out of the client.
+			if provider == "dsh" {
+				if err := writeDshPrivateSkillPatch(ctx.PrivateRuntimeDir, manifest); err != nil {
+					return err
+				}
+			}
+			// Claude's --add-dir loads <dir>/.claude/skills, not a bare skills
+			// directory. The copy stays inside the private runtime dir.
+			if skillCatalogFamily(provider) == "claude" {
+				if err := writeSkillFiles(filepath.Join(ctx.PrivateRuntimeDir, ".claude", "skills"), ctx.AgentSkills, manifest); err != nil {
+					return err
+				}
+			}
+			if provider == "antigravity" {
+				if err := writeSkillFiles(filepath.Join(ctx.PrivateRuntimeDir, ".agents", "skills"), ctx.AgentSkills, manifest); err != nil {
+					return err
+				}
 			}
 		}
 	} else if len(ctx.AgentSkills) > 0 {

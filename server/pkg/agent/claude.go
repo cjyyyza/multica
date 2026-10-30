@@ -1200,6 +1200,11 @@ func buildClaudeArgs(opts ExecOptions, logger *slog.Logger) []string {
 	if opts.ClaudeSettingsPath != "" {
 		args = append(args, "--settings", opts.ClaudeSettingsPath)
 	}
+	// --add-dir loads <dir>/.claude/skills for this session. It stays after
+	// custom args so a user --add-dir remains an additional directory.
+	if opts.ClaudeAddDir != "" {
+		args = append(args, "--add-dir", opts.ClaudeAddDir)
+	}
 	return args
 }
 
