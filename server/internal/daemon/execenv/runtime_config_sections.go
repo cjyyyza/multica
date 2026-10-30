@@ -266,7 +266,7 @@ func writeAvailableCommands(b *strings.Builder, provider string, ctx TaskContext
 	// task holds no Perforce workspace and may not open files at all, so the
 	// edit command is withheld rather than contradicted by a later rule.
 	if !ctx.PlanMode {
-		b.WriteString("- `multica p4 edit -- <files>` — checkout files for edit (`checkout` is an alias). Do not pass `--port` or `--depot`, and do not look up P4PORT: the daemon fills both from the bound workspace. Also: `add` / `add-files`, `delete`, `revert`, `reopen`, `opened`, `reconcile`, `change`, `shelve`, `filelog`, `describe`, `status`. `-c` is `--changelist`. Swarm: `multica p4 swarm create`. Follow the action permissions in `## Perforce workspace`; without that section, file operations are unavailable. Never create a Perforce client for the task.\n\n")
+		b.WriteString("- `multica p4 edit -- <files>` — checkout files for edit (`checkout` is an alias). Do not pass `--port` or `--depot`, and do not look up P4PORT: the daemon fills both from the bound workspace. Also: `add` / `add-files`, `delete`, `revert`, `reopen`, `opened`, `reconcile`, `change`, `shelve`, `filelog`, `describe`, `fstat`, `changes`, `status`. `-c` is `--changelist`. Swarm: `multica p4 swarm create`. Follow the action permissions in `## Perforce workspace`; without that section, file operations are unavailable. Never create a Perforce client for the task.\n\n")
 	}
 	if !p4OnlyTask(ctx) {
 		b.WriteString("Git commits use the user's configured identity. Preserve it unless the user requests another identity. In a managed checkout, use `git config --worktree user.name` / `user.email` for an intentional task-local override; plain `git config` or `--local` can write into a shared cache and affect other tasks. Never change global Git identity for a task.\n\n")
@@ -562,7 +562,7 @@ func writeP4Workspace(b *strings.Builder, ws *P4WorkspaceForEnv) {
 
 	if ws.ReadOnly {
 		b.WriteString("This chat or coordination task has read-only Perforce access. Do not modify workspace files or run P4 write commands. Create or use an issue to request file changes.\n\n")
-		b.WriteString("Read history with `multica p4 filelog -- <files>` and `multica p4 describe -c <number>`. Both stay inside this task's authorized depots.\n\n")
+		b.WriteString("Read history with `multica p4 filelog -- <files>` and `multica p4 describe -c <number>`. File state is `multica p4 fstat -- <files>`; changelist lists are `multica p4 changes`. All of these stay inside this task's authorized depots.\n\n")
 		return
 	}
 	if ws.Ticket == "" {
@@ -570,7 +570,7 @@ func writeP4Workspace(b *strings.Builder, ws *P4WorkspaceForEnv) {
 		// command list so an agent reading top-down never reaches `p4 edit`
 		// believing it is available.
 		b.WriteString("**This task has no 易协作 ticket, so you cannot open any file.** Every changelist description must carry `refs #<ticket>`, and inventing a number is worse than not having one. If the task needs a file change, post a comment asking for `refs #<ticket>` to be added to the issue description, then end your turn. Do not write to the workspace any other way.\n\n")
-		b.WriteString("You can still read history with `multica p4 filelog -- <files>` and `multica p4 describe -c <number>`.\n\n")
+		b.WriteString("You can still read history with `multica p4 filelog -- <files>` and `multica p4 describe -c <number>`, and read file state with `multica p4 fstat -- <files>` or `multica p4 changes`.\n\n")
 		return
 	}
 
@@ -578,7 +578,7 @@ func writeP4Workspace(b *strings.Builder, ws *P4WorkspaceForEnv) {
 	b.WriteString("- Open a file with `multica p4 edit -- <files>` BEFORE you change it, and create new files with `multica p4 add -- <files>` or `multica p4 add-files -- <files>`. Do not pass `--port` or `--depot`, and do not copy the port out of Project Context, `p4 set`, or `p4 info` — the daemon already has it. Files on disk are read-only until Helix opens them — never clear the read-only bit to write one: Helix would not know the file changed, and the change would be lost.\n")
 	b.WriteString("- Everything you open goes into this task's changelist automatically. `multica p4 status` reports its number and the files in it. Do not pass `-c`/`--changelist` on edit, add, or reopen; another number is rejected. `multica p4 describe -c <number>` only reads that changelist.\n")
 	b.WriteString("- `multica p4 opened -F \"%depotFile% %change%\"` prints each file's depot path and changelist number (`%change%` is the number or `default`). `--output json` returns those rows in `files`. `-c` is `--changelist`, not a passthrough. Other p4 flags are not forwarded; do not run `p4 opened -a`.\n")
-	b.WriteString("- Read history with `multica p4 filelog -- <files>` (each revision and its changelist description) and `multica p4 describe -c <number>`. Do not use raw `p4` to write. Raw read-only queries (`p4 files`, `p4 print`, `p4 filelog`, `p4 describe`, `p4 changes`) still work.\n")
+	b.WriteString("- Read history with `multica p4 filelog -- <files>` (each revision and its changelist description) and `multica p4 describe -c <number>`. File state in this client is `multica p4 fstat -- <files>` (have, action, otherOpen); changelist lists are `multica p4 changes`. Both print p4's own output and forward flags after the verb. Do not use raw `p4` to write. Raw depot reads such as `p4 print` still work, but raw `p4 fstat` cannot see this client.\n")
 	writeP4WorkspaceActionPolicy(b, ws)
 	b.WriteString("- If a command reports `opened_by_you`, `exclusive_locked`, `exclusive_not_allowed`, or `not_head`, stop on that file and explain it in the issue. These mean the human already has it open, someone else holds the lock, or your copy is behind — none of them is worked around.\n")
 	if ws.AllowExclusive {

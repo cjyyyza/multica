@@ -42,8 +42,9 @@ var p4RemoveCmd = &cobra.Command{
 }
 
 var p4SyncCmd = &cobra.Command{
-	Use:   "sync [files...]",
-	Short: "Sync the bound workspace, or individual files in it",
+	Use:     "sync [files...]",
+	Aliases: []string{"update"},
+	Short:   "Sync the bound workspace, or individual files in it",
 	Long: "Syncs the Helix workspace this task is already bound to, and only when that depot's allow_sync switch is on in Settings → Code (default off). " +
 		"Omitting files syncs the full client view, including stream imports. Named arguments must be individual files in an authorized depot; directories and wildcards are rejected. " +
 		"It does not create a task client or download a new copy of the depot. -c/--changelist and --fresh are rejected.",
@@ -98,6 +99,7 @@ func init() {
 		cmd.Flags().StringVar(&p4SwarmURL, "swarm-url", "", "Helix Swarm URL (must match the configured depot)")
 	}
 	p4RevertCmd.Flags().BoolVarP(&p4RevertUnchanged, "unchanged", "a", false, "revert only unchanged files (`p4 revert -a`)")
+	p4ReconcileCmd.Flags().BoolVarP(&p4ReconcilePreview, "preview", "n", false, "preview reconcile without opening files (`p4 reconcile -n`)")
 	p4MoveCmd.Flags().StringVar(&p4Dest, "dest", "", "Destination path (`p4 move <source> <dest>`)")
 	p4ShelveCmd.Flags().BoolVarP(&p4Force, "force", "f", false, "overwrite an existing shelf (`p4 shelve -f`)")
 	addP4FilelogFlags(p4FilelogCmd)
@@ -132,6 +134,10 @@ func init() {
 	p4Cmd.AddCommand(p4SwarmCmd)
 
 	p4Cmd.AddCommand(p4FilelogCmd)
+	p4Cmd.AddCommand(p4ResolveCmd)
+	for _, cmd := range p4ReadCommands() {
+		p4Cmd.AddCommand(cmd)
+	}
 
 	// -F is a presentation flag, not a p4 passthrough. Persistent so both
 	// `p4 -F ... opened` and `p4 opened -F ...` parse; only opened and status honor it.
@@ -408,6 +414,7 @@ func resetP4Flags() {
 	p4CommentBody = ""
 	p4Dest = ""
 	p4RevertUnchanged = false
+	p4ReconcilePreview = false
 	p4Force = false
 	p4NoShelve = false
 	p4Reviewers = nil

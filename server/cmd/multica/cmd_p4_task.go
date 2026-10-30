@@ -32,9 +32,10 @@ var (
 	// p4Format formats this task's opened files in the CLI. It is not forwarded
 	// to p4. -c is the changelist alias, not a passthrough: opened -a and -x
 	// stay rejected.
-	p4Format      string
-	p4FilelogMax  int
-	p4FilelogLong bool
+	p4Format           string
+	p4FilelogMax       int
+	p4FilelogLong      bool
+	p4ReconcilePreview bool
 )
 
 var p4EditCmd = &cobra.Command{
@@ -79,17 +80,19 @@ var p4OpenedCmd = &cobra.Command{
 var p4ReconcileCmd = &cobra.Command{
 	Use:     "reconcile [files...]",
 	Aliases: []string{"rec"},
-	Short:   "Reconcile local adds, edits, and deletes into the task client",
+	Short:   "Reconcile or preview local adds, edits, and deletes in the task client",
+	Long:    "Runs `p4 reconcile -aed` on explicit files in the task changelist. -n/--preview reports the same changes without opening files.",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runP4Mutate("reconcile"),
 }
 
 var p4MoveCmd = &cobra.Command{
-	Use:   "move <source> [dest]",
-	Short: "Move or rename an opened file in the task Perforce client",
-	Long:  "Runs `p4 move`. The destination is the second argument or --dest.",
-	Args:  cobra.RangeArgs(1, 2),
-	RunE:  runP4Move,
+	Use:     "move <source> [dest]",
+	Aliases: []string{"rename"},
+	Short:   "Move or rename an opened file in the task Perforce client",
+	Long:    "Runs `p4 move`. The destination is the second argument or --dest.",
+	Args:    cobra.RangeArgs(1, 2),
+	RunE:    runP4Move,
 }
 
 var p4ReopenCmd = &cobra.Command{
@@ -100,10 +103,11 @@ var p4ReopenCmd = &cobra.Command{
 }
 
 var p4ChangeCmd = &cobra.Command{
-	Use:   "change",
-	Short: "Create a pending numbered changelist in the task client",
-	Args:  cobra.NoArgs,
-	RunE:  runP4Mutate("change"),
+	Use:     "change",
+	Aliases: []string{"changelist"},
+	Short:   "Create a pending numbered changelist in the task client",
+	Args:    cobra.NoArgs,
+	RunE:    runP4Mutate("change"),
 }
 
 var p4SubmitCmd = &cobra.Command{
@@ -153,6 +157,9 @@ var p4StatusCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE:  runP4Status,
 }
+
+var p4ResolveCmd = newP4ReadCmd("resolve", "Resolve files in the task changelist",
+	"Runs `p4 resolve` only against files in this task's changelist. An automatic mode (-as, -am, -af, -at, or -ay) is required unless -n or -N previews the resolve. The task changelist is always injected; -c and stream-spec resolves are rejected.")
 
 var p4SwarmCmd = &cobra.Command{
 	Use:   "swarm",
@@ -418,6 +425,9 @@ func runP4Mutate(action string) func(*cobra.Command, []string) error {
 		}
 		if p4Force {
 			body["force"] = true
+		}
+		if action == "reconcile" && p4ReconcilePreview {
+			body["preview"] = true
 		}
 		if action == "filelog" {
 			if p4FilelogMax > 0 {

@@ -26,11 +26,15 @@ type p4MutateRequest struct {
 	Description     string   `json:"description,omitempty"`
 	Dest            string   `json:"dest,omitempty"`
 	RevertUnchanged bool     `json:"revert_unchanged,omitempty"`
+	Preview         bool     `json:"preview,omitempty"`
 	Force           bool     `json:"force,omitempty"`
 	Fresh           bool     `json:"fresh,omitempty"`
 	// Max and Long are filelog bounds. They are not p4 flags from the caller.
 	Max  int  `json:"max,omitempty"`
 	Long bool `json:"long,omitempty"`
+	// Args is the p4 argv after the verb for forwarded reads and resolve.
+	// Other write actions ignore it.
+	Args []string `json:"args,omitempty"`
 }
 
 type p4SwarmRequest struct {

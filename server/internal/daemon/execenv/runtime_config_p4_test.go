@@ -13,8 +13,8 @@ func TestP4ReadOnlyWorkspaceBrief(t *testing.T) {
 	if !strings.Contains(out, "read-only Perforce access") || strings.Contains(out, "Open a file with") {
 		t.Fatalf("coordination task received editing instructions:\n%s", out)
 	}
-	if !strings.Contains(out, "multica p4 filelog -- <files>") {
-		t.Fatalf("read-only brief did not offer filelog:\n%s", out)
+	if !strings.Contains(out, "multica p4 filelog -- <files>") || !strings.Contains(out, "multica p4 fstat -- <files>") {
+		t.Fatalf("read-only brief did not offer filelog and fstat:\n%s", out)
 	}
 }
 
@@ -134,6 +134,8 @@ func TestP4WorkspaceSectionNamesTheClientAndItsRules(t *testing.T) {
 		"multica p4 add -- <files>",
 		"multica p4 add-files -- <files>",
 		"multica p4 filelog -- <files>",
+		"multica p4 fstat -- <files>",
+		"multica p4 changes",
 		"never clear the read-only bit",
 		// The task changelist is implicit, and discoverable.
 		"multica p4 status",

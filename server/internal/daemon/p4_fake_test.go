@@ -170,8 +170,10 @@ func main() {
             if _, ok := os.LookupEnv("P4_FAKE_SHELFDELETE_ERR"); ok { emit("SHELFDELETE"); return }
         }
         emit("MUTATE")
-    case "edit", "add", "delete", "reopen", "move", "reconcile", "submit", "sync", "unshelve":
+    case "edit", "add", "delete", "reopen", "move", "reconcile", "resolve", "submit", "sync", "unshelve":
 		emit("MUTATE")
+	case "files", "dirs", "grep", "print", "diff", "annotate", "have", "sizes", "integrated", "interchanges", "resolved":
+		emit(strings.ToUpper(rest[0]))
 	default:
 		panic("unexpected p4 command: " + joined)
 	}

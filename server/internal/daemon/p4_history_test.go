@@ -53,6 +53,10 @@ func TestWorkspaceFilelogAndDescribeStayInsideAuthorizedDepots(t *testing.T) {
 	if strings.Contains(strings.Join(foreign.Files, " "), "//secret") {
 		t.Fatalf("rejection leaked the other depot: %+v", foreign)
 	}
+	t.Setenv("P4_FAKE_DESCRIBE", "Change 12345 by alice@alice_DEV on 2024/01/15 12:00:00\n\n\tmixed scope\n\nAffected files ...\n\n... //DJ01_Proj/Dev/Foo.gbd#3 edit\n... //secret/Confidential Plan.txt#1 edit\n")
+	if result, rej, err := d.runWorkspaceP4(t.Context(), binding, p4MutateRequest{Action: "describe", Changelist: "12345"}, root); err != nil || result != nil || rej == nil || rej.Code != p4CodeNotInWorkspace {
+		t.Fatalf("mixed changelist with spaces escaped authorization: result=%+v rejection=%+v error=%v", result, rej, err)
+	}
 	t.Setenv("P4_FAKE_DESCRIBE", "... change 999\n... status submitted\n")
 	if _, rej, err := d.runWorkspaceP4(t.Context(), binding, p4MutateRequest{Action: "describe", Changelist: "999"}, root); err != nil || rej == nil {
 		t.Fatalf("unparsed describe was returned: err=%v rej=%+v", err, rej)

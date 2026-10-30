@@ -39,6 +39,13 @@ multica p4 add -- <files>
 multica p4 add-files -- <files>
 multica p4 filelog -- <files>
 multica p4 describe -c <number>
+multica p4 fstat -- <files>
+multica p4 changes
+multica p4 grep -e <pattern> -- <files>
+multica p4 dirs -- <directories>
+multica p4 resolved -- <files>
+multica p4 resolve -am -- <files>
+multica p4 reconcile -n -- <files>
 multica p4 status --output json
 multica p4 swarm create --output json
 multica p4 swarm link --review <id>
@@ -160,7 +167,18 @@ the task changelist (`outside_task_change`), or a path outside the client root
 (`not_in_workspace`). Raw `p4` writes are blocked in the task environment
 through `P4CONFIG` / `P4CLIENT`. Read history with `multica p4 filelog -- <files>`
 (each revision and its changelist description) and `multica p4 describe -c <number>`.
-Raw read-only `p4 files` / `print` / `filelog` / `describe` / `changes` still work.
+File state in this client is `multica p4 fstat -- <files>`; changelist lists are
+`multica p4 changes`. Both print p4's own output and forward flags after the verb.
+Other scoped reads are `files`, `dirs`, `grep`, `print`, `diff`, `diff2`,
+`annotate`, `where`, `have`, `sizes`, `integrated`, `interchanges`, and `resolved`.
+Native long options and attached values such as `diff -du3` and `annotate --tab=8`
+are preserved; connection flags, `print -o` (including `-ooutfile`), and unscoped
+branch/stream views are rejected in both separated and attached forms. `multica p4
+resolve` injects the task changelist and needs an automatic mode (`-as`, `-am`,
+`-af`, `-at`, or `-ay`) unless `-n` or `-N` previews it; unknown flags are rejected.
+Use
+`multica p4 reconcile -n -- <files>` for a non-mutating reconcile preview. Raw
+depot reads still work, but raw `p4 fstat` cannot see this client.
 
 When the task ends with a pending changelist, the daemon reverts the files that were opened but not
 changed, shelves the rest, and — unless the depot sets `no_auto_review` —
@@ -268,6 +286,7 @@ For Perforce work, check the brief for the mode first. In workspace mode you
 are already inside the human's client — open files with `multica p4 edit`,
 add new ones with `multica p4 add` (or `add-files`), and read the changelist
 number from `multica p4 status`. Read file history with `multica p4 filelog`.
+Read client file state with `multica p4 fstat` and list changelists with `multica p4 changes`.
 Submit, sync, and unshelve require the corresponding
 permission in the runtime brief. Open and add through
 `multica p4 edit` / `add` and never through a host `p4` client, which may

@@ -68,6 +68,19 @@ func TestP4StatusFormatUsesTaskChange(t *testing.T) {
 	}
 }
 
+func TestSplitP4ReadCLIArgsPreservesNativeFlags(t *testing.T) {
+	output, rest, err := splitP4ReadCLIArgs([]string{"--offset", "100", "--size=50", "-du3", "--stream", "Foo.cpp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "text" {
+		t.Fatalf("output = %q", output)
+	}
+	if got := strings.Join(rest, " "); got != "--offset 100 --size=50 -du3 --stream Foo.cpp" {
+		t.Fatalf("p4 args = %q", got)
+	}
+}
+
 func TestFormatP4Opened(t *testing.T) {
 	files := []p4OpenedLine{{
 		DepotFile:  "//depot/A.cpp",
@@ -166,11 +179,24 @@ func TestP4NativeArgvMapsOntoGuardedFields(t *testing.T) {
 		{"describe number", []string{"describe", "12345"}, "/p4/run", map[string]any{"action": "describe", "changelist": "12345"}},
 		{"describe -c", []string{"describe", "-c", "12345"}, "/p4/run", map[string]any{"action": "describe", "changelist": "12345"}},
 		{"filelog", []string{"filelog", "Foo.gbd"}, "/p4/run", map[string]any{"action": "filelog"}},
+		{"fstat flags", []string{"fstat", "-Ol", "--output", "text", "--", "Foo.cpp"}, "/p4/run", map[string]any{"action": "fstat"}},
+		{"changes max", []string{"changes", "-m", "5", "-s", "submitted"}, "/p4/run", map[string]any{"action": "changes"}},
+		{"changelists alias", []string{"changelists", "--stream"}, "/p4/run", map[string]any{"action": "changes"}},
+		{"dirs", []string{"dirs", "//DJ01_Proj/Dev/Source/*"}, "/p4/run", map[string]any{"action": "dirs"}},
+		{"grep", []string{"grep", "-e", "needle", "//DJ01_Proj/Dev/Source/..."}, "/p4/run", map[string]any{"action": "grep"}},
+		{"integrated", []string{"integrated", "//DJ01_Proj/Dev/Source/..."}, "/p4/run", map[string]any{"action": "integrated"}},
+		{"interchanges", []string{"interchanges", "//DJ01_Proj/Dev/Source/...", "//DJ01_Proj/Dev/Target/..."}, "/p4/run", map[string]any{"action": "interchanges"}},
+		{"resolved", []string{"resolved", "-o", "Foo.cpp"}, "/p4/run", map[string]any{"action": "resolved"}},
+		{"resolve", []string{"resolve", "-am", "Foo.cpp"}, "/p4/run", map[string]any{"action": "resolve"}},
 		{"filelog max", []string{"filelog", "-m", "5", "--long", "--", "Foo.gbd"}, "/p4/run", map[string]any{"action": "filelog", "max": float64(5), "long": true}},
 		{"revert -a", []string{"revert", "-a", "--", "A.cpp"}, "/p4/run", map[string]any{"action": "revert", "revert_unchanged": true}},
+		{"reconcile preview", []string{"reconcile", "-n", "A.cpp"}, "/p4/run", map[string]any{"action": "reconcile", "preview": true}},
 		{"shelve -f", []string{"shelve", "-f"}, "/p4/run", map[string]any{"action": "shelve", "force": true}},
 		{"move dest", []string{"move", "A.cpp", "B.cpp"}, "/p4/run", map[string]any{"action": "move", "dest": "B.cpp"}},
+		{"rename alias", []string{"rename", "A.cpp", "B.cpp"}, "/p4/run", map[string]any{"action": "move", "dest": "B.cpp"}},
+		{"changelist alias", []string{"changelist", "--description", "Fix"}, "/p4/run", map[string]any{"action": "change"}},
 		{"sync file", []string{"sync", "A.cpp"}, "/p4/sync", map[string]any{"files": []any{"A.cpp"}}},
+		{"update alias", []string{"update", "A.cpp"}, "/p4/sync", map[string]any{"files": []any{"A.cpp"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -197,6 +223,21 @@ func TestP4NativeArgvMapsOntoGuardedFields(t *testing.T) {
 				}
 				if _, ok := body["max"]; ok {
 					t.Errorf("default max was forwarded: %#v", body)
+				}
+			}
+			if tc.name == "fstat flags" {
+				args, _ := body["args"].([]any)
+				if len(args) != 2 || args[0] != "-Ol" || args[1] != "Foo.cpp" {
+					t.Fatalf("fstat args = %#v", body["args"])
+				}
+				if _, ok := body["output"]; ok {
+					t.Errorf("--output was forwarded: %#v", body)
+				}
+			}
+			if tc.name == "changes max" {
+				args, _ := body["args"].([]any)
+				if len(args) != 4 || args[0] != "-m" || args[1] != "5" || args[2] != "-s" || args[3] != "submitted" {
+					t.Fatalf("changes args = %#v", body["args"])
 				}
 			}
 			if tc.name == "add files" {

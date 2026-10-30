@@ -44,7 +44,7 @@ type DescribedFile struct {
 var (
 	filelogRevLine = regexp.MustCompile(`^\.\.\. #(\d+) change (\d+) (\S+) on (\d{4}/\d{2}/\d{2}(?: \d{2}:\d{2}:\d{2})?) by (\S+) \(([^)]*)\)(.*)$`)
 	describeHeader = regexp.MustCompile(`^Change (\d+) by (\S+) on .*$`)
-	describeFile   = regexp.MustCompile(`^\.\.\. (//\S+?)#(\d+) (\S+)`)
+	describeFile   = regexp.MustCompile(`^\.\.\. (//.+)#(\d+) (\S+)\s*$`)
 )
 
 // Filelog runs `p4 filelog` on already-authorized local paths. max and long
@@ -221,11 +221,15 @@ func ParseDescribe(text string) (DescribedChange, bool) {
 	inFiles := false
 	for _, line := range lines[1:] {
 		line = strings.TrimRight(line, "\r")
-		if !inFiles && describeSection(line) {
+		if line == strings.TrimSpace(line) && describeSection(line) {
 			inFiles = true
+			continue
 		}
-		if file := describeFile.FindStringSubmatch(strings.TrimSpace(line)); file != nil {
-			inFiles = true
+		if inFiles && strings.HasPrefix(strings.TrimSpace(line), "... //") {
+			file := describeFile.FindStringSubmatch(strings.TrimSpace(line))
+			if file == nil {
+				return DescribedChange{}, false
+			}
 			parsed.Files = append(parsed.Files, DescribedFile{
 				DepotFile: file[1],
 				Rev:       file[2],

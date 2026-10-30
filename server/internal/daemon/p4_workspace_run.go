@@ -37,6 +37,10 @@ type p4WorkspaceResult struct {
 	Files       []p4OpenedFile            `json:"files,omitempty"`
 	Revisions   []p4cache.FilelogRevision `json:"revisions,omitempty"`
 	Description string                    `json:"description,omitempty"`
+	// Stderr and ExitCode forward a read-only p4 invocation. A non-zero exit
+	// is still HTTP 200: the text is the result, not a transport failure.
+	Stderr   string `json:"stderr,omitempty"`
+	ExitCode int    `json:"exit_code,omitempty"`
 }
 
 // p4OpenedFile is one file from this task's changelist. JSON is snake_case;
@@ -93,6 +97,14 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 	case p4cache.ActionDescribe:
 		// A number selects a read, including history outside this task's CL.
 	default:
+		if p4QueryAction(action) {
+			// -c here is the Multica write target, not `p4 changes -c` / `p4 fstat -c`.
+			// Those flags travel in Args, after the verb.
+			if strings.TrimSpace(req.Changelist) != "" {
+				return nil, rejectP4(p4CodeActionNotAllowed, "pass p4 flags after the verb; -c/--changelist is not a client or a write target", nil, nil), nil
+			}
+			break
+		}
 		if rej := b.rejectForeignChangelist(req.Changelist); rej != nil {
 			return nil, rej, nil
 		}
@@ -119,11 +131,17 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 		}
 		return d.workspaceUnshelve(ctx, b)
 	case p4cache.ActionEdit, p4cache.ActionAdd, p4cache.ActionDelete, p4cache.ActionMove,
-		p4cache.ActionReopen, p4cache.ActionRevert, p4cache.ActionReconcile,
+		p4cache.ActionReopen, p4cache.ActionRevert, p4cache.ActionReconcile, p4cache.ActionResolve,
 		p4cache.ActionShelve, p4cache.ActionChange, p4cache.ActionOpened, p4cache.ActionDescribe,
 		p4cache.ActionFilelog:
 	default:
-		return nil, rejectP4(p4CodeActionNotAllowed, fmt.Sprintf("perforce action %q is not available in workspace mode", req.Action), nil, nil), nil
+		if !p4QueryAction(action) {
+			return nil, rejectP4(p4CodeActionNotAllowed, fmt.Sprintf("perforce action %q is not available in workspace mode", req.Action), nil, nil), nil
+		}
+	}
+	if p4QueryAction(action) {
+		req.Action = action
+		return d.workspaceQuery(ctx, b, cwd, req)
 	}
 	if actionOpensFiles(action) && strings.TrimSpace(b.ticket) == "" {
 		return nil, rejectP4(p4CodeTicketRequired, "this task has no 易协作 ticket; ask a person to add refs #<number> to the task description before opening files", nil, nil), nil
@@ -150,6 +168,18 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 			return workspaceVerbResult(b, action, b.changelist(), "No unchanged files opened by this run."), nil, nil
 		}
 		req.Files = files
+	}
+
+	var resolveFlags []string
+	previewOnly := action == p4cache.ActionReconcile && req.Preview
+	if action == p4cache.ActionResolve {
+		flags, files, preview, rejection := classifyResolveArgs(req.Args)
+		if rejection != nil {
+			return nil, rejection, nil
+		}
+		resolveFlags = flags
+		req.Files = files
+		previewOnly = preview
 	}
 
 	files, dest, rej := b.resolveWorkspacePaths(cwd, req.Files, req.Dest)
@@ -221,7 +251,7 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 	warnings := workspaceFileWarnings(states, b.ref.AllowExclusive)
 
 	change := b.changelist()
-	if actionNeedsChange(action) {
+	if actionNeedsChange(action) && !previewOnly {
 		change, err = d.ensureTaskChange(ctx, b)
 		if err != nil {
 			return nil, nil, err
@@ -239,13 +269,20 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 		}
 	case p4cache.ActionReconcile:
 		flags = append(flags, "-aed")
+		if req.Preview {
+			flags = append(flags, "-n")
+		}
+	case p4cache.ActionResolve:
+		flags = append(flags, resolveFlags...)
 	case p4cache.ActionMove:
 		runFiles = []string{files[0], dest}
 	}
-	// P4 can apply some files before returning an error.
-	b.touchChange()
-	if actionOpensFiles(action) {
-		b.touchPaths(targets)
+	if !previewOnly {
+		// P4 can apply some files before returning an error.
+		b.touchChange()
+		if actionOpensFiles(action) {
+			b.touchPaths(targets)
+		}
 	}
 	output, err := d.p4Cache.RunInChange(ctx, b.ws, change, action, runFiles, flags...)
 	if err != nil {
@@ -473,6 +510,49 @@ func (b *p4TaskBinding) rejectForeignChangelist(requested string) *p4Rejection {
 	return nil
 }
 
+func classifyResolveArgs(args []string) ([]string, []string, bool, *p4Rejection) {
+	policy := p4ReadPolicy{rejectFlags: map[string]bool{"-c": true, "-So": true}}
+	_, flags, files, rej := classifyReadArgs(policy, args)
+	if rej != nil {
+		return nil, nil, false, rej
+	}
+	automatic := false
+	preview := false
+	for _, flag := range flags {
+		switch flag.name {
+		case "-as", "-am", "-af", "-at", "-ay":
+			automatic = true
+		case "-n", "-N":
+			preview = true
+		case "-f", "-K", "-o", "-t", "-v",
+			"-Aa", "-Ab", "-Ac", "-Ad", "-Am", "-At", "-AQ",
+			"-db", "-dw", "-dl", "-dn", "-ds", "-dc", "-du":
+		default:
+			if !resolveContextDiffFlag(flag.name) {
+				return nil, nil, false, rejectP4(p4CodeActionNotAllowed, "resolve flag is not in the allowed non-interactive set", []string{flag.name}, nil)
+			}
+		}
+	}
+	if !automatic && !preview {
+		return nil, nil, false, rejectP4(p4CodeActionNotAllowed, "resolve requires an automatic mode (-as, -am, -af, -at, or -ay), or -n/-N for a preview", nil, nil)
+	}
+	return rebuildReadArgs(flags, nil), files, preview, nil
+}
+
+func resolveContextDiffFlag(flag string) bool {
+	for _, prefix := range []string{"-dc", "-du"} {
+		if suffix, ok := strings.CutPrefix(flag, prefix); ok && suffix != "" {
+			for _, r := range suffix {
+				if r < '0' || r > '9' {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
+
 func actionOpensFiles(action string) bool {
 	switch action {
 	case p4cache.ActionEdit, p4cache.ActionAdd, p4cache.ActionDelete, p4cache.ActionMove,
@@ -648,7 +728,7 @@ func (b *p4TaskBinding) resolveOneList(cwd string, files []string) ([]string, *p
 func (b *p4TaskBinding) rejectSidecars(action string, paths []string) *p4Rejection {
 	switch action {
 	case p4cache.ActionEdit, p4cache.ActionAdd, p4cache.ActionDelete, p4cache.ActionMove,
-		p4cache.ActionReconcile, p4cache.ActionReopen:
+		p4cache.ActionReconcile, p4cache.ActionResolve, p4cache.ActionReopen:
 	default:
 		return nil
 	}
@@ -834,7 +914,7 @@ func p4ReadOnlyAction(action string) bool {
 	case p4cache.ActionOpened, p4cache.ActionDescribe, p4cache.ActionFilelog:
 		return true
 	default:
-		return false
+		return p4QueryAction(action)
 	}
 }
 

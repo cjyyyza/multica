@@ -258,7 +258,7 @@ func (h *Handler) resolveIssueP4Ticket(ctx context.Context, issue db.Issue) stri
 当 `ctx.P4Workspace != nil` 时，用新的段落替换 `writeP4Depots`（488-512 行）的内容。需要新增 `execenv.P4WorkspaceForEnv{Client, Root, Stream, Ticket, Change, AllowExclusive}`。文案用英文，和现有 brief 保持一致，要点如下：
 - 你在 `<user>` 的工作区里干活，给出 client、根目录、stream。
 - 改文件前先 `multica p4 edit`；文件默认只读，**不要改只读属性**；新建文件用 `multica p4 add`（`add-files` 相同）。所有改动都会进本任务的 CL。`-c` 就是 `--changelist`，写操作不能指向别的 CL。
-- 查文件历史用 `multica p4 filelog`，查某条 CL 描述用 `multica p4 describe -c <编号>`。不要用 raw `p4` 写工作区；`files/print/filelog/describe/changes` 这类只读查询仍可用。
+- 查文件历史用 `multica p4 filelog`，查某条 CL 描述用 `multica p4 describe -c <编号>`。看这个 client 的文件状态用 `multica p4 fstat`，列 changelist 用 `multica p4 changes`（原样转发 p4 输出）。不要用 raw `p4` 写工作区；depot 只读查询仍可用，但原生 `fstat` 看不到绑定的 client。
 - submit、sync、unshelve 只在对应权限开启时可用，不碰别的 CL。遇到“已在你的 CL 里打开 / 被独占 / 不在 head”之类的提示，停下并在任务里说明。
 - 结束后 daemon 会自动 shelve 并发起 Swarm 评审。最终回复里写清：改了什么、CL 号（用 `multica p4 status` 查）、在 UE 里怎么验证。
 - 没有单号时：本任务不能打开文件；需要改文件就留言请人在描述里补 `refs #<单号>`，然后结束。

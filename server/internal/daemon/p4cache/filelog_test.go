@@ -105,3 +105,17 @@ func TestValidChangeNumberRejectsFlags(t *testing.T) {
 		t.Fatal("positive numbers rejected")
 	}
 }
+
+func TestParseDescribePreservesSpacesAndRejectsPartialFileLists(t *testing.T) {
+	const header = "Change 12345 by alice@client on 2026/10/29 12:00:00\n\n"
+	parsed, ok := ParseDescribe(header + "\t... //allowed/prose.cpp#1 edit\n\nAffected files ...\n\n... //depot/Folder/File Name.cpp#2 edit\n")
+	if !ok || len(parsed.Files) != 1 || parsed.Files[0].DepotFile != "//depot/Folder/File Name.cpp" {
+		t.Fatalf("describe file list = %+v, parsed=%v", parsed.Files, ok)
+	}
+	if !strings.Contains(parsed.Description, "//allowed/prose.cpp") {
+		t.Fatalf("description was treated as file evidence: %q", parsed.Description)
+	}
+	if _, ok := ParseDescribe(header + "Affected files ...\n\n... //depot/Good.cpp#1 edit\n... //secret/unrecognized-file-line\n"); ok {
+		t.Fatal("a partially parsed file list must not authorize a changelist")
+	}
+}

@@ -652,6 +652,8 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"multica runtime list --output json",
 				"multica repo checkout <url>",
 				"multica p4 edit -- <files>",
+				"multica p4 fstat -- <files>",
+				"multica p4 changes",
 				"multica p4 status --output json",
 				"multica p4 swarm create --output json",
 				"Do not pass `--port` or `--depot`",

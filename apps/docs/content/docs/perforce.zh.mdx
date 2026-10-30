@@ -103,7 +103,7 @@ Multica: <任务编号>
 | `action_not_allowed` | 未开启对应权限的 submit、sync 或 unshelve |
 | `not_in_workspace` | 路径在 client Root 之外 |
 
-智能体进程里的原生 `p4` 写操作已被屏蔽（`P4CONFIG` 和 `P4CLIENT` 指向不存在的名字），`p4 edit`、`p4 sync`、`p4 submit` 在那里都会失败。查历史用 `multica p4 filelog` 和 `multica p4 describe -c`。只读查询 —— `p4 files`、`p4 print`、`p4 filelog`、`p4 describe`、`p4 changes` —— 照常可用。这只是护栏，不是安全边界：真正的约束是上面那些守护进程检查。
+智能体进程里的原生 `p4` 写操作已被屏蔽（`P4CONFIG` 和 `P4CLIENT` 指向不存在的名字），`p4 edit`、`p4 sync`、`p4 submit` 在那里都会失败。查历史用 `multica p4 filelog` 和 `multica p4 describe -c`。看这个 client 里的文件状态用 `multica p4 fstat`，列 changelist 用 `multica p4 changes`。这两条都会原样打印 p4 的输出，并转发写在动词后面的参数。`p4 print` 这类 depot 只读查询仍然可用，但原生 `p4 fstat` 看不到这个 client。这只是护栏，不是安全边界：真正的约束是上面那些守护进程检查。
 
 同一个 client 上同时只跑一条智能体任务，指向同一个工作区的两条任务会串行执行，不会交叉。
 
@@ -139,14 +139,20 @@ multica p4 add --port perforce.example.com:1666 --depot //depot/project -- Sourc
 multica p4 add-files -- Source/New.cpp
 multica p4 filelog --output text -- Source/Foo.gbd
 multica p4 describe -c 12345
+multica p4 fstat -Ol -- Source/Foo.cpp
+multica p4 changes -m 20 -s submitted
 multica p4 change --port perforce.example.com:1666 --depot //depot/project --description "Fix the crash"
 multica p4 shelve -c 12345 -f
 multica p4 status --output json
 ```
 
-`checkout` 是 `edit` 的别名。`multica p4 add <files>` 就是 `p4 add`（`add-files` 相同）。不带文件的 `multica p4 add` 仍然是往工作区登记 depot。`-c` 就是 `--changelist`。`revert -a` 是 `--unchanged`。`shelve -f` 是 `--force`。`move <source> <dest>` 与 `--dest` 相同。其他命令：`delete`、`opened`、`reconcile`（`rec`）、`reopen`。独占锁定（`+l`）的文件必须先 edit 才能写。
+`checkout` 是 `edit` 的别名；`changelist`、`changelists`、`rename`、`update` 分别是 `change`、`changes`、`move`、`sync` 的别名。`multica p4 add <files>` 就是 `p4 add`（`add-files` 相同）。不带文件的 `multica p4 add` 仍然是往工作区登记 depot。`-c` 就是 `--changelist`。`revert -a` 是 `--unchanged`。`shelve -f` 是 `--force`。`move <source> <dest>` 与 `--dest` 相同。其他命令：`delete`、`opened`、`reconcile`（`rec`）、`reopen`。`reconcile -n` 只预览，不会创建或触碰任务 changelist。独占锁定（`+l`）的文件必须先 edit 才能写。
 
 `multica p4 filelog -- <files>` 打印每个版本及其 changelist 描述（默认 `-L`，`--long` 为全文）。`--max` 限制版本数（默认 20，最多 200）。它不接受 `-c`。不带编号的 `multica p4 describe` 描述本任务的 changelist。`describe <编号>` 或 `describe -c <编号>` 读取该 changelist 及其描述，但仅当列出的每个文件都属于本任务已授权的 depot。无法确认文件范围时，不返回描述。
+
+`multica p4 fstat`、`changes`、`files`、`dirs`、`grep`、`print`、`diff`、`diff2`、`annotate`、`where`、`have`、`sizes`、`integrated`、`interchanges`、`resolved` 在绑定的 client 里执行，并原样打印 p4 的输出。动词后面的参数按各命令的取值和拒绝规则转发（`fstat -Ol`、`changes -m 20 -s submitted`、`diff -du3`、`print --offset 100 --size 50`）。`changes` 的 `-m` 默认 50，最多 200。`fstat` 或 `files` 的通配符必须落到子目录，并且带上 `-m`；覆盖整个 depot 的通配符会被拒绝。`dirs`、`grep`、`integrated`、`interchanges` 允许子目录通配符。`print`、`resolved` 和其他按文件读取的命令只接受单个文件。连接参数、`print -o`（包括 `-ooutfile`）和无法限定 depot 范围的分支或 stream 视图形式会被拒绝，分离和粘连写法都一样。不要传 `--port` 或 `--depot`。
+
+`multica p4 resolve` 总是注入本任务的 changelist，并要求使用自动模式（`-as`、`-am`、`-af`、`-at` 或 `-ay`），除非用 `-n` 或 `-N` 预览。调用方指定的 changelist 和 stream spec resolve 会被拒绝。即使不传文件，注入的 changelist 也能保证不会碰到其他 changelist。
 
 `opened` 只列出这条任务的 changelist。`multica p4 opened -F "%depotFile% %change%"` 打印每个文件的 depot 路径和 changelist 号；`%change%` 是数字或 `default`，和 `p4 -ztag` 一致，不是原生 `p4 opened` 文本里的 `change N`。这个 flag 也可以写在动词前面。`--output json` 的 `files` 是同一批记录。其他 p4 选项不会透传，`opened -a` 和 `-x` 仍会被拒绝。
 

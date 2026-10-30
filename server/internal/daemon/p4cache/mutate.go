@@ -14,6 +14,7 @@ const (
 	ActionRevert    = "revert"
 	ActionOpened    = "opened"
 	ActionReconcile = "reconcile"
+	ActionResolve   = "resolve"
 	ActionMove      = "move"
 	ActionReopen    = "reopen"
 	ActionChange    = "change"
