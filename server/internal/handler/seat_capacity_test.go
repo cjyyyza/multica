@@ -44,16 +44,35 @@ func TestSeatCapacityHandlerBoundsWorkspaceLockWait(t *testing.T) {
 }
 
 func TestSeatCapacityWorkspaceLockWaitersDoNotPinPoolConnections(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	setupCtx, setupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer setupCancel()
 	config := testPool.Config()
 	config.MaxConns = 8
 	config.MinConns = 0
-	pool, err := pgxpool.NewWithConfig(ctx, config)
+	pool, err := pgxpool.NewWithConfig(setupCtx, config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	// Cold Windows-to-WSL connections are setup, not local queue latency.
+	// Warm the two holders while retaining the waiter deadlines below.
+	func() {
+		var holders []*pgxpool.Conn
+		defer func() {
+			for _, conn := range holders {
+				conn.Release()
+			}
+		}()
+		for range 2 {
+			conn, err := pool.Acquire(setupCtx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			holders = append(holders, conn)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	locker := seatcapacity.NewWorkspaceLocker(pool)
 	workspaceID := uuid.New()
 
