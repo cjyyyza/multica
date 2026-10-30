@@ -142,10 +142,19 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				if rejectTemporarilyDisabledUser(w, r, userID, "", "task_token") {
 					return
 				}
+				boundWorkspaceID := uuidToString(tt.WorkspaceID)
+				// An explicit workspace selector that disagrees with the
+				// token's binding is rejected here, BEFORE the overwrite
+				// below erases what the client asked for. Silently
+				// swapping the target let a request for workspace B run
+				// against A (GitHub #9403).
+				if checkTaskTokenWorkspaceTarget(w, r, queries, boundWorkspaceID) {
+					return
+				}
 				r.Header.Set("X-User-ID", userID)
 				r.Header.Set("X-Agent-ID", uuidToString(tt.AgentID))
 				r.Header.Set("X-Task-ID", uuidToString(tt.TaskID))
-				r.Header.Set("X-Workspace-ID", uuidToString(tt.WorkspaceID))
+				r.Header.Set("X-Workspace-ID", boundWorkspaceID)
 				r.Header.Set(taskpolicy.HeaderTaskMode, mode)
 				if tt.RequirementID.Valid {
 					r.Header.Set(taskpolicy.HeaderRequirementID, uuidToString(tt.RequirementID))

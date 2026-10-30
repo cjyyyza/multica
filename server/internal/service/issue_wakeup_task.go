@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -64,6 +66,19 @@ func createWakeupTaskFromReceipts(ctx context.Context, q *db.Queries, params cre
 		// A recovered leader keeps authority to dispatch and submit for review.
 		// Member and guest recoveries retain their original, narrower role.
 		squadID, leader = source.SquadID, pgtype.Bool{Bool: source.IsLeaderTask, Valid: true}
+	} else if params.Issue.AssigneeType.String == "squad" && params.Issue.AssigneeID.Valid {
+		squad, err := q.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
+			ID: params.Issue.AssigneeID, WorkspaceID: params.Issue.WorkspaceID,
+		})
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return db.AgentTaskQueue{}, err
+		}
+		// Only the issue's current, active squad leader gets leader authority.
+		// Other wakeup targets remain ordinary agent turns.
+		if err == nil && !squad.ArchivedAt.Valid && squad.LeaderID == params.Agent.ID {
+			squadID = squad.ID
+		}
+		leader = pgtype.Bool{Bool: squadID.Valid, Valid: true}
 	}
 	return q.CreateWakeupTask(ctx, db.CreateWakeupTaskParams{
 		ID: dbid.NewV7(), AgentID: w.AgentID, RuntimeID: params.Agent.RuntimeID, IssueID: w.IssueID,

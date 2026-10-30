@@ -13,7 +13,7 @@ import {
   Plus,
   SquareTerminal,
   TriangleAlert,
-} from "lucide-react";
+} from "@multica/ui/icons";
 import type { QoderConnection } from "@multica/core/runtimes/qoder";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
@@ -41,13 +41,13 @@ export function qoderChoiceState(
   connection: QoderConnection,
   runtimeOnline: boolean,
 ): QoderChoiceState {
-  if (!connection.configured) return "not_configured";
+  if (!connection.available || !connection.configured) return "not_configured";
   if (!connection.enabled) return "stopped";
   if (connection.status === "error") return "error";
   return runtimeOnline && connection.status === "online" ? "ready" : "starting";
 }
 
-const QODER_NAME = "Qoder Cloud Agent";
+const QODER_NAME = "Qoder Cloud Agents";
 
 const COMING_SOON = [
   { provider: "cursor", name: "Cursor Cloud Agents", vendor: "Cursor" },

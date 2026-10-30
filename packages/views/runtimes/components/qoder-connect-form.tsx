@@ -10,7 +10,7 @@ import {
   Plug,
   Settings2,
   ShieldCheck,
-} from "lucide-react";
+} from "@multica/ui/icons";
 import {
   MAX_CONCURRENCY,
   MAX_RUN_TIMEOUT,
@@ -33,7 +33,7 @@ import {
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
 
-const DEFAULT_NAME = "Qoder Cloud Agent";
+const DEFAULT_NAME = "Qoder Cloud Agents";
 
 export function regionOf(baseUrl: string): QoderRegion {
   return (

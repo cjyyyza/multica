@@ -135,12 +135,12 @@ func (h *Handler) CreateMemberComment(ctx context.Context, in engine.MemberComme
 
 // deliverChannelComment runs the shared comment trigger after the row is
 // committed. /note stays on that path with no steer ids. Any other comment
-// with no attachments and exactly one steerable run passes that task into
-// triggerTasksForComment. The ack uses whether the bind landed: a refused
-// steer leaves the comment in place as a normal follow-up.
+// with no attachments and exactly one steerable run asks for that turn to
+// receive the comment. The ack follows the stored receipt, so a refused steer
+// leaves the comment in place as a normal follow-up.
 func (h *Handler) deliverChannelComment(ctx context.Context, issue db.Issue, comment db.Comment, parentComment *db.Comment, actorUserID pgtype.UUID, authorID string) engine.CommentDelivery {
 	note := isNoteComment(comment.Content)
-	var steerTaskIDs []pgtype.UUID
+	var steer commentSteerRequest
 	if !note {
 		ids, err := h.channelFollowSteerTaskIDs(ctx, issue, comment, actorUserID)
 		if err != nil {
@@ -149,14 +149,20 @@ func (h *Handler) deliverChannelComment(ctx context.Context, issue db.Issue, com
 				"comment_id", uuidToString(comment.ID),
 				"error", err)
 		} else {
-			steerTaskIDs = ids
+			steer.TaskIDs = ids
 		}
 	}
-	_, injected := h.triggerTasksForComment(ctx, issue, comment, parentComment, "member", authorID, authorID, nil, steerTaskIDs)
+	h.triggerTasksForComment(ctx, issue, comment, parentComment, "member", authorID, authorID, nil, steer)
 	if note {
 		return engine.CommentDeliveryNote
 	}
-	if injected {
+	if steer.empty() {
+		return engine.CommentDeliveryWaiting
+	}
+	// The trigger reports no separate bind flag: this comment is new, so a
+	// stored receipt can only come from the steer that just ran.
+	receipts := h.listCommentSupplements(ctx, issue.WorkspaceID, []pgtype.UUID{comment.ID})[uuidToString(comment.ID)]
+	if len(receipts) > 0 {
 		return engine.CommentDeliveryInjected
 	}
 	return engine.CommentDeliveryWaiting

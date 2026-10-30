@@ -161,12 +161,23 @@ describe("RuntimeChoiceList", () => {
     const props = mount();
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     expect(props.onConnectQoder).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("button", { name: /Qoder Cloud Agent/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Qoder Cloud Agents/ })).toBeNull();
 
     cleanup();
     mount({ canManage: false });
     expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
     expect(screen.getByText("Ask an admin to connect")).toBeInTheDocument();
+  });
+
+  it("keeps Qoder discoverable but unselectable without server encryption setup", () => {
+    const qoder = { ...unconnectedQoder, available: false };
+    const props = mount({ qoder, qoderState: qoderChoiceState(qoder, false) });
+    expect(screen.getByText("Qoder Cloud Agents")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect(props.onConnectQoder).toHaveBeenCalledOnce();
+    expect(props.onSelectQoder).not.toHaveBeenCalled();
+    expect(qoderChoiceState({ ...qoder, configured: true, enabled: true, status: "online" }, true))
+      .toBe("not_configured");
   });
 
   it("says so when nothing matches the search", () => {

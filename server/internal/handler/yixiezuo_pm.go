@@ -442,7 +442,7 @@ func (h *Handler) deliverPMTriage(r *http.Request, a pmActor, scope yixiezuo.PMS
 			} else if agent.MaxConcurrentTasks != 1 {
 				outcome.Status, outcome.ReasonCode = DispatchBlocked, "triage_concurrency_must_be_one"
 			} else {
-				outcomes, _ := h.triggerTasksForComment(ctx, issue, comment, nil, comment.AuthorType, uuidToString(comment.AuthorID), originator, nil, nil)
+				outcomes := h.triggerTasksForComment(ctx, issue, comment, nil, comment.AuthorType, uuidToString(comment.AuthorID), originator, nil, commentSteerRequest{})
 				outcome.Status, outcome.ReasonCode = DispatchBlocked, ReasonInternalError
 				for _, o := range outcomes {
 					if strings.EqualFold(o.TargetID, uuidToString(a.agent)) {

@@ -296,10 +296,10 @@ a human submits.
 An imported 易协作 issue remains unassigned until a member chooses its owner.
 Result publication is a separate member-confirmed source operation.
 
-## Qoder Cloud Agent bridge (PoC)
+## Qoder Cloud Agents bridge (PoC)
 
 A server-hosted `qoder-runtime` service can register the `qoder_cloud` provider.
-Bind a Multica agent to the runtime and set its `runtime_config.qoder_agent_id` to the selected QCA Agent ID. The Web/Desktop agent creation form and runtime configuration tab provide a name-based QCA Agent picker.
+Bind a Multica agent to the runtime and set its `runtime_config.qoder_agent_id` to the ID of the selected agent in Qoder Cloud Agents. The Web/Desktop agent creation form and runtime configuration tab provide a name-based agent picker.
 The bridge executes issue runs through Qoder's managed session API; it does not
 run a local coding-agent CLI. Model, tools, skills and credentials are configured
 on Qoder. Local-directory resources and Multica execution overrides are rejected.
@@ -312,7 +312,7 @@ integration links the pull request. The service needs persistent state for
 restart recovery. Cancel from Multica to stop remote
 work; stopping the bridge process alone leaves remote execution running. Do not
 use `runtime update` to upgrade the bridge: deploy its binary through its service
-manager. For setup and recovery, consult the Qoder Cloud Agent section of the
+manager. For setup and recovery, consult the Qoder Cloud Agents section of the
 Multica runtime documentation or ask the deployment administrator.
 
 The bridge registers `runtime_mode=cloud`. Other daemons may omit
@@ -327,8 +327,8 @@ append-only behavior. The Qoder bridge uses its remote event IDs as these keys.
 
 Qoder Cloud bridge repository runs require `github_token_files` in its private JSON configuration, mapping each GitHub repository URL to a 0600 token file. Credentials are injected only into session creation requests, never into prompts or recovery state. Managed connections also support repository credential configuration in the runtime dialog.
 
-Workspace admins may also configure one managed QCA connection in **Runtimes →
-Add → Cloud services → Qoder Cloud Agent** (web and desktop). The server prerequisite is
+Workspace admins may also configure one managed Qoder Cloud Agents connection in **Runtimes →
+Add → Cloud services → Qoder Cloud Agents** (web and desktop). The server prerequisite is
 `MULTICA_VCS_SECRET_KEY`. The server
 supervises the bridge, encrypts credentials in the database, and supports idle
 stop/restart. Active tasks must finish or be cancelled before configuration
@@ -341,7 +341,7 @@ credential plaintext is returned. Blank secrets retain saved values; an empty
 `active_runs` and `queued_runs`.
 
 
-Managed runtimes store the QCA PAT and selected environment. Entering a PAT loads
+Managed runtimes store a Qoder personal access token (PAT) and the selected environment. Entering a PAT loads
 available environments automatically; a single environment is selected by default.
 `POST .../qoder/environments` lists environments using an entered or saved PAT
 (admin-only). `GET .../qoder/agents` lists names and IDs using the saved PAT for
@@ -350,5 +350,5 @@ own `runtime_config.qoder_agent_id`; each run uses that association and the
 shared runtime's environment. An optional `runtime_config.repository`
 (`{"url": "https://github.com/owner/repo", "ref": "main"}`) is mounted when the
 issue's project binds no repository; the workspace's only repository is the last
-fallback when the connection holds its credential. QCA model/tool/skill
+fallback when the connection holds its credential. Qoder Cloud Agents model/tool/skill
 management remains in Qoder.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/testenv"
+	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
 // TestMain intercepts when the test binary is re-executed as a fake
@@ -24,6 +25,9 @@ import (
 func TestMain(m *testing.M) {
 	if mode := os.Getenv(dshPlanFixtureEnv); mode != "" {
 		runFakeDshPlan(mode)
+		os.Exit(0)
+	}
+	if testutil.RunPiCleanupFixture() {
 		os.Exit(0)
 	}
 	if os.Getenv(codeartsModelHelperEnv) == "1" {

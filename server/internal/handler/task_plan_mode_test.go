@@ -435,7 +435,7 @@ func TestRequirementIssueRerunRetainsExecuteBindingAndCancelBlocks(t *testing.T)
 		"runtime_id": fixture.RuntimeID, "issue_id": issueID, "mode": taskpolicy.ModeExecute,
 		"requirement_id": fixture.RequirementID, "status": "completed", "completed_at": testutil.Raw("now()"),
 	})
-	rerun, err := testHandler.TaskService.RerunIssue(ctx, parseUUID(issueID), parseUUID(sourceID), pgtype.UUID{}, parseUUID(testUserID), nil)
+	rerun, err := testHandler.TaskService.RerunIssue(ctx, parseUUID(issueID), parseUUID(sourceID), pgtype.UUID{}, parseUUID(testUserID), false, nil)
 	if err != nil {
 		t.Fatalf("rerun requirement issue: %v", err)
 	}
@@ -447,7 +447,7 @@ func TestRequirementIssueRerunRetainsExecuteBindingAndCancelBlocks(t *testing.T)
 		t.Fatal(err)
 	}
 	dbfx.Exec(t, `UPDATE requirement SET cancelled_at = now() WHERE id = $1`, fixture.RequirementID)
-	if _, err := testHandler.TaskService.RerunIssue(ctx, parseUUID(issueID), parseUUID(sourceID), pgtype.UUID{}, parseUUID(testUserID), nil); err == nil {
+	if _, err := testHandler.TaskService.RerunIssue(ctx, parseUUID(issueID), parseUUID(sourceID), pgtype.UUID{}, parseUUID(testUserID), false, nil); err == nil {
 		t.Fatal("cancelled requirement rerun was accepted")
 	}
 	var after int
