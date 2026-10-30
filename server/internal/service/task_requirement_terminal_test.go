@@ -34,7 +34,7 @@ func TestRequirementTerminalIssueExecutionAndTaskCreationFences(t *testing.T) {
 			q := db.New(pool)
 			svc := &TaskService{Queries: q, TxStarter: pool, Bus: events.New()}
 			ctx := context.Background()
-			rerun, err := svc.RerunIssue(ctx, util.MustParseUUID(issueID), pgtype.UUID{}, pgtype.UUID{}, util.MustParseUUID(f.userID), nil)
+			rerun, err := svc.RerunIssue(ctx, util.MustParseUUID(issueID), pgtype.UUID{}, pgtype.UUID{}, util.MustParseUUID(f.userID), false, nil)
 			var gateErr *RequirementChatExecutionError
 			if !errors.As(err, &gateErr) || gateErr.Code != tc.wantCode {
 				t.Errorf("rerun error = %v, want %s", err, tc.wantCode)

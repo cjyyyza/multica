@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Search } from "lucide-react";
+import { ArrowRight, Search } from "@multica/ui/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentBuilderSessionListOptions } from "@multica/core/agents";
 import { useAuthStore } from "@multica/core/auth";
@@ -88,7 +88,7 @@ export function ChooseRuntimePage({
   const ownerName = (ownerId: string | null) =>
     members.find((m) => m.user_id === ownerId)?.name ?? null;
 
-  const qoder = qoderConnection?.available ? qoderConnection : null;
+  const qoder = qoderConnection ?? null;
   const qoderRuntime = groups.qoderRuntime;
   const qoderState = qoder
     ? qoderChoiceState(qoder, qoderRuntime?.status === "online")
@@ -186,7 +186,7 @@ export function ChooseRuntimePage({
 
   const summary =
     selection?.kind === "qoder"
-      ? "Qoder Cloud Agent"
+      ? "Qoder Cloud Agents"
       : selected
         ? `${selected.option.label} · ${selected.where}`
         : null;
@@ -280,9 +280,7 @@ export function ChooseRuntimePage({
               {t(($) => $.creation_studio.runtime_step.footer_selected)}{" "}
               <span className="font-medium text-foreground">{summary}</span>
             </>
-          ) : (
-            t(($) => $.creation_studio.runtime_step.footer_hint)
-          )}
+          ) : null}
         </p>
         <Button variant="ghost" onClick={() => backOrReplace(paths.agents())}>
           {t(($) => $.creation_studio.runtime_step.cancel)}

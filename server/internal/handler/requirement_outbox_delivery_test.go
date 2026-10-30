@@ -675,8 +675,14 @@ func TestRequirementDeliveryRecipientAndTransportRevocation(t *testing.T) {
 		forceRequirementDeliveryRetry(t, delivery)
 		worker := requirementOutboxWorkerForTest()
 		result, err := worker.RunOnce(context.Background(), 10)
-		if err != nil || result.Accepted != 0 || result.Claimed != 0 || requirementCommandCount(t, f.detail.ID) != 1 {
+		current := requirementDeliveryCommandForKind(t, f.detail.ID, "requirement_draft")
+		if err != nil || current.ID != delivery.ID || current.Attempt != delivery.Attempt || current.LeaseID.Valid ||
+			(current.Status != "cancelled" && current.Status != "failed") || requirementCommandCount(t, f.detail.ID) != 1 {
 			t.Fatalf("revoked delivery recovered unsafely: %+v, %v", result, err)
+		}
+		allowed, err = testHandler.PopoBridge.CanDeliver(context.Background(), current.ID, parseUUID(f.env.bridgeID))
+		if err != nil || allowed {
+			t.Fatalf("worker restored revoked delivery authorization: %v, %v", allowed, err)
 		}
 	}
 
@@ -716,7 +722,12 @@ func TestRequirementDeliveryRecipientAndTransportRevocation(t *testing.T) {
 		if err := testHandler.PopoBridge.Revoke(context.Background(), parseUUID(f.env.bridgeID), parseUUID(testWorkspaceID), parseUUID(testUserID)); err != nil {
 			t.Fatal(err)
 		}
+		// Revoking this bridge must not prohibit processing another requirement.
+		independent := newRequirementPopoFixture(t, "98114")
 		assertFenced(t, f)
+		if other := requirementDeliveryCommandForKind(t, independent.detail.ID, "requirement_draft"); other.Status != "pending" || !other.BridgeID.Valid {
+			t.Fatalf("independent delivery was not routed: status=%s bridge=%s", other.Status, uuidToString(other.BridgeID))
+		}
 	})
 }
 

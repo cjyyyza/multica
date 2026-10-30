@@ -2,17 +2,20 @@
 
 package wecom
 
-import "os"
+import (
+	"errors"
+	"os"
+)
 
 func createMediaTempFile(dir string) (*os.File, error) {
-	f, err := os.CreateTemp(dir, "wecom-media-*.bin")
+	out, err := os.CreateTemp(dir, "wecom-media-*.bin") // Created with mode 0600.
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Remove(f.Name()); err != nil {
-		_ = f.Close()
-		_ = os.Remove(f.Name())
-		return nil, err
+	// Unlink before writing plaintext, so even an abnormal process exit
+	// cannot leave attachment content behind.
+	if err := os.Remove(out.Name()); err != nil {
+		return nil, errors.Join(err, out.Close(), os.Remove(out.Name()))
 	}
-	return f, nil
+	return out, nil
 }

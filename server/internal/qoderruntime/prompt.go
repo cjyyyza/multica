@@ -28,7 +28,7 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 		return nil, fmt.Errorf("configure skills, tools, credentials and model on the Qoder Agent; Multica execution overrides are not supported by this bridge")
 	}
 	if t.Agent == nil {
-		return nil, fmt.Errorf("associate a QCA Agent in the Multica agent runtime configuration")
+		return nil, fmt.Errorf("associate an agent from Qoder Cloud Agents in the Multica agent runtime configuration")
 	}
 	binding, err := ParseAgentConfig(t.Agent.RuntimeConfig)
 	if err != nil {
@@ -73,7 +73,7 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 	}
 	for _, res := range t.ProjectResources {
 		if res.ResourceType == "local_directory" {
-			return nil, fmt.Errorf("local directory resources cannot be executed by Qoder Cloud Agent")
+			return nil, fmt.Errorf("local directory resources cannot be executed by Qoder Cloud Agents")
 		}
 		if res.ResourceType != "github_repo" {
 			continue
@@ -88,7 +88,7 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 		}
 		r.Resources = append(r.Resources, resource)
 		if len(r.Resources) > 1 {
-			return nil, fmt.Errorf("Qoder Cloud Agent supports one project repository per run")
+			return nil, fmt.Errorf("Qoder Cloud Agents supports one project repository per run")
 		}
 	}
 	// Project repositories win; otherwise use the agent's default repository,
@@ -130,7 +130,7 @@ type AgentConfig struct {
 func ParseAgentConfig(raw json.RawMessage) (AgentConfig, error) {
 	var cfg AgentConfig
 	if err := json.Unmarshal(raw, &cfg); err != nil || !ValidAgentID(cfg.AgentID) {
-		return cfg, fmt.Errorf("associate a QCA Agent in the Multica agent runtime configuration")
+		return cfg, fmt.Errorf("associate an agent from Qoder Cloud Agents in the Multica agent runtime configuration")
 	}
 	if cfg.Repository != nil && cfg.Repository.URL != "" {
 		if _, err := repositoryResource(*cfg.Repository); err != nil {
@@ -149,7 +149,7 @@ func repositoryResource(ref Repository) (map[string]any, error) {
 	}
 	resource := map[string]any{"type": "github_repository", "url": ref.URL}
 	if strings.HasPrefix(ref.Ref, "refs/tags/") || commitRef.MatchString(ref.Ref) {
-		return nil, fmt.Errorf("Qoder Cloud Agent supports branch refs only")
+		return nil, fmt.Errorf("Qoder Cloud Agents supports branch refs only")
 	}
 	if name := strings.TrimPrefix(ref.Ref, "refs/heads/"); name != "" {
 		resource["checkout"] = map[string]string{"type": "branch", "name": name}
@@ -189,7 +189,7 @@ func hasCustomSkills(skills []claimedSkill) bool {
 	return false
 }
 
-// ValidAgentID validates the public QCA identifier without accepting URL fragments.
+// ValidAgentID validates the public Qoder Cloud Agents identifier without accepting URL fragments.
 func ValidAgentID(id string) bool {
 	return regexp.MustCompile(`^agent_[a-zA-Z0-9_-]{1,128}$`).MatchString(id)
 }

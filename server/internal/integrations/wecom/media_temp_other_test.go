@@ -2,13 +2,16 @@
 
 package wecom
 
-import (
-	"os"
-	"testing"
-)
+import "testing"
 
-func assertMediaTempFilePrivate(t *testing.T, f *os.File) {
-	t.Helper()
+func TestMediaTempFileIsPrivateAndUnlinked(t *testing.T) {
+	dir := t.TempDir()
+	f, err := createMediaTempFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	assertMediaTempDirEmpty(t, dir)
 	info, err := f.Stat()
 	if err != nil {
 		t.Fatal(err)
