@@ -4,6 +4,16 @@ set -eu
 # All-in-one supervisor: migrate, then run the API server and the Next.js
 # standalone server as sibling processes. Either one dying stops the other so
 # the container reflects the failure instead of serving a half-dead app.
+#
+# The image starts as root only so a volume left by the previous root-owned
+# backend can be given to nextjs. Do not set a container user: that skips the
+# repair, and the app must not stay root. An explicit non-root start (tests,
+# or a caller that already owns the upload dir) skips the drop.
+
+if [ "$(id -u)" = "0" ]; then
+  ./prepare-upload-dir.sh
+  exec su-exec nextjs:nodejs "$0" "$@"
+fi
 
 # The migrator and API server are separate processes, but startup retry time is
 # one container-level budget. Both binaries derive their remaining time from

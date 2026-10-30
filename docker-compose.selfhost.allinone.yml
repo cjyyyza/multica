@@ -48,6 +48,8 @@ services:
     ports:
       - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
       - "127.0.0.1:${BACKEND_PORT:-${API_PORT:-${SERVER_PORT:-${PORT:-8080}}}}:8080"
+    # The image starts as root so the entrypoint can chown this volume to
+    # nextjs (uid 1001), then drops privileges. Do not set user:.
     volumes:
       - app_uploads:/app/data/uploads
     env_file:

@@ -930,6 +930,9 @@ jobs:
       - name: Test backend entrypoint signals
         run: bash scripts/entrypoint.test.sh
 
+      - name: Test all-in-one upload directory ownership repair
+        run: bash scripts/prepare-upload-dir.test.sh
+
       - name: Test build output naming
         run: bash scripts/makefile-build.test.sh
 

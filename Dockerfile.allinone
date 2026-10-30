@@ -92,7 +92,8 @@ FROM node:22-alpine
 
 # ca-certificates + tzdata for the Go binaries; libssl floor pins the Alpine
 # openssl fixes (CVE-2026-63073, CVE-2026-75803) for the Node runtime.
-RUN apk add --no-cache ca-certificates tzdata "libcrypto3>=3.5.8-r0" "libssl3>=3.5.8-r0"
+# su-exec drops to nextjs after the entrypoint repairs the upload volume.
+RUN apk add --no-cache ca-certificates tzdata su-exec "libcrypto3>=3.5.8-r0" "libssl3>=3.5.8-r0"
 
 WORKDIR /app
 
@@ -117,11 +118,13 @@ COPY --from=web-builder --chown=nextjs:nodejs /app/apps/web/public ./apps/web/pu
 
 # Ship the license and attribution notices with the image (LICENSE condition 1b)
 COPY LICENSE NOTICE ./
-COPY docker/entrypoint-allinone.sh ./
-RUN sed -i 's/\r$//' entrypoint-allinone.sh && chmod +x entrypoint-allinone.sh && \
+COPY docker/entrypoint-allinone.sh docker/prepare-upload-dir.sh ./
+RUN sed -i 's/\r$//' entrypoint-allinone.sh prepare-upload-dir.sh && \
+    chmod +x entrypoint-allinone.sh prepare-upload-dir.sh && \
     mkdir -p /app/data/uploads && chown -R nextjs:nodejs /app/data
 
-USER nextjs
+# No USER: the entrypoint must start as root to chown a mounted upload volume,
+# then su-exec to nextjs before migrations and the app processes.
 
 EXPOSE 8080 3000
 
