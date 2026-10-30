@@ -1,0 +1,200 @@
+---
+title: OpenCode 需求委派
+description: 让 Multica 智能体规划需求，人工批准后由单个智能体或小队执行。
+---
+
+OpenCode 可以让 Multica 智能体提出需求、修复 Bug 或完成工程任务。选择单个智能体，或由所选小队的固定队长先做原生 Plan；人在 Multica 审阅并批准候选后，才创建 Issue 和 Execute 运行。OpenCode 继续读取交付结果，人工验收保留在 Multica。
+
+这条链路不需要 DJ01Bot。
+
+原生 Plan 入口与下文的“已有结构化候选”入口分别保留规划运行和外部候选的来源，不将外部输入伪装成 Agent 产物。
+
+## 凭证
+
+在 **设置 → API Token** 创建个人访问令牌，并通过环境变量提供给 OpenCode 进程：
+
+```dotenv
+MULTICA_SERVER_URL=https://your-multica.example
+MULTICA_TOKEN=mul_...
+MULTICA_WORKSPACE_ID=<工作区 UUID>
+```
+
+API 请求同时携带：
+
+```http
+Authorization: Bearer mul_...
+X-Workspace-ID: <工作区 UUID>
+X-Client-Capabilities: requirement-candidate-provenance-v1
+```
+
+令牌代表对应的 Multica 用户。条件允许时使用专用的最小权限账号，不要把令牌写进 OpenCode agent 文件。
+
+个人 PAT 继承用户的权限：当该用户是 approver 时，同一 PAT 技术上也能调用批准接口。协调 Agent 不批准或验收属于其操作约定，当前 PAT 不是仅创建和读取的受限凭证；需要强制职责分离时，必须另外限制交给协调方的凭证权限。
+
+## 创建 OpenCode agent
+
+安装包含 `multica requirement --strict` 命令的 Multica CLI，将 `examples/opencode/agents/multica.md` 复制到工作目录的 `.opencode/agents/multica.md`，选择 `multica` agent。也可以按照 POPO 的「连接智能体」流程将其连接为工作伙伴，消息传输和账号绑定沿用现有集成。
+
+`examples/opencode/multica.mjs` 保留为独立 HTTP 示例，使用 `MULTICA_URL`；其中 `reply` 是批准前澄清。正式 CLI 用 `clarify` 表示规划澄清，`reply` 表示执行期阻塞答复。
+
+这个 agent 负责协调，通过需求接口启动 Plan，不调用 quick-create、rerun、自动批准或自动验收。
+
+OpenCode 2 的常驻服务需要在启动时获得这些环境变量；CLI 独立验证可使用 `opencode run --standalone --auto --agent multica`，让私有服务继承本次环境，不改动共享服务。凭证缺失时应报告配置问题，不能读取其他项目或用户配置来替代。
+
+本工作树新增的成员命令需要包含 `create` 和 `--strict` 的 CLI 构建；只有 `get/candidate/block` 的旧 CLI 不支持该链路。先用 `multica requirement create --help` 核对，正式最低版本号以包含该功能的发行版为准。`--strict` 要求显式提供 server、token 和 workspace，缺失时不会使用本机 profile。
+
+`--auto` 用于无人值守验证；需要交互确认时可以省略。
+
+## 从想法启动原生 Plan
+
+```sh
+multica requirement --strict targets
+multica requirement --strict create --agent <agentId> --external-ref request-001 --idea-file idea.md --idempotency-key request-001-plan
+```
+
+使用小队时，将 `--agent <agentId>` 替换为 `--squad <squadId>`。`idea.md` 是已有 UTF-8 需求正文。该命令调用：
+
+```http
+POST /api/workspaces/{workspaceId}/requirement-requests
+Idempotency-Key: request-001-plan
+```
+
+```json
+{
+  "externalRef": "request-001",
+  "idea": "修复会话过期后无法续期的问题，先明确范围和回归测试。",
+  "agentId": "agent-uuid",
+  "projectId": null
+}
+```
+
+`agentId` 和 `squadId` 必须且只能填写一个；可选 `participants` 格式同下文。省略参与者时，发起人同时是审批人。目标必须支持原生 Plan：Claude 限制为 Read、Glob、Grep 和受控结构化交接；DSH 使用自己的原生 Plan，不具备相同的工具级强制只读保证。不支持的运行时明确失败，不会降级成 Execute。
+
+服务端在同一事务中创建 Requirement、Chat 和 Plan，返回 `201`、`state=clarifying`、`chatSessionId` 和 Plan `run`。批准前没有 Issue 或 Execute。Plan 生成候选后进入 `awaiting_approval`，`latestCandidate.createdByTaskId` 指向真实规划任务。审批页面为 `/{workspaceSlug}/chat?requirement={requirementId}`。
+
+## 查找需求、澄清和重试
+
+```sh
+multica requirement --strict list --external-ref request-001
+multica requirement --strict messages <requirementId>
+multica requirement --strict clarify <requirementId> --expected-revision 2 --content-file answer.md --idempotency-key request-001-answer-1
+multica requirement --strict wait <requirementId> --timeout 10m
+multica requirement --strict result <requirementId>
+```
+
+```http
+GET /api/workspaces/{workspaceId}/requirements?externalRef=request-001
+GET /api/workspaces/{workspaceId}/requirements?limit=25&offset=0
+POST /api/workspaces/{workspaceId}/requirements/{requirementId}/messages
+Idempotency-Key: request-001-answer-1
+```
+
+消息请求体为 `{"expectedRevision":2,"content":"只修复续期，保持退出登录行为不变。"}`。消息、下一轮 Plan 和 revision 推进在同一事务中完成，旧候选随即不能批准。只允许发起人或审批人补充，批准或取消后关闭规划输入。
+
+列表只返回当前用户作为参与者可见的需求，格式为 `{requirements,hasMore,nextOffset?}`；列表项仅包含状态、来源摘要及导航 ID，Candidate、运行、参与者和交付详情通过单条需求接口读取；已有 `?chat_session_id=<id>` 保留单条详情语义。创建与消息请求都必须使用稳定幂等键，断网重试复用相同请求体和键；丢失创建回执时可按 externalRef 查回。版本冲突时先读取新状态，不自动覆盖 revision。
+
+CLI 省略 `--idempotency-key` 时，按工作区、路径和完整请求体生成稳定键；同样的命令可安全重试。新需求使用新的 `--external-ref`。`--idea-file`、`--content-file` 和 `--participants-file` 默认只能读取当前工作目录内的 UTF-8 文件，显式指定 `--allow-external-file` 可读取其他目录。`list` 支持 `--limit` 和 `--offset`；`messages` 支持 `--limit`，以及 `--before-created-at`、`--before-id` 继续读取 `next_cursor` 指向的较早页面。
+
+`wait` 默认在 `awaiting_approval`、`blocked`、`in_review`、`done` 或 `cancelled` 停止，也可指定 `--until in_review,done --interval 2s --timeout 10m`。超时、未知状态和未达目标的运行失败返回错误；Ctrl+C 立即结束等待。等待不会批准、验收或重新派工。
+
+单 Agent 的批准创建 Agent Issue；执行完成后进入待验收。Squad 的批准创建 Squad Issue，按下文小队协议派工和送审。`result` 返回 Requirement、Issue、运行和评论。只有 `done` 表示已验收，原生验收不创建易协作发布操作。
+
+## 执行期阻塞答复
+
+`get` 返回 `blockedQuestion`（`commentId`、`wakeupId`、`targetUserId`、`agentId`、`content`、`canReply`）和 `issue.revision`。仅被点名且仍属于工作区、仍是需求参与者的成员可以答复；审批人不能代替另一位被点名成员。缺失问题时不要从历史评论中猜测目标。
+
+```sh
+multica requirement --strict get <requirementId>
+multica requirement --strict reply <requirementId> --question-comment <blockedQuestion.commentId> --expected-issue-revision 8 --content-file answer.md --idempotency-key request-001-execution-answer-1
+```
+
+```http
+POST /api/workspaces/{workspaceId}/requirements/{requirementId}/replies
+Idempotency-Key: request-001-execution-answer-1
+```
+
+请求体为 `{"expectedIssueRevision":8,"questionCommentId":"question-comment-uuid","content":"使用预发布环境。"}`，响应为 `201 {requirement,reply}`，`reply` 含评论 ID 和更新后的 `issueRevision`。答复评论、恢复回执和幂等账本原子提交；相同键和请求重试返回原回执，即使需求后来已验收也不会再恢复。请求体变化、Issue 版本变化或问题已替换返回 `409`；参与者权限撤销后重试返回 `403`。当前执行未结束时先保存答复，由既有唤醒机制在可执行时恢复同一需求；Squad 保留原队长或成员身份。
+
+这些成员命令使用个人凭证。执行期 `block` 和规划期 `candidate` 继续仅允许对应任务凭证调用。
+
+## 1. 查询小队与状态
+
+复用现有接口：
+
+```http
+GET /api/squads
+GET /api/squads/{squadId}
+GET /api/squads/{squadId}/members
+GET /api/squads/{squadId}/members/status
+```
+
+成员状态接口返回 `working`、`idle`、`offline`、`unstable` 等状态，并在可用时包含当前执行任务的信息。
+
+## 2. 提交已有结构化小队候选
+
+```http
+POST /api/workspaces/{workspaceId}/requirement-delegations
+Idempotency-Key: <本次提交的唯一键>
+Content-Type: application/json
+```
+
+```json
+{
+  "externalRef": "popo-conversation-run-001",
+  "squadId": "squad-uuid",
+  "candidate": {
+    "goal": "补充委派 API 覆盖",
+    "nonGoals": ["批准前不启动智能体"],
+    "scope": ["批准后创建一条小队任务"],
+    "constraints": ["执行保持在所选小队"],
+    "acceptanceCriteria": ["成员可以审阅小队结果"],
+    "projectId": null
+  },
+  "participants": [
+    {
+      "userId": "approver-user-uuid",
+      "roles": ["approver"]
+    }
+  ]
+}
+```
+
+`externalRef` 是外部请求在工作区内的稳定标识，另传非空 `Idempotency-Key` 做提交幂等。重试相同请求体时复用同一个键；相同键对应不同请求体时返回 `409 requirement_action_conflict`。
+
+调用方不能指定执行智能体。Multica 会解析并固定小队队长。`201` 响应包含 `state=awaiting_approval`、`squadId` 和 `latestCandidate`；此时 `issueId`、`chatSessionId`、`latestCandidate.createdByTaskId` 都是 `null`，还没有创建任务或运行。
+
+## 3. 在 Multica 批准并执行
+
+具有 `approver` 角色的参与者在 Multica 中按当前 revision 和 digest 审核并批准候选。OpenCode 不应批准自己提交的需求。
+
+把审批人引导到 `/{workspaceSlug}/chat?requirement={requirementId}`，页面展示候选、所选小队和队长。参与者必须是当前工作区成员。
+
+批准会在同一事务中创建：
+
+- 一条 `assignee_type=squad`、使用所选 `squadId` 的任务；
+- 一条分配给小队队长的延迟领取运行，带 `squad_id` 和 `is_leader_task=true`；
+- 需求与任务、候选及批准人的绑定。
+
+事务提交后运行才会转为可领取。队长按小队协议派工，成员回报后由队长汇总。派工轮次或成员运行结束时保持 `executing`；队长确认交付后通过 `multica issue status <issueId> in_review` 显式送审，未完成的成员或子任务会阻止送审。需要参与者回答时进入 `blocked`。人工返工同样创建小队队长运行，不会绕过小队。
+
+## 4. 读取结果并回复用户
+
+等待期间或收到提示后读取需求：
+
+```http
+GET /api/workspaces/{workspaceId}/requirements/{requirementId}
+```
+
+进入 `in_review` 后，读取任务、运行和评论：
+
+```http
+GET /api/issues/{issueId}
+GET /api/issues/{issueId}/task-runs
+GET /api/issues/{issueId}/comments
+```
+
+使用最新运行的 `result` 和小队评论在当前 OpenCode 会话回复用户；连接 POPO 工作伙伴时由原传输渠道回复。不要把任务 description 当作执行结果：它保存的是已批准候选。`in_review` 表示等待人工审阅，不表示已经验收。成员继续在 Multica 验收或返工；原生委派不创建易协作发布操作。
+
+旧客户端读取外部预制 Candidate 时，如果没有声明 `requirement-candidate-provenance-v1`，服务端返回 `426 requirement_client_upgrade_required`，提示升级或使用当前网页。不会伪造规划运行，也不会以“没有候选”代替兼容性错误。
+
+真实 OpenCode 验收脚本现按单 Agent 和 Squad 分开调用官方 CLI；本次尚未运行该真实用例。此前真实证据覆盖 HTTP helper。POPO 工作伙伴收发仍需单独完成“提交、人工批准、执行、读取、POPO 收到回复”的联调。

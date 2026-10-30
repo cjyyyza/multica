@@ -44,6 +44,7 @@
     "dingtalk-bot-integration",
     "telegram-bot-integration",
     "popo-bot-integration",
+    "opencode-squad-delegation",
     "github-integration",
     "vcs-integration",
     "---Apps---",

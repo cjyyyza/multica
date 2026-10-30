@@ -1,0 +1,198 @@
+---
+title: OpenCode requirement delegation
+description: Ask a Multica Agent to plan work, then approve execution by an Agent or Squad in Multica.
+---
+
+OpenCode can ask a Multica Agent to plan a requirement, bug fix or engineering task. Select an individual Agent or a Squad whose fixed leader performs native Plan. A person reviews and approves the candidate in Multica before an Issue or Execute run exists. OpenCode can read delivery results; acceptance remains in Multica.
+
+The integration does not require DJ01Bot.
+
+Native planning and the prewritten-candidate route below preserve their respective provenance. External input is never presented as a Multica planning run.
+
+## Credentials
+
+Create a personal access token under **Settings → API Token** and provide these values to the OpenCode process as environment variables:
+
+```dotenv
+MULTICA_SERVER_URL=https://your-multica.example
+MULTICA_TOKEN=mul_...
+MULTICA_WORKSPACE_ID=<workspace-uuid>
+```
+
+Send these headers on API requests:
+
+```http
+Authorization: Bearer mul_...
+X-Workspace-ID: <workspace-uuid>
+X-Client-Capabilities: requirement-candidate-provenance-v1
+```
+
+The token acts as its Multica user. Use a dedicated, least-privileged account where possible. Do not write the token into the OpenCode agent file.
+
+## OpenCode agent
+
+Install a Multica CLI that includes `multica requirement --strict`, copy `examples/opencode/agents/multica.md` into `.opencode/agents/multica.md`, and select the `multica` agent. You can also connect it as a POPO work partner using POPO's **Connect agent** flow; existing transport and account binding remain responsible for messages.
+
+`examples/opencode/multica.mjs` remains an independent HTTP example using `MULTICA_URL`; its `reply` command means planning clarification. The official CLI uses `clarify` for planning and `reply` for execution questions.
+
+The agent coordinates work through the planning APIs. It must not call quick-create, rerun, automatic approval or acceptance.
+
+An OpenCode 2 resident service needs these variables when it starts. For an isolated CLI run use `opencode run --standalone --auto --agent multica` so its private service inherits the current environment without changing a shared service. Missing credentials are a setup error; never search other profiles or projects for replacements.
+
+## Native Plan from an idea
+
+```sh
+multica requirement --strict targets
+multica requirement --strict create --agent <agentId> --external-ref request-001 --idea-file idea.md --idempotency-key request-001-plan
+```
+
+For a Squad replace `--agent <agentId>` with `--squad <squadId>`. `idea.md` is an existing UTF-8 file. The command calls:
+
+```http
+POST /api/workspaces/{workspaceId}/requirement-requests
+Idempotency-Key: request-001-plan
+```
+
+```json
+{
+  "externalRef": "request-001",
+  "idea": "Fix expired sessions that cannot renew. First define scope and regression tests.",
+  "agentId": "agent-uuid",
+  "projectId": null
+}
+```
+
+Provide exactly one of `agentId` or `squadId`, plus optional participants in the format below. Without participants, the initiating member is requester and approver. The runtime must support native Plan: Claude restricts tools to Read, Glob, Grep and controlled structured handoff. DSH uses its own native Plan without the same tool-level read-only guarantee. Unsupported runtimes fail explicitly rather than falling back to Execute.
+
+One transaction creates the Requirement, Chat and Plan. The `201` response contains `state=clarifying`, `chatSessionId` and the Plan `run`; there is no Issue or Execute before approval. A structured candidate moves it to `awaiting_approval` and carries the real Plan `latestCandidate.createdByTaskId`. Direct the reviewer to `/{workspaceSlug}/chat?requirement={requirementId}`.
+
+## Discovery, clarification and retries
+
+```sh
+multica requirement --strict list --external-ref request-001
+multica requirement --strict messages <requirementId>
+multica requirement --strict clarify <requirementId> --expected-revision 2 --content-file answer.md --idempotency-key request-001-answer-1
+multica requirement --strict wait <requirementId> --timeout 10m
+multica requirement --strict result <requirementId>
+```
+
+```http
+GET /api/workspaces/{workspaceId}/requirements?externalRef=request-001
+GET /api/workspaces/{workspaceId}/requirements?limit=25&offset=0
+POST /api/workspaces/{workspaceId}/requirements/{requirementId}/messages
+Idempotency-Key: request-001-answer-1
+```
+
+The message body is `{"expectedRevision":2,"content":"Only fix renewal; keep sign-out behavior unchanged."}`. Message creation, another Plan turn and revision advancement are atomic, invalidating approval of the previous candidate. Only requesters and approvers can reply. Approval or cancellation closes planning input.
+
+Lists contain only the current user's participant-visible Requirements as `{requirements,hasMore,nextOffset?}`. The existing `?chat_session_id=<id>` query retains its single-detail response. Create and message requests require stable idempotency keys: retry identical bodies and keys after a lost response, or recover creation with externalRef. Read back on revision conflict rather than automatically overwriting the revision.
+
+When omitted, the CLI derives a stable idempotency key from the workspace, path and complete request body. Retry identical commands safely; use a new `--external-ref` for new work. UTF-8 input files must stay inside the current directory unless `--allow-external-file` is explicit. `create` accepts a `--participants-file` JSON array. `list` supports `--limit` and `--offset`; `messages` supports `--limit`, `--before-created-at` and `--before-id` to follow `next_cursor` into older pages.
+
+`wait` stops at `awaiting_approval`, `blocked`, `in_review`, `done` or `cancelled` by default. Override with, for example, `--until in_review,done --interval 2s --timeout 10m`. Timeout, unknown states and failed runs before the target return errors; Ctrl+C cancels promptly. Waiting never approves, accepts or redispatches work.
+
+Individual approval creates an Agent Issue, which enters review after execution. Squad approval creates a Squad Issue and uses the delegation protocol below. `result` returns the Requirement, Issue, runs and comments. Only `done` means accepted; native acceptance creates no Yixiezuo publication operation.
+
+## Execution questions
+
+`get` exposes `blockedQuestion` (`commentId`, `wakeupId`, `targetUserId`, `agentId`, `content`, `canReply`) and `issue.revision`. Only the designated participant with current workspace membership may answer; an approver cannot impersonate another target. Do not guess a question from old comments when the field is absent.
+
+```sh
+multica requirement --strict get <requirementId>
+multica requirement --strict reply <requirementId> --question-comment <blockedQuestion.commentId> --expected-issue-revision 8 --content-file answer.md --idempotency-key request-001-execution-answer-1
+```
+
+```http
+POST /api/workspaces/{workspaceId}/requirements/{requirementId}/replies
+Idempotency-Key: request-001-execution-answer-1
+```
+
+The body is `{"expectedIssueRevision":8,"questionCommentId":"question-comment-uuid","content":"Use staging."}`. The `201 {requirement,reply}` response includes the reply ID and new `reply.issueRevision`. The comment, durable recovery receipt and idempotency ledger commit atomically. Identical retries return the original receipt even after acceptance, without starting another recovery. A changed body, stale Issue revision or superseded question returns `409`; revoked participant access returns `403` even on replay. Answers wait for the current run to finish, then the existing wakeup mechanism resumes the same requirement while preserving its Squad leader or member role.
+
+Member commands use personal credentials. `block` and `candidate` remain restricted to their corresponding execution and planning task tokens.
+
+## 1. Discover squads
+
+Use the existing endpoints:
+
+```http
+GET /api/squads
+GET /api/squads/{squadId}
+GET /api/squads/{squadId}/members
+GET /api/squads/{squadId}/members/status
+```
+
+The member-status response reports states such as `working`, `idle`, `offline`, and `unstable`, plus active Issue information where available.
+
+## 2. Submit a prewritten Squad candidate
+
+```http
+POST /api/workspaces/{workspaceId}/requirement-delegations
+Idempotency-Key: <unique-submission-key>
+Content-Type: application/json
+```
+
+```json
+{
+  "externalRef": "popo-conversation-run-001",
+  "squadId": "squad-uuid",
+  "candidate": {
+    "goal": "Add delegation API coverage",
+    "nonGoals": ["Do not start an Agent before approval"],
+    "scope": ["Create one Squad Issue after approval"],
+    "constraints": ["Keep execution with the selected Squad"],
+    "acceptanceCriteria": ["A person can review the Squad result"],
+    "projectId": null
+  },
+  "participants": [
+    {
+      "userId": "approver-user-uuid",
+      "roles": ["approver"]
+    }
+  ]
+}
+```
+
+`externalRef` identifies the external request within the workspace. Use a stable value and a separate non-empty `Idempotency-Key`; retry the identical payload with the same key. A different payload under that key returns `409 requirement_action_conflict`.
+
+The caller cannot select an execution Agent. Multica resolves the Squad leader and stores it in the candidate. The `201` response has `state=awaiting_approval`, `squadId`, and `latestCandidate`; `issueId`, `chatSessionId`, and `latestCandidate.createdByTaskId` are `null`. No Issue or Run has started.
+
+## 3. Approve and execute in Multica
+
+A participant with the `approver` role reviews and approves the current candidate in Multica using its revision and digest. OpenCode should not approve its own submission.
+
+Direct the reviewer to `/{workspaceSlug}/chat?requirement={requirementId}` to review the candidate, selected Squad and leader. All participants must be current workspace members.
+
+Approval atomically creates:
+
+- one Issue with `assignee_type=squad` and the selected `squadId`;
+- one deferred Run assigned to the Squad leader with `squad_id` and `is_leader_task=true`;
+- the Requirement approval binding.
+
+The Run is promoted after commit. The leader delegates work, then reviews and aggregates the workers' results. Dispatch and worker completion keep the Requirement `executing`; the leader explicitly submits the delivery with `multica issue status <issueId> in_review` once no member or child-issue runs remain pending. Questions can move it to `blocked`. Human rejection creates another Squad leader Run; it does not bypass the Squad.
+
+## 4. Read the result for the user
+
+Poll the Requirement after notifications or while the user is waiting:
+
+```http
+GET /api/workspaces/{workspaceId}/requirements/{requirementId}
+```
+
+When it reaches `in_review`, read the Issue, its Runs, and its comments:
+
+```http
+GET /api/issues/{issueId}
+GET /api/issues/{issueId}/task-runs
+GET /api/issues/{issueId}/comments
+```
+
+Use the latest Run's `result` and the Squad's comments to answer in the current OpenCode conversation. A connected POPO work partner uses its existing transport. Do not use the Issue description as the result: it contains the approved candidate snapshot. `in_review` awaits human review; only `done` means accepted. A person accepts or rejects it in Multica. Native acceptance creates no Yixiezuo publication operation.
+
+Personal PATs inherit the user’s permissions, including approval when that user is an approver. Leaving approval and acceptance to humans is a coordinator instruction, not a restricted token scope. Enforced separation requires a separate credential boundary.
+
+The member commands in this worktree require a CLI build with `create` and `--strict`; older `get/candidate/block` support is insufficient. Check `multica requirement create --help`. A minimum release version can be named when this feature ships. Strict mode requires an explicit server, token and workspace and never substitutes a local profile. `--auto` is for unattended verification and may be omitted for interactive confirmation.
+
+List rows are summaries containing state, source metadata and navigation IDs. Read an individual requirement for its candidate, participants, runs and delivery details. Readers of external prepared candidates must advertise `requirement-candidate-provenance-v1`; otherwise the server returns `426 requirement_client_upgrade_required` with an upgrade message.
+
+The live OpenCode spec now uses the official CLI in separate Agent and Squad cases. It has not been rerun for this revision; earlier real evidence covers the HTTP helper. POPO partner delivery still requires a separate end-to-end acceptance.
