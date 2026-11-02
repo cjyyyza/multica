@@ -3852,7 +3852,7 @@ func (s *TaskService) claimTask(ctx context.Context, agentID, runtimeID pgtype.U
 		// winner and the SQL gate blocks until a slot frees.
 		if err := s.enforceSquadClaimCapacity(ctx, qtx, task); err != nil {
 			if errors.Is(err, errSquadClaimCapacity) {
-				outcome = "no_squad_capacity"
+				outcome = claimOutcomeNoSquadCapacity
 				return errSquadClaimCapacity
 			}
 			outcome = "error_squad_capacity"

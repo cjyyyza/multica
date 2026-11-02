@@ -42,6 +42,7 @@ const (
 	claimOutcomeClaimed                = "claimed"
 	claimOutcomeNoTasks                = "no_tasks"
 	claimOutcomeNoCapacity             = "no_capacity"
+	claimOutcomeNoSquadCapacity        = "no_squad_capacity"
 	claimOutcomeNoRuntime              = "no_runtime"
 	claimOutcomeRuntimeMismatch        = "runtime_mismatch"
 	claimOutcomeErrorGetAgent          = "error_get_agent"
@@ -77,6 +78,7 @@ const (
 	claimReasonCandidatesUnclaimed  = "candidates_unclaimed"
 	claimReasonUnknownCandidates    = "unknown_candidates"
 	claimReasonAgentConcurrencyCap  = "agent_concurrency_cap"
+	claimReasonSquadConcurrencyCap  = "squad_concurrency_cap"
 	claimReasonAgentUnbound         = "agent_unbound"
 	claimReasonAgentRebound         = "agent_rebound"
 	claimReasonEmptyCache           = "empty_cache"
@@ -126,6 +128,8 @@ func claimReasonFor(outcome string, scope claimScope) string {
 		return claimReasonNoVisibleCandidates
 	case claimOutcomeNoCapacity:
 		return claimReasonAgentConcurrencyCap
+	case claimOutcomeNoSquadCapacity:
+		return claimReasonSquadConcurrencyCap
 	case claimOutcomeRuntimeMismatch:
 		return claimReasonAgentRebound
 	case claimOutcomeNoRuntime:

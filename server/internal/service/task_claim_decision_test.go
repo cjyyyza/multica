@@ -28,6 +28,8 @@ func TestClaimDecisionReasonFor(t *testing.T) {
 		{name: "claimed stays claimed", outcome: claimOutcomeClaimed, scope: claimScope{claimPath: claimPathAgent}, want: claimReasonClaimed},
 		{name: "claimed via runtime poll", outcome: claimOutcomeClaimed, scope: claimScope{claimPath: claimPathRuntime, candidates: 3}, want: claimReasonClaimed},
 		{name: "no capacity maps to concurrency cap", outcome: claimOutcomeNoCapacity, scope: claimScope{claimPath: claimPathRuntime}, want: claimReasonAgentConcurrencyCap},
+		{name: "no squad capacity maps to squad cap", outcome: claimOutcomeNoSquadCapacity, scope: claimScope{claimPath: claimPathRuntime}, want: claimReasonSquadConcurrencyCap},
+		{name: "squad capacity lookup error stays error", outcome: "error_squad_capacity", scope: claimScope{claimPath: claimPathBatch}, want: claimReasonError},
 		{name: "no runtime maps to unbound agent", outcome: claimOutcomeNoRuntime, scope: claimScope{claimPath: claimPathAgent}, want: claimReasonAgentUnbound},
 		{name: "runtime mismatch maps to rebound agent", outcome: claimOutcomeRuntimeMismatch, scope: claimScope{claimPath: claimPathRuntime}, want: claimReasonAgentRebound},
 
@@ -151,6 +153,7 @@ func TestClaimDecisionIncrementsLabeledSeries(t *testing.T) {
 		{claimPathBatch, claimOutcomeEmptyCacheHit, claimReasonEmptyCache, 0},
 		{claimPathBatch, claimOutcomeErrorPromoteDeferred, claimReasonError, 0},
 		{claimPathRuntime, claimOutcomeReclaimedDispatched, claimReasonStaleDispatchRecover, 0},
+		{claimPathRuntime, claimOutcomeNoSquadCapacity, claimReasonSquadConcurrencyCap, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.claimPath+"/"+tt.outcome+"/"+tt.reason, func(t *testing.T) {

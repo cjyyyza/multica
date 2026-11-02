@@ -39,13 +39,16 @@ const (
 )
 
 var businessMetricLabels = map[string][]string{
-	"multica_agent_task_enqueued_total":                {labelSource, labelRuntimeMode},
-	"multica_agent_task_dispatched_total":              {labelSource, labelRuntimeMode},
-	"multica_agent_task_started_total":                 {labelSource, labelRuntimeMode, labelProvider},
-	"multica_agent_task_terminal_total":                {labelSource, labelRuntimeMode, labelTerminalStatus},
-	"multica_agent_task_failed_total":                  {labelSource, labelRuntimeMode, labelFailureReason},
-	"multica_agent_task_queue_wait_seconds":            {labelSource, labelRuntimeMode},
-	"multica_agent_task_claimable_wait_seconds":        {labelSource, labelRuntimeMode},
+	"multica_agent_task_enqueued_total":         {labelSource, labelRuntimeMode},
+	"multica_agent_task_dispatched_total":       {labelSource, labelRuntimeMode},
+	"multica_agent_task_started_total":          {labelSource, labelRuntimeMode, labelProvider},
+	"multica_agent_task_terminal_total":         {labelSource, labelRuntimeMode, labelTerminalStatus},
+	"multica_agent_task_failed_total":           {labelSource, labelRuntimeMode, labelFailureReason},
+	"multica_agent_task_queue_wait_seconds":     {labelSource, labelRuntimeMode},
+	"multica_agent_task_claimable_wait_seconds": {labelSource, labelRuntimeMode},
+	// claim_decision reason is a closed enum. It is mirrored by claimReasonFor
+	// and by claimDecisionSeries: agent cap is agent_concurrency_cap, squad cap
+	// is squad_concurrency_cap, and an unclassified outcome stays error.
 	"multica_agent_task_claim_decision_total":          {labelClaimPath, labelOutcome, labelReason},
 	"multica_agent_task_run_seconds":                   {labelSource, labelRuntimeMode, labelTerminalStatus},
 	"multica_agent_task_total_seconds":                 {labelSource, labelRuntimeMode, labelTerminalStatus},

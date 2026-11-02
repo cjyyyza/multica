@@ -810,6 +810,7 @@ func claimDecisionSeries() []claimDecisionSeriesKey {
 	claimTaskOutcomes := []claimDecisionSeriesKey{
 		{"", "claimed", "claimed"},
 		{"", "no_capacity", "agent_concurrency_cap"},
+		{"", "no_squad_capacity", "squad_concurrency_cap"},
 		{"", "no_runtime", "agent_unbound"},
 		{"", "runtime_mismatch", "agent_rebound"},
 		{"", "error_get_agent", "error"},
