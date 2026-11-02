@@ -209,7 +209,7 @@ func TestP4WorkspaceWithoutTicketRefusesToOpenFiles(t *testing.T) {
 		"client `yujian01_HIH-D-35258Z_Dev`",
 		"you cannot open any file",
 		"`refs #<ticket>`",
-		"post a comment asking for `refs #<ticket>` to be added to the issue description",
+		"post a comment asking a person to set the issue's 易协作 link or add `refs #<ticket>` to the issue description",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("ticket-less workspace brief missing %q; got:\n%s", want, out)

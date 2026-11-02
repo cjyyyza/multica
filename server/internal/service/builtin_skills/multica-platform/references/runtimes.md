@@ -132,11 +132,12 @@ editor and submits unless the workspace settings explicitly allow agent submissi
 
 The daemon creates one pending changelist for the task and every file the
 agent opens goes into it. Its description carries `refs #<ticket>` — the
-易协作 ticket number, resolved from the issue's import record or from a
-`refs #<ticket>` in the issue title or description. **Without a ticket no file
-can be opened**: `p4 edit` returns `ticket_required`, and the fix is to ask a
-human to put `refs #<ticket>` in the issue description, not to invent a
-number.
+易协作 ticket number, resolved from the issue's import record, from the
+issue's structured 易协作 link/metadata, or from a `refs #<ticket>` in the
+issue title or description. **Without a ticket no file can be opened**:
+`p4 edit` returns `ticket_required`, and the fix is to ask a human to set the
+issue's 易协作 link or put `refs #<ticket>` in the issue description, not to
+invent a number.
 
 Do not pass `--port` or `--depot`, and do not look up P4PORT from Project
 Context, `p4 set`, or `p4 info`. The daemon fills both from the binding.

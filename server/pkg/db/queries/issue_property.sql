@@ -87,3 +87,16 @@ LEFT JOIN issue i
  AND (i.properties -> sqlc.arg('property_key')::text) ? opt
 GROUP BY opt
 HAVING COUNT(i.id) > 0;
+
+-- name: GetIssuePropertyValueByName :one
+-- One property value on one issue, addressed by the catalog name instead of
+-- the definition id. Used where a stable, human-visible field has to be read
+-- before its definition id is known (the 易协作 source link that P4 ticket
+-- resolution falls back to). Property names are unique per workspace
+-- case-insensitively; LIMIT 1 keeps a degraded catalog unambiguous.
+SELECT i.properties -> p.id::text AS value
+FROM issue_property p
+JOIN issue i ON i.id = sqlc.arg('issue_id')::uuid AND i.workspace_id = p.workspace_id
+WHERE p.workspace_id = sqlc.arg('workspace_id')::uuid
+  AND lower(p.name) = lower(sqlc.arg('name')::text)
+LIMIT 1;

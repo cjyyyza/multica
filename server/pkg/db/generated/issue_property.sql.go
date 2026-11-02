@@ -202,6 +202,33 @@ func (q *Queries) GetIssueProperty(ctx context.Context, arg GetIssuePropertyPara
 	return i, err
 }
 
+const getIssuePropertyValueByName = `-- name: GetIssuePropertyValueByName :one
+SELECT i.properties -> p.id::text AS value
+FROM issue_property p
+JOIN issue i ON i.id = $1::uuid AND i.workspace_id = p.workspace_id
+WHERE p.workspace_id = $2::uuid
+  AND lower(p.name) = lower($3::text)
+LIMIT 1
+`
+
+type GetIssuePropertyValueByNameParams struct {
+	IssueID     pgtype.UUID `json:"issue_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Name        string      `json:"name"`
+}
+
+// One property value on one issue, addressed by the catalog name instead of
+// the definition id. Used where a stable, human-visible field has to be read
+// before its definition id is known (the 易协作 source link that P4 ticket
+// resolution falls back to). Property names are unique per workspace
+// case-insensitively; LIMIT 1 keeps a degraded catalog unambiguous.
+func (q *Queries) GetIssuePropertyValueByName(ctx context.Context, arg GetIssuePropertyValueByNameParams) (interface{}, error) {
+	row := q.db.QueryRow(ctx, getIssuePropertyValueByName, arg.IssueID, arg.WorkspaceID, arg.Name)
+	var value interface{}
+	err := row.Scan(&value)
+	return value, err
+}
+
 const listIssueProperties = `-- name: ListIssueProperties :many
 SELECT p.id, p.workspace_id, p.name, p.type, p.description, p.config, p.position, p.archived_at, p.created_at, p.updated_at, p.icon,
     (

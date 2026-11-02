@@ -40,7 +40,7 @@
 全流程只有一个 changelist，它从创建到提交都带着易协作单号，所以任何一环都能回溯到工单。
 
 1. **绑定工作区。** 守护进程在 `local_directory` 下解析出你的 P4 client（`p4 set -q` + `p4 info`，由 `P4CONFIG` 决定），校验 Owner 是本人、Host 是本机、本地路径在 client Root 之内，然后给 `port|client` 加锁 —— 同一个工作区同时只跑一条智能体任务。校验不通过时任务直接失败并说明原因，不会退回到“直接写只读文件”。
-2. **解析单号。** 从易协作导入的任务用导入记录里的工单号；手工建的任务在标题或描述里写 `refs #<单号>`。**没有单号就打不开文件**：`multica p4 edit` 返回 `ticket_required`，智能体会留言请人补单号然后结束，不会编造一个号。
+2. **解析单号。** 从易协作导入的任务用导入记录里的工单号；任务上有「易协作链接」属性或 `yixiezuo_id` metadata 时从这些结构化字段读；手工建的任务在标题或描述里写 `refs #<单号>`。**没有单号就打不开文件**：`multica p4 edit` 返回 `ticket_required`，智能体会留言请人补单号然后结束，不会编造一个号。
 3. **创建任务 CL。** 智能体第一次 `multica p4 edit` 时创建，描述为 `refs #<单号> <任务标题>` 加 `Multica: <任务编号>` 尾注。同一条任务返工时按尾注找回原来的 pending CL 继续用。
 4. **改文件。** `multica p4 edit` 打开、`multica p4 add`（`add-files` 相同）新增，全部自动进这个 CL。文件默认只读，不要改只读属性。查历史用 `multica p4 filelog` 和 `multica p4 describe -c <编号>`；`-c` 就是 `--changelist`。看这个 client 的文件状态用 `multica p4 fstat`，列 changelist 用 `multica p4 changes`，输出就是 p4 自己的文本。智能体进程里的原生 `p4` 写操作已被 `P4CONFIG` / `P4CLIENT` 屏蔽，depot 只读查询（`files`、`print`、`filelog`、`describe`）仍可用，但原生 `fstat` 看不到这个 client。不同步、不提交、不碰别的 CL；遇到 `opened_by_you`、`exclusive_locked`、`exclusive_not_allowed`、`not_head` 就停下并在任务里说明。
 5. **收尾。** 任务成功、失败、取消都执行：`revert -a` 退回“打开了但没改”的文件 → CL 空了就删掉 → 否则 shelve（edge 工作区加 `-p`）→ 除非 depot 设了 `no_auto_review`，自动建 Swarm review 并关联到任务。**改过的文件保持打开状态。**

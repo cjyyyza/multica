@@ -79,10 +79,10 @@ refs #<单号> <任务标题>
 Multica: <任务编号>
 ```
 
-`refs #<单号>` 是易协作工单号。Multica 从任务的导入记录里读，或者从任务标题、描述里的 `refs #123456` 里读。
+`refs #<单号>` 是易协作工单号。Multica 从任务的导入记录、任务的结构化来源字段（「易协作链接」属性与 `yixiezuo_id` metadata），或者任务标题、描述里的 `refs #123456` 里读。
 
 <Callout type="warn">
-没有单号时，智能体一个文件都打不开：`multica p4 edit` 返回 `ticket_required`。请在任务描述里补上 `refs #<单号>`，再重新触发智能体。Multica 不会编造单号。
+没有单号时，智能体一个文件都打不开：`multica p4 edit` 返回 `ticket_required`。请设置任务的易协作链接，或在任务描述里补上 `refs #<单号>`，再重新触发智能体。Multica 不会编造单号。
 </Callout>
 
 同一条任务在同一个 client 上再次执行时，会按描述里的 `Multica: <任务编号>` 找回原来的待提交 changelist 继续用。

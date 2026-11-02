@@ -2,15 +2,21 @@ package handler
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/multica-ai/multica/server/internal/integrations/yixiezuo"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// Every changelist on the shared depot must reference a 易协作 ticket. An
-// imported issue IS a ticket; anything else has to say so in its own text.
+// Every changelist on the shared depot must reference a 易协作 ticket. The
+// ticket comes from a structured issue field when one exists; an imported
+// issue IS a ticket, so its import's external_id wins. Text markers remain the
+// manual fallback.
 func TestResolveIssueP4Ticket(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -29,6 +35,29 @@ func TestResolveIssueP4Ticket(t *testing.T) {
 		return issue
 	}
 
+	// Other handler tests import 易协作 issues into this workspace, and the
+	// import creates the source-link property definition. Reuse it instead of
+	// inserting a duplicate, which the case-insensitive name index rejects.
+	ensureSourceLinkProperty := func(t *testing.T) string {
+		t.Helper()
+		var id string
+		err := testPool.QueryRow(ctx, `
+			SELECT id::text FROM issue_property
+			WHERE workspace_id = $1 AND lower(name) = lower($2)`,
+			testWorkspaceID, yixiezuo.SourceLinkPropertyName).Scan(&id)
+		switch {
+		case err == nil:
+			return id
+		case !errors.Is(err, pgx.ErrNoRows):
+			t.Fatalf("load source link property: %v", err)
+		}
+		return dbfx.Insert(t, "issue_property", testutil.Cols{
+			"workspace_id": testWorkspaceID,
+			"name":         yixiezuo.SourceLinkPropertyName,
+			"type":         "multi_url",
+		})
+	}
+
 	t.Run("易协作 import external_id wins", func(t *testing.T) {
 		issueID := dbfx.Issue(t, "imported issue with refs #999999 in the title", testutil.Cols{
 			"description": "refs #888888",
@@ -44,6 +73,91 @@ func TestResolveIssueP4Ticket(t *testing.T) {
 		})
 		if got := testHandler.resolveIssueP4Ticket(ctx, loadIssue(t, issueID)); got != "880101" {
 			t.Fatalf("ticket = %q, want the import's external_id 880101", got)
+		}
+	})
+
+	t.Run("import outranks the structured metadata", func(t *testing.T) {
+		issueID := dbfx.Issue(t, "imported issue", testutil.Cols{
+			"description": "no marker here",
+			"metadata":    testutil.Raw(`'{"yixiezuo_id":"660011"}'::jsonb`),
+		})
+		dbfx.Insert(t, "yixiezuo_import", testutil.Cols{
+			"workspace_id": testWorkspaceID,
+			"issue_id":     issueID,
+			"source_host":  "dj01.pm.netease.com",
+			"external_id":  "880101",
+			"source_url":   "https://dj01.pm.netease.com/issues/880101",
+			"snapshot":     testutil.Raw("'{}'::jsonb"),
+			"imported_by":  testUserID,
+		})
+		if got := testHandler.resolveIssueP4Ticket(ctx, loadIssue(t, issueID)); got != "880101" {
+			t.Fatalf("ticket = %q, want the import's external_id 880101", got)
+		}
+	})
+
+	t.Run("易协作 metadata fills the ticket when there is no import", func(t *testing.T) {
+		// The issue UI renders this metadata as the 易协作 source, so a task
+		// linked without importing it must not look ticket-less to the daemon.
+		issueID := dbfx.Issue(t, "Fix the crash", testutil.Cols{
+			"description": "no marker here",
+			"metadata":    testutil.Raw(`'{"yixiezuo_id":"660011"}'::jsonb`),
+		})
+		if got := testHandler.resolveIssueP4Ticket(ctx, loadIssue(t, issueID)); got != "660011" {
+			t.Fatalf("ticket = %q, want 660011 from metadata", got)
+		}
+	})
+
+	t.Run("numeric metadata is read as a ticket", func(t *testing.T) {
+		issueID := dbfx.Issue(t, "Fix the crash", testutil.Cols{
+			"metadata": testutil.Raw(`'{"yixiezuo_id":660012}'::jsonb`),
+		})
+		if got := testHandler.resolveIssueP4Ticket(ctx, loadIssue(t, issueID)); got != "660012" {
+			t.Fatalf("ticket = %q, want 660012 from numeric metadata", got)
+		}
+	})
+
+	t.Run("non-numeric metadata falls through to the text", func(t *testing.T) {
+		issueID := dbfx.Issue(t, "Fix the crash", testutil.Cols{
+			"description": "see refs #773344 for the ticket",
+			"metadata":    testutil.Raw(`'{"yixiezuo_id":"DJ-7"}'::jsonb`),
+		})
+		if got := testHandler.resolveIssueP4Ticket(ctx, loadIssue(t, issueID)); got != "773344" {
+			t.Fatalf("ticket = %q, want 773344 from the description", got)
+		}
+	})
+
+	t.Run("metadata outranks a description marker", func(t *testing.T) {
+		issueID := dbfx.Issue(t, "Fix the crash", testutil.Cols{
+			"description": "stale refs #990044",
+			"metadata":    testutil.Raw(`'{"yixiezuo_id":"660013"}'::jsonb`),
+		})
+		if got := testHandler.resolveIssueP4Ticket(ctx, loadIssue(t, issueID)); got != "660013" {
+			t.Fatalf("ticket = %q, want the structured metadata 660013", got)
+		}
+	})
+
+	t.Run("易协作 link property fills the ticket", func(t *testing.T) {
+		propertyID := ensureSourceLinkProperty(t)
+		issueID := dbfx.Issue(t, "linked through the issue field", testutil.Cols{
+			"properties": testutil.Raw(fmt.Sprintf(
+				`jsonb_build_object('%s', '["https://dj01.pm.netease.com/issues/220033"]'::jsonb)`,
+				propertyID)),
+		})
+		if got := testHandler.resolveIssueP4Ticket(ctx, loadIssue(t, issueID)); got != "220033" {
+			t.Fatalf("ticket = %q, want 220033 from the link property", got)
+		}
+	})
+
+	t.Run("link property pointing below the issue falls through to the text", func(t *testing.T) {
+		propertyID := ensureSourceLinkProperty(t)
+		issueID := dbfx.Issue(t, "linked through the issue field", testutil.Cols{
+			"description": "real refs #770055",
+			"properties": testutil.Raw(fmt.Sprintf(
+				`jsonb_build_object('%s', '["https://dj01.pm.netease.com/issues/220033/attachments/5"]'::jsonb)`,
+				propertyID)),
+		})
+		if got := testHandler.resolveIssueP4Ticket(ctx, loadIssue(t, issueID)); got != "770055" {
+			t.Fatalf("ticket = %q, want 770055 from the description", got)
 		}
 	})
 
@@ -132,6 +246,25 @@ func TestClaimTaskSendsP4TicketOnlyWithDepots(t *testing.T) {
 		dbfx.Task(t, agentID, testutil.Cols{"runtime_id": runtimeID, "issue_id": issueID})
 		if got := claim(t, "depot claim"); got != "551122" {
 			t.Fatalf("p4_ticket = %q, want 551122", got)
+		}
+	})
+
+	t.Run("from the issue's 易协作 metadata", func(t *testing.T) {
+		projectID := dbfx.Project(t, "P4 metadata ticket project")
+		dbfx.Insert(t, "project_resource", testutil.Cols{
+			"project_id":    projectID,
+			"workspace_id":  testWorkspaceID,
+			"resource_type": "perforce_depot",
+			"resource_ref":  `{"port":"` + p4TestPort + `","depot":"//depot/UE"}`,
+			"position":      0,
+		})
+		issueID := dbfx.Issue(t, "P4 work without a text marker", testutil.Cols{
+			"project_id": projectID,
+			"metadata":   testutil.Raw(`'{"yixiezuo_id":"551144"}'::jsonb`),
+		})
+		dbfx.Task(t, agentID, testutil.Cols{"runtime_id": runtimeID, "issue_id": issueID})
+		if got := claim(t, "metadata claim"); got != "551144" {
+			t.Fatalf("p4_ticket = %q, want 551144 from the issue metadata", got)
 		}
 	})
 
