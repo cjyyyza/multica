@@ -30,10 +30,16 @@ type Event struct {
 	ChannelReactionTarget *ChannelReactionTarget `json:"-"`
 
 	// ChatSessionOwnerID is the creator of the chat session the event belongs
-	// to. A chat session is creator-private, so the realtime layer delivers
-	// chat events and chat-task transcript events only to this user, and drops
-	// them when it is empty rather than falling back to workspace fanout.
+	// to. Routing does not use it: chat content is delivered from
+	// ChatContentReaderIDs, resolved when the event is published.
 	ChatSessionOwnerID string
+
+	// ChatContentReaderIDs are the workspace members who may receive this
+	// chat-private event, resolved at publish time. The realtime listener
+	// delivers only to these workspace_member scopes and drops the event when
+	// the list is empty. It is not a client payload and must not be cached as
+	// a grant.
+	ChatContentReaderIDs []string `json:"-"`
 }
 
 // Handler is a function that processes an event.

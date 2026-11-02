@@ -30,3 +30,12 @@ JOIN requirement_participant p
   ON p.requirement_id = r.id AND p.workspace_id = r.workspace_id
 WHERE r.workspace_id = @workspace_id
   AND p.user_id = @user_id;
+
+-- name: ListRequirementIDsForParticipantIn :many
+SELECT DISTINCT p.requirement_id
+FROM requirement_participant p
+JOIN member m
+  ON m.workspace_id = p.workspace_id AND m.user_id = p.user_id
+WHERE p.workspace_id = @workspace_id
+  AND p.requirement_id = ANY(@requirement_ids::uuid[])
+  AND p.user_id = @user_id;

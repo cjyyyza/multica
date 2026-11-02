@@ -52,11 +52,19 @@ func TestDeleteChatSession_BroadcastsTaskCancelled(t *testing.T) {
 
 	var mu sync.Mutex
 	var got []events.Event
+	var deleted []events.Event
 	testHandler.Bus.Subscribe(protocol.EventTaskCancelled, func(e events.Event) {
 		mu.Lock()
 		defer mu.Unlock()
 		if e.ChatSessionID == sessionID {
 			got = append(got, e)
+		}
+	})
+	testHandler.Bus.Subscribe(protocol.EventChatSessionDeleted, func(e events.Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		if e.ChatSessionID == sessionID {
+			deleted = append(deleted, e)
 		}
 	})
 
@@ -97,5 +105,11 @@ func TestDeleteChatSession_BroadcastsTaskCancelled(t *testing.T) {
 	}
 	if payload["status"] != "cancelled" {
 		t.Errorf("payload status = %v, want cancelled", payload["status"])
+	}
+	if len(deleted) != 1 {
+		t.Fatalf("chat:session_deleted events = %d, want 1", len(deleted))
+	}
+	if deleted[0].ChatSessionOwnerID != testUserID || len(deleted[0].ChatContentReaderIDs) != 1 || deleted[0].ChatContentReaderIDs[0] != testUserID {
+		t.Fatalf("deleted event owner/readers = %q/%v, want creator %q", deleted[0].ChatSessionOwnerID, deleted[0].ChatContentReaderIDs, testUserID)
 	}
 }

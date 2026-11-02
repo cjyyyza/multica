@@ -837,20 +837,49 @@ func (h *Handler) publishTask(eventType, workspaceID, actorType, actorID, taskID
 	})
 }
 
-// publishChat is publish() plus the chat session routing hints. actorID must
-// be the session's creator: every chat endpoint gates on creator ownership
-// before publishing, and the realtime layer delivers the event to that user
-// only.
-func (h *Handler) publishChat(eventType, workspaceID, actorType, actorID, chatSessionID string, payload any) {
+// publishChat is publish() plus the chat session routing hints. Readers are
+// the people who can read the session right now: the creator for an ordinary
+// chat, and the current requirement participants for a requirement chat. A
+// failed lookup leaves the list empty so the realtime layer drops the event
+// instead of widening it. actorID is the acting user, not necessarily the
+// creator.
+func (h *Handler) publishChat(ctx context.Context, eventType, workspaceID, actorType, actorID, chatSessionID string, payload any) {
+	access := h.chatContentAccess(ctx, chatSessionID)
+	h.publishChatWithReaders(eventType, workspaceID, actorType, actorID, chatSessionID, access.CreatorID, access.Readers, payload)
+}
+
+// publishChatToCreator publishes a creator-only event without resolving the
+// session again. The caller has already authenticated creatorID as the owner.
+func (h *Handler) publishChatToCreator(eventType, workspaceID, creatorID, chatSessionID string, payload any) {
+	var readers []string
+	if creatorID != "" {
+		readers = []string{creatorID}
+	}
+	h.publishChatWithReaders(eventType, workspaceID, "member", creatorID, chatSessionID, creatorID, readers, payload)
+}
+
+func (h *Handler) publishChatWithReaders(eventType, workspaceID, actorType, actorID, chatSessionID, creatorID string, readers []string, payload any) {
 	h.Bus.Publish(events.Event{
-		Type:               eventType,
-		WorkspaceID:        workspaceID,
-		ActorType:          actorType,
-		ActorID:            actorID,
-		ChatSessionID:      chatSessionID,
-		ChatSessionOwnerID: actorID,
-		Payload:            payload,
+		Type:                 eventType,
+		WorkspaceID:          workspaceID,
+		ActorType:            actorType,
+		ActorID:              actorID,
+		ChatSessionID:        chatSessionID,
+		ChatSessionOwnerID:   creatorID,
+		ChatContentReaderIDs: readers,
+		Payload:              payload,
 	})
+}
+
+func (h *Handler) chatContentAccess(ctx context.Context, chatSessionID string) service.ChatContentAccess {
+	if h == nil || h.Queries == nil || chatSessionID == "" {
+		return service.ChatContentAccess{}
+	}
+	sessionID, err := util.ParseUUID(chatSessionID)
+	if err != nil {
+		return service.ChatContentAccess{}
+	}
+	return service.ResolveChatContentAccess(ctx, h.Queries, sessionID)
 }
 
 func isNotFound(err error) bool {

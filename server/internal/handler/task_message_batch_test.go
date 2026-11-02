@@ -287,11 +287,14 @@ func TestReportTaskMessagesStampsChatSessionOwner(t *testing.T) {
 		t.Fatalf("chat task:message hints = session %q owner %q, want %q / %q",
 			chat.ChatSessionID, chat.ChatSessionOwnerID, chatSessionID, creatorID)
 	}
+	if len(chat.ChatContentReaderIDs) != 1 || chat.ChatContentReaderIDs[0] != creatorID {
+		t.Fatalf("ordinary chat readers = %v, want only the creator", chat.ChatContentReaderIDs)
+	}
 	issue, ok := got[issueTaskID]
 	if !ok {
 		t.Fatal("issue task published no task:message")
 	}
-	if issue.ChatSessionID != "" || issue.ChatSessionOwnerID != "" || issue.WorkspaceID != testWorkspaceID {
+	if issue.ChatSessionID != "" || issue.ChatSessionOwnerID != "" || len(issue.ChatContentReaderIDs) != 0 || issue.WorkspaceID != testWorkspaceID {
 		t.Fatalf("issue task:message = %+v, want workspace-scoped without chat hints", issue)
 	}
 }

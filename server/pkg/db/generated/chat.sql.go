@@ -2335,17 +2335,18 @@ func (q *Queries) ListChatMessagesPageForChannelContext(ctx context.Context, arg
 }
 
 const listChatSessionCreators = `-- name: ListChatSessionCreators :many
-SELECT id, creator_id FROM chat_session
+SELECT id, creator_id, workspace_id FROM chat_session
 WHERE id = ANY($1::uuid[])
 `
 
 type ListChatSessionCreatorsRow struct {
-	ID        pgtype.UUID `json:"id"`
-	CreatorID pgtype.UUID `json:"creator_id"`
+	ID          pgtype.UUID `json:"id"`
+	CreatorID   pgtype.UUID `json:"creator_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
 }
 
-// Owners of a page of chat tasks, so task lists can hide the content of chat
-// tasks the viewer did not start.
+// Owners and workspaces of a page of chat tasks, so task lists can resolve
+// ordinary-chat and requirement-chat visibility without per-session queries.
 func (q *Queries) ListChatSessionCreators(ctx context.Context, ids []pgtype.UUID) ([]ListChatSessionCreatorsRow, error) {
 	rows, err := q.db.Query(ctx, listChatSessionCreators, ids)
 	if err != nil {
@@ -2355,7 +2356,7 @@ func (q *Queries) ListChatSessionCreators(ctx context.Context, ids []pgtype.UUID
 	items := []ListChatSessionCreatorsRow{}
 	for rows.Next() {
 		var i ListChatSessionCreatorsRow
-		if err := rows.Scan(&i.ID, &i.CreatorID); err != nil {
+		if err := rows.Scan(&i.ID, &i.CreatorID, &i.WorkspaceID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

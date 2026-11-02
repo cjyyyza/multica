@@ -286,14 +286,16 @@ func (s *TaskService) SupplementChatQuickActions(ctx context.Context, task db.Ag
 		Failed:        failed,
 	}
 	_ = json.Unmarshal(msg.QuickActions, &payload.QuickActions)
+	access := s.chatContentAccess(ctx, task.ChatSessionID)
 	s.Bus.Publish(events.Event{
-		Type:               protocol.EventChatQuickActions,
-		WorkspaceID:        workspaceID,
-		ActorType:          "system",
-		ActorID:            "",
-		ChatSessionID:      util.UUIDToString(task.ChatSessionID),
-		ChatSessionOwnerID: scope.ChatSessionOwnerID,
-		Payload:            payload,
+		Type:                 protocol.EventChatQuickActions,
+		WorkspaceID:          workspaceID,
+		ActorType:            "system",
+		ActorID:              "",
+		ChatSessionID:        util.UUIDToString(task.ChatSessionID),
+		ChatSessionOwnerID:   access.CreatorID,
+		ChatContentReaderIDs: access.Readers,
+		Payload:              payload,
 	})
 	return nil
 }

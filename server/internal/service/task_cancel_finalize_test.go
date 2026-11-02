@@ -384,7 +384,10 @@ func TestFinalizeDeferredCancelledChat_StillEmpty_RestoresDraft(t *testing.T) {
 		t.Errorf("chat_session_id = %q, want %q", payload.ChatSessionID, f.chatSessionID)
 	}
 	if evts[0].ChatSessionOwnerID != f.creatorID {
-		t.Errorf("owner = %q, want session creator %q (realtime delivers only to the owner)", evts[0].ChatSessionOwnerID, f.creatorID)
+		t.Errorf("owner = %q, want session creator %q", evts[0].ChatSessionOwnerID, f.creatorID)
+	}
+	if len(evts[0].ChatContentReaderIDs) != 1 || evts[0].ChatContentReaderIDs[0] != f.creatorID {
+		t.Errorf("readers = %v, want only the session creator", evts[0].ChatContentReaderIDs)
 	}
 }
 

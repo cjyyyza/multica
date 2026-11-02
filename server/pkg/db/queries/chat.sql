@@ -20,9 +20,9 @@ SELECT * FROM chat_session
 WHERE id = $1 AND workspace_id = $2;
 
 -- name: ListChatSessionCreators :many
--- Owners of a page of chat tasks, so task lists can hide the content of chat
--- tasks the viewer did not start.
-SELECT id, creator_id FROM chat_session
+-- Owners and workspaces of a page of chat tasks, so task lists can resolve
+-- ordinary-chat and requirement-chat visibility without per-session queries.
+SELECT id, creator_id, workspace_id FROM chat_session
 WHERE id = ANY(@ids::uuid[]);
 
 -- name: GetPublicChatSessionInWorkspace :one

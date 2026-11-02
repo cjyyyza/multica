@@ -5903,19 +5903,24 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		if task.ChatSessionID.Valid {
 			chatSessionID = uuidToString(task.ChatSessionID)
 		}
+		access := service.ChatContentAccess{}
+		if task.ChatSessionID.Valid {
+			access = service.ResolveChatContentAccess(r.Context(), h.Queries, task.ChatSessionID)
+		}
 		for _, m := range created {
 			// The ordered CTE makes sqlc name the row type after the query
 			// rather than reusing the table model; the columns are the table's,
 			// in order, so the conversion is checked by the compiler and breaks
 			// loudly if the query ever stops returning the whole row.
 			h.Bus.Publish(events.Event{
-				Type:               protocol.EventTaskMessage,
-				WorkspaceID:        workspaceID,
-				ActorType:          "system",
-				TaskID:             taskID,
-				ChatSessionID:      chatSessionID,
-				ChatSessionOwnerID: scope.ChatSessionOwnerID,
-				Payload:            taskMessageToPayload(db.TaskMessage(m), taskID, uuidToString(task.IssueID)),
+				Type:                 protocol.EventTaskMessage,
+				WorkspaceID:          workspaceID,
+				ActorType:            "system",
+				TaskID:               taskID,
+				ChatSessionID:        chatSessionID,
+				ChatSessionOwnerID:   access.CreatorID,
+				ChatContentReaderIDs: access.Readers,
+				Payload:              taskMessageToPayload(db.TaskMessage(m), taskID, uuidToString(task.IssueID)),
 			})
 		}
 	}
@@ -6539,9 +6544,10 @@ func (h *Handler) ListTaskMessagesByUser(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
-	// A chat task's transcript belongs to the chat session's creator alone;
-	// to anyone else it does not exist either.
-	if task.ChatSessionID.Valid && (scope.ChatSessionOwnerID == "" || scope.ChatSessionOwnerID != requestUserID(r)) {
+	// A chat task's transcript belongs to whoever can read that chat. Ordinary
+	// chats are creator-only; requirement chats follow participant read
+	// access. A failed lookup is not visible, same as a non-reader.
+	if task.ChatSessionID.Valid && !service.ChatContentVisible(r.Context(), h.Queries, task.ChatSessionID, requestUserID(r)) {
 		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}

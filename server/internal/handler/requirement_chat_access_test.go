@@ -3,11 +3,16 @@ package handler
 import (
 	"context"
 	"net/http"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func chatRequestForTest(userID, method, path string, body any, sessionID string) *http.Request {
@@ -172,5 +177,194 @@ func TestRequirementChatParticipantAccessAndOrdinaryChatRegression(t *testing.T)
 	}
 	if afterPinned != beforePinned || afterRead != beforeRead {
 		t.Fatalf("participant changed creator preferences: pinned=%s->%s read=%s->%s", beforePinned, afterPinned, beforeRead, afterRead)
+	}
+}
+
+func TestRequirementChatContentReadersIncludeParticipants(t *testing.T) {
+	enableRequirementFlowForTest(t)
+	if testPool == nil {
+		t.Skip("database not available")
+	}
+	_, agentID := newRequirementClaudePublicAgent(t, "Requirement content reader agent")
+	approver := dbfx.User(t, "Requirement content approver", uuid.NewString()+"@example.test")
+	viewer := dbfx.User(t, "Requirement content viewer", uuid.NewString()+"@example.test")
+	outsider := dbfx.User(t, "Requirement content outsider", uuid.NewString()+"@example.test")
+	dbfx.Member(t, testWorkspaceID, approver, "member")
+	dbfx.Member(t, testWorkspaceID, viewer, "member")
+	dbfx.Member(t, testWorkspaceID, outsider, "member")
+	body := newRequirementSourceFixture("94011").body(agentID)
+	body["participants"] = []service.RequirementParticipantInput{
+		{UserID: approver, Roles: []string{"approver"}},
+		{UserID: viewer, Roles: []string{"viewer"}},
+	}
+	detail := createRequirementForTest(t, testUserID, body, "content-reader-create")
+	opened := openRequirementForTest(t, testUserID, detail.ID, 1, "content-reader-open")
+	if opened.PendingTask == nil || opened.PendingTask.TaskID == "" {
+		t.Fatal("requirement open did not create a chat task")
+	}
+	taskID := opened.PendingTask.TaskID
+	dbfx.Exec(t, `UPDATE agent_task_queue SET status = 'running', started_at = now(), result = '{"output":"requirement chat reply"}'::jsonb, error = 'requirement chat error' WHERE id = $1`, taskID)
+	dbfx.Insert(t, "task_message", testutil.Cols{
+		"task_id": taskID,
+		"seq":     1,
+		"type":    "text",
+		"content": "requirement chat transcript",
+	})
+
+	readTranscript := func(userID string) *testutil.Response {
+		req := withURLParam(newRequestAs(userID, http.MethodGet, "/api/tasks/"+taskID+"/messages", nil), "taskId", taskID)
+		req = req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, db.Member{}))
+		return testutil.Call(t, testHandler.ListTaskMessagesByUser, req)
+	}
+	for _, userID := range []string{testUserID, approver, viewer} {
+		var history []protocol.TaskMessagePayload
+		readTranscript(userID).Want(http.StatusOK).JSON(&history)
+		if len(history) != 1 || history[0].Content != "requirement chat transcript" {
+			t.Fatalf("reader %s transcript = %+v", userID, history)
+		}
+	}
+	readTranscript(outsider).Want(http.StatusNotFound)
+
+	listTasks := func(userID string) map[string]AgentTaskResponse {
+		req := withURLParam(newRequestAs(userID, http.MethodGet, "/api/agents/"+agentID+"/tasks", nil), "id", agentID)
+		var tasks []AgentTaskResponse
+		testutil.Call(t, testHandler.ListAgentTasks, req).Want(http.StatusOK).JSON(&tasks)
+		byID := map[string]AgentTaskResponse{}
+		for _, task := range tasks {
+			byID[task.ID] = task
+		}
+		return byID
+	}
+	for _, userID := range []string{testUserID, approver, viewer} {
+		task, ok := listTasks(userID)[taskID]
+		if !ok || task.Result == nil || task.Error == nil || *task.Error != "requirement chat error" {
+			t.Fatalf("reader %s task = %+v, want result and error", userID, task)
+		}
+	}
+	foreign, ok := listTasks(outsider)[taskID]
+	if !ok {
+		t.Fatal("outsider lost the task row")
+	}
+	if foreign.Result != nil || foreign.Error != nil {
+		t.Fatalf("outsider sees result=%v error=%v, want both redacted", foreign.Result, foreign.Error)
+	}
+
+	ordinary := dbfx.ChatSession(t, agentID, testutil.Cols{"creator_id": testUserID})
+	ordinaryTask := dbfx.Task(t, agentID, testutil.Cols{
+		"chat_session_id": ordinary,
+		"status":          "completed",
+		"completed_at":    testutil.Raw("now()"),
+		"result":          testutil.Raw(`'{"output":"ordinary reply"}'::jsonb`),
+		"error":           "ordinary error",
+	})
+	dbfx.Insert(t, "task_message", testutil.Cols{
+		"task_id": ordinaryTask,
+		"seq":     1,
+		"type":    "text",
+		"content": "ordinary transcript",
+	})
+	readOrdinary := func(userID string) *testutil.Response {
+		req := withURLParam(newRequestAs(userID, http.MethodGet, "/api/tasks/"+ordinaryTask+"/messages", nil), "taskId", ordinaryTask)
+		req = req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, db.Member{}))
+		return testutil.Call(t, testHandler.ListTaskMessagesByUser, req)
+	}
+	var ownHistory []protocol.TaskMessagePayload
+	readOrdinary(testUserID).Want(http.StatusOK).JSON(&ownHistory)
+	if len(ownHistory) != 1 || ownHistory[0].Content != "ordinary transcript" {
+		t.Fatalf("creator ordinary transcript = %+v", ownHistory)
+	}
+	readOrdinary(approver).Want(http.StatusNotFound)
+	ordinaryRow, ok := listTasks(approver)[ordinaryTask]
+	if !ok {
+		t.Fatal("ordinary chat task row missing from the non-creator list")
+	}
+	if ordinaryRow.Result != nil || ordinaryRow.Error != nil {
+		t.Fatalf("non-creator ordinary task result=%v error=%v, want both redacted", ordinaryRow.Result, ordinaryRow.Error)
+	}
+
+	testutil.Call(t, testHandler.SendChatMessage, chatRequestForTest(
+		viewer, http.MethodPost, "/api/chat/sessions/"+opened.Session.ID+"/messages",
+		map[string]any{"content": "Viewer must not write"}, opened.Session.ID)).Want(http.StatusForbidden)
+
+	sharedBus := testHandler.Bus
+	testHandler.Bus = events.New()
+	t.Cleanup(func() { testHandler.Bus = sharedBus })
+	var mu sync.Mutex
+	var chatEvent events.Event
+	var taskEvent events.Event
+	var pinEvent events.Event
+	var readEvent events.Event
+	testHandler.Bus.Subscribe(protocol.EventChatMessage, func(e events.Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		if e.ChatSessionID == opened.Session.ID {
+			chatEvent = e
+		}
+	})
+	testHandler.Bus.Subscribe(protocol.EventTaskMessage, func(e events.Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		if e.TaskID == taskID {
+			taskEvent = e
+		}
+	})
+	testHandler.Bus.Subscribe(protocol.EventChatSessionUpdated, func(e events.Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		if e.ChatSessionID == opened.Session.ID {
+			pinEvent = e
+		}
+	})
+	testHandler.Bus.Subscribe(protocol.EventChatSessionRead, func(e events.Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		if e.ChatSessionID == opened.Session.ID {
+			readEvent = e
+		}
+	})
+	testutil.Call(t, testHandler.SendChatMessage, chatRequestForTest(
+		approver, http.MethodPost, "/api/chat/sessions/"+opened.Session.ID+"/messages",
+		map[string]any{"content": "participant turn"}, opened.Session.ID)).Want(http.StatusCreated)
+	testutil.Call(t, testHandler.ReportTaskMessages, batchMessagesRequest(t, taskID, []any{
+		map[string]any{"seq": 2, "type": "text", "content": "streamed requirement text"},
+	})).Want(http.StatusOK)
+	testutil.Call(t, testHandler.SetChatSessionPinned, chatRequestForTest(
+		testUserID, http.MethodPost, "/api/chat/sessions/"+opened.Session.ID+"/pin",
+		map[string]any{"pinned": true}, opened.Session.ID)).Want(http.StatusOK)
+	testutil.Call(t, testHandler.MarkChatSessionRead, chatRequestForTest(
+		testUserID, http.MethodPost, "/api/chat/sessions/"+opened.Session.ID+"/read", nil, opened.Session.ID)).Want(http.StatusNoContent)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if chatEvent.ChatSessionOwnerID != testUserID {
+		t.Fatalf("chat owner = %q, want creator %q", chatEvent.ChatSessionOwnerID, testUserID)
+	}
+	wantReaders := map[string]bool{testUserID: true, approver: true, viewer: true}
+	assertChatReaders(t, "chat:message", chatEvent.ChatContentReaderIDs, wantReaders, outsider)
+	assertChatReaders(t, "task:message", taskEvent.ChatContentReaderIDs, wantReaders, outsider)
+	if taskEvent.ChatSessionOwnerID != testUserID {
+		t.Fatalf("task:message owner = %q, want creator %q", taskEvent.ChatSessionOwnerID, testUserID)
+	}
+	creatorOnly := map[string]bool{testUserID: true}
+	assertChatReaders(t, "chat:session_updated pin", pinEvent.ChatContentReaderIDs, creatorOnly, approver)
+	assertChatReaders(t, "chat:session_read", readEvent.ChatContentReaderIDs, creatorOnly, approver)
+}
+
+func assertChatReaders(t *testing.T, label string, got []string, want map[string]bool, outsider string) {
+	t.Helper()
+	seen := map[string]bool{}
+	for _, id := range got {
+		if id == outsider {
+			t.Fatalf("%s included outsider %s in %v", label, outsider, got)
+		}
+		seen[id] = true
+	}
+	for id := range want {
+		if !seen[id] {
+			t.Fatalf("%s readers = %v, missing %s", label, got, id)
+		}
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("%s readers = %v, want %v", label, got, want)
 	}
 }

@@ -230,7 +230,7 @@ func (h *Handler) writeRequirementResult(w http.ResponseWriter, r *http.Request,
 		h.publishEvidenceComment(r.Context(), event.Issue, event.Comment, event.IssueRevision)
 	}
 	for _, message := range result.ChatMessages {
-		h.publishChat(protocol.EventChatMessage, result.WorkspaceID, result.ActorType, result.ActorID, uuidToString(message.ChatSessionID), protocol.ChatMessagePayload{
+		h.publishChat(r.Context(), protocol.EventChatMessage, result.WorkspaceID, result.ActorType, result.ActorID, uuidToString(message.ChatSessionID), protocol.ChatMessagePayload{
 			ChatSessionID: uuidToString(message.ChatSessionID), MessageID: uuidToString(message.ID), Role: message.Role, Content: message.Content, TaskID: uuidToString(message.TaskID), CreatedAt: timestampToString(message.CreatedAt),
 		})
 	}

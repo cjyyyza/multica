@@ -3679,14 +3679,16 @@ func (s *TaskService) broadcastChatCancelFinalized(ctx context.Context, task db.
 	if workspaceID == "" {
 		return
 	}
+	access := s.chatContentAccess(ctx, task.ChatSessionID)
 	s.Bus.Publish(events.Event{
-		Type:               protocol.EventChatCancelFinalized,
-		WorkspaceID:        workspaceID,
-		ActorType:          "system",
-		ActorID:            "",
-		ChatSessionID:      util.UUIDToString(task.ChatSessionID),
-		ChatSessionOwnerID: scope.ChatSessionOwnerID,
-		Payload:            payload,
+		Type:                 protocol.EventChatCancelFinalized,
+		WorkspaceID:          workspaceID,
+		ActorType:            "system",
+		ActorID:              "",
+		ChatSessionID:        util.UUIDToString(task.ChatSessionID),
+		ChatSessionOwnerID:   access.CreatorID,
+		ChatContentReaderIDs: access.Readers,
+		Payload:              payload,
 	})
 }
 
@@ -8041,15 +8043,24 @@ func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQu
 			payload.ElapsedMs = msg.ElapsedMs.Int64
 		}
 	}
+	access := s.chatContentAccess(ctx, task.ChatSessionID)
 	s.Bus.Publish(events.Event{
-		Type:               protocol.EventChatDone,
-		WorkspaceID:        workspaceID,
-		ActorType:          "system",
-		ActorID:            "",
-		ChatSessionID:      util.UUIDToString(task.ChatSessionID),
-		ChatSessionOwnerID: scope.ChatSessionOwnerID,
-		Payload:            payload,
+		Type:                 protocol.EventChatDone,
+		WorkspaceID:          workspaceID,
+		ActorType:            "system",
+		ActorID:              "",
+		ChatSessionID:        util.UUIDToString(task.ChatSessionID),
+		ChatSessionOwnerID:   access.CreatorID,
+		ChatContentReaderIDs: access.Readers,
+		Payload:              payload,
 	})
+}
+
+func (s *TaskService) chatContentAccess(ctx context.Context, sessionID pgtype.UUID) ChatContentAccess {
+	if s == nil || s.Queries == nil || !sessionID.Valid {
+		return ChatContentAccess{}
+	}
+	return ResolveChatContentAccess(ctx, s.Queries, sessionID)
 }
 
 // broadcastIssueUpdated publishes the issue:updated event the frontend's

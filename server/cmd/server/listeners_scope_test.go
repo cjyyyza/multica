@@ -28,6 +28,7 @@ func TestRegisterListeners_ChatSessionCreatedGoesOnlyToCreator(t *testing.T) {
 	bus.Publish(events.Event{
 		Type: protocol.EventChatSessionCreated, WorkspaceID: "ws-1",
 		ActorType: "member", ActorID: "creator-1", ChatSessionID: "chat-1", ChatSessionOwnerID: "creator-1",
+		ChatContentReaderIDs: []string{"creator-1"},
 		Payload: protocol.ChatSessionCreatedPayload{
 			WorkspaceID: "ws-1", ChatSessionID: "chat-1", CreatorID: "creator-1",
 			Title: "private opening title",
@@ -54,6 +55,7 @@ func TestRegisterListeners_ChatSessionTitleUpdateGoesOnlyToCreator(t *testing.T)
 	bus.Publish(events.Event{
 		Type: protocol.EventChatSessionUpdated, WorkspaceID: "ws-1",
 		ActorType: "member", ActorID: "creator-1", ChatSessionID: "chat-1", ChatSessionOwnerID: "creator-1",
+		ChatContentReaderIDs: []string{"creator-1"},
 		Payload: protocol.ChatSessionUpdatedPayload{
 			ChatSessionID: "chat-1", Title: "private derived title",
 		},
@@ -191,7 +193,8 @@ func TestRegisterListeners_ChatContentGoesOnlyToSessionOwner(t *testing.T) {
 			bus.Publish(events.Event{
 				Type: tc.eventType, WorkspaceID: "ws-1", ActorType: "system",
 				TaskID: tc.taskID, ChatSessionID: "chat-1", ChatSessionOwnerID: "owner-1",
-				Payload: map[string]any{"content": "private chat content"},
+				ChatContentReaderIDs: []string{"owner-1"},
+				Payload:              map[string]any{"content": "private chat content"},
 			})
 
 			msg := onlyOwnerWorkspaceFrame(t, fb, "ws-1", "owner-1")
@@ -209,14 +212,83 @@ func TestRegisterListeners_ChatContentGoesOnlyToSessionOwner(t *testing.T) {
 	}
 }
 
-// A producer that cannot name the owner and workspace must not fall back to a
-// wider fanout: the owner refetches on the next lifecycle event, a leak is
-// permanent.
-func TestRegisterListeners_ChatContentWithoutOwnerIsDropped(t *testing.T) {
+// Requirement chat readers are named at publish time. The listener delivers
+// the same frame to each of them and to nobody else, without putting the
+// recipient list into the client payload.
+func TestRegisterListeners_ChatContentGoesToNamedReadersOnly(t *testing.T) {
+	bus := events.New()
+	fb := &fakeBroadcaster{}
+	registerListeners(bus, fb)
+
+	bus.Publish(events.Event{
+		Type: protocol.EventChatMessage, WorkspaceID: "ws-1", ActorType: "member", ActorID: "approver",
+		ChatSessionID: "chat-1", ChatSessionOwnerID: "creator",
+		ChatContentReaderIDs: []string{"creator", "approver", "viewer", "approver", ""},
+		Payload:              map[string]any{"content": "requirement chat content"},
+	})
+	bus.Publish(events.Event{
+		Type: protocol.EventTaskMessage, WorkspaceID: "ws-1", ActorType: "system",
+		TaskID: "task-1", ChatSessionID: "chat-1", ChatSessionOwnerID: "creator",
+		ChatContentReaderIDs: []string{"creator", "viewer"},
+		Payload:              map[string]any{"content": "requirement transcript"},
+	})
+
+	fb.mu.Lock()
+	defer fb.mu.Unlock()
+	if len(fb.workspaceCalls) != 0 || len(fb.userCalls) != 0 || fb.broadcastCalled != 0 {
+		t.Fatalf("chat content left named readers: workspace=%+v user=%+v broadcast=%d",
+			fb.workspaceCalls, fb.userCalls, fb.broadcastCalled)
+	}
+	want := map[string]int{
+		realtime.WorkspaceMemberScopeID("ws-1", "creator"):  2,
+		realtime.WorkspaceMemberScopeID("ws-1", "approver"): 1,
+		realtime.WorkspaceMemberScopeID("ws-1", "viewer"):   2,
+	}
+	if len(fb.scopeCalls) != 5 {
+		t.Fatalf("scope fanout = %+v, want 5 deliveries", fb.scopeCalls)
+	}
+	got := map[string]int{}
+	for _, call := range fb.scopeCalls {
+		if call.scopeType != realtime.ScopeWorkspaceMember {
+			t.Fatalf("scope type = %q", call.scopeType)
+		}
+		got[call.scopeID]++
+		var frame map[string]any
+		if err := json.Unmarshal(call.msg, &frame); err != nil {
+			t.Fatalf("decode frame: %v", err)
+		}
+		if _, ok := frame["chat_content_reader_ids"]; ok {
+			t.Fatalf("client frame leaked reader list: %s", call.msg)
+		}
+		if _, ok := frame["chat_session_owner_id"]; ok {
+			t.Fatalf("client frame leaked owner id: %s", call.msg)
+		}
+		payload, _ := frame["payload"].(map[string]any)
+		if frame["type"] == "" || payload["content"] == "" {
+			t.Fatalf("frame = %s", call.msg)
+		}
+	}
+	for id, n := range want {
+		if got[id] != n {
+			t.Fatalf("deliveries to %s = %d, want %d; all=%v", id, got[id], n, got)
+		}
+	}
+	if _, leaked := got[realtime.WorkspaceMemberScopeID("ws-1", "stranger")]; leaked {
+		t.Fatal("stranger received chat content")
+	}
+}
+
+// A producer that cannot name readers and workspace must not fall back to a
+// wider fanout. An owner field alone is not a recipient list: the listener
+// does not look the session up, and it does not invent the creator.
+func TestRegisterListeners_ChatContentWithoutReadersIsDropped(t *testing.T) {
 	for _, tc := range chatPrivateCases {
-		for _, missing := range []struct{ name, workspaceID, ownerID string }{
-			{"no owner", "ws-1", ""},
-			{"no workspace", "", "owner-1"},
+		for _, missing := range []struct {
+			name, workspaceID, ownerID string
+			readers                    []string
+		}{
+			{"no readers", "ws-1", "owner-1", nil},
+			{"no workspace", "", "owner-1", []string{"owner-1"}},
 		} {
 			t.Run(tc.eventType+"/"+missing.name, func(t *testing.T) {
 				bus := events.New()
@@ -226,7 +298,8 @@ func TestRegisterListeners_ChatContentWithoutOwnerIsDropped(t *testing.T) {
 				bus.Publish(events.Event{
 					Type: tc.eventType, WorkspaceID: missing.workspaceID, ActorType: "system",
 					TaskID: tc.taskID, ChatSessionID: "chat-1", ChatSessionOwnerID: missing.ownerID,
-					Payload: map[string]any{"content": "private chat content"},
+					ChatContentReaderIDs: missing.readers,
+					Payload:              map[string]any{"content": "private chat content"},
 				})
 
 				if len(fb.workspaceCalls) != 0 || len(fb.userCalls) != 0 || len(fb.scopeCalls) != 0 || fb.broadcastCalled != 0 {
@@ -252,9 +325,9 @@ func TestRegisterListeners_ChatRoutingKeepsInProcessListeners(t *testing.T) {
 	done := protocol.ChatDonePayload{ChatSessionID: "chat-1", TaskID: "task-1", Content: "assistant reply"}
 	message := protocol.TaskMessagePayload{TaskID: "task-1", Seq: 1, Type: "text", Content: "streamed text"}
 	for _, e := range []events.Event{
-		{Type: protocol.EventChatDone, WorkspaceID: "ws-1", ChatSessionID: "chat-1", ChatSessionOwnerID: "owner-1", Payload: done},
-		{Type: protocol.EventTaskMessage, WorkspaceID: "ws-1", TaskID: "task-1", ChatSessionID: "chat-1", ChatSessionOwnerID: "owner-1", Payload: message},
-		// Ownerless events are dropped from the WebSocket only.
+		{Type: protocol.EventChatDone, WorkspaceID: "ws-1", ChatSessionID: "chat-1", ChatSessionOwnerID: "owner-1", ChatContentReaderIDs: []string{"owner-1"}, Payload: done},
+		{Type: protocol.EventTaskMessage, WorkspaceID: "ws-1", TaskID: "task-1", ChatSessionID: "chat-1", ChatSessionOwnerID: "owner-1", ChatContentReaderIDs: []string{"owner-1"}, Payload: message},
+		// Events with no reader list are dropped from the WebSocket only.
 		{Type: protocol.EventChatDone, WorkspaceID: "ws-1", ChatSessionID: "chat-1", Payload: done},
 	} {
 		bus.Publish(e)

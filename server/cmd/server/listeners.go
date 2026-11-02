@@ -81,10 +81,32 @@ func isChatPrivateEvent(e events.Event) bool {
 	return e.Type == protocol.EventTaskMessage && e.ChatSessionID != ""
 }
 
+// chatContentReaderIDs drops blanks and duplicates while keeping the
+// publisher's order. The listener does not invent a recipient from
+// ChatSessionOwnerID.
+func chatContentReaderIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
 // registerListeners wires up event bus listeners for WS broadcasting.
 // Personal events (inbox, invites) are sent only to the target user via
-// SendToUser, and chat content only to the chat session's creator. All other
-// events are broadcast to the workspace room.
+// SendToUser, and chat content only to the readers named on the event. All
+// other events are broadcast to the workspace room.
 //
 // The broadcaster parameter is intentionally typed as the realtime.Broadcaster
 // interface (not *realtime.Hub) so that this layer can later be swapped out
@@ -249,17 +271,18 @@ func registerListeners(bus *events.Bus, b realtime.Broadcaster) {
 			return
 		}
 
-		// A chat session is creator-private: its events and its tasks'
-		// transcript go only to the creator's connections bound to the
-		// session's workspace. Not the whole user scope: a connection to
-		// another workspace is authorized against that workspace, so it would
-		// keep receiving this content after the creator is removed from this
-		// one. The scope is joined at connect time, so this needs no client
-		// subscribe frame. Without a known owner and workspace the event is
-		// dropped, never widened.
+		// Chat content goes only to the readers resolved when the event was
+		// published, each on their connections bound to this workspace. Not
+		// the whole user scope: a connection to another workspace is
+		// authorized against that workspace, so it would keep receiving this
+		// content after the member is removed from this one. The scope is
+		// joined at connect time, so this needs no client subscribe frame and
+		// no database read. Without a workspace or a reader list the event is
+		// dropped, never widened to the workspace.
 		if isChatPrivateEvent(e) {
-			if e.ChatSessionOwnerID == "" || e.WorkspaceID == "" {
-				slog.Warn("realtime: dropping chat event without session owner",
+			readers := chatContentReaderIDs(e.ChatContentReaderIDs)
+			if e.WorkspaceID == "" || len(readers) == 0 {
+				slog.Warn("realtime: dropping chat event without readers",
 					"event_type", e.Type, "chat_session_id", e.ChatSessionID, "task_id", e.TaskID)
 				return
 			}
@@ -269,7 +292,9 @@ func registerListeners(bus *events.Bus, b realtime.Broadcaster) {
 				return
 			}
 			realtime.M.RecordEvent(e.Type)
-			b.BroadcastToScope(realtime.ScopeWorkspaceMember, realtime.WorkspaceMemberScopeID(e.WorkspaceID, e.ChatSessionOwnerID), data)
+			for _, readerID := range readers {
+				b.BroadcastToScope(realtime.ScopeWorkspaceMember, realtime.WorkspaceMemberScopeID(e.WorkspaceID, readerID), data)
+			}
 			return
 		}
 
@@ -297,7 +322,7 @@ func registerListeners(bus *events.Bus, b realtime.Broadcaster) {
 		//
 		// Until the client lands its scope-subscription PR, task events stay
 		// on workspace fanout, except chat-task transcripts, which take the
-		// creator-only user-scope route above. The `Event.TaskID` /
+		// reader-list route above. The `Event.TaskID` /
 		// `Event.ChatSessionID` hints are still populated by producers so
 		// that flipping the switch later is a one-line change here. See
 		// review on PR #1429 for context.

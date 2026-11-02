@@ -96,6 +96,42 @@ func (q *Queries) ListRequirementAgentIDsForUser(ctx context.Context, arg ListRe
 	return items, nil
 }
 
+const listRequirementIDsForParticipantIn = `-- name: ListRequirementIDsForParticipantIn :many
+SELECT DISTINCT p.requirement_id
+FROM requirement_participant p
+JOIN member m
+  ON m.workspace_id = p.workspace_id AND m.user_id = p.user_id
+WHERE p.workspace_id = $1
+  AND p.requirement_id = ANY($2::uuid[])
+  AND p.user_id = $3
+`
+
+type ListRequirementIDsForParticipantInParams struct {
+	WorkspaceID    pgtype.UUID   `json:"workspace_id"`
+	RequirementIds []pgtype.UUID `json:"requirement_ids"`
+	UserID         pgtype.UUID   `json:"user_id"`
+}
+
+func (q *Queries) ListRequirementIDsForParticipantIn(ctx context.Context, arg ListRequirementIDsForParticipantInParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listRequirementIDsForParticipantIn, arg.WorkspaceID, arg.RequirementIds, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var requirement_id pgtype.UUID
+		if err := rows.Scan(&requirement_id); err != nil {
+			return nil, err
+		}
+		items = append(items, requirement_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRequirementParticipantRoles = `-- name: ListRequirementParticipantRoles :many
 SELECT id, workspace_id, requirement_id, user_id, role, created_at FROM requirement_participant
 WHERE workspace_id = $1
