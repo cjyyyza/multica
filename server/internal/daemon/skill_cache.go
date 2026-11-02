@@ -132,7 +132,7 @@ func validateSkillBundle(ref SkillRefData, bundle SkillData) bool {
 	}
 	files := make([]skillbundle.File, 0, len(bundle.Files))
 	for _, file := range bundle.Files {
-		if !safeSkillFilePath(file.Path) {
+		if !skillpkg.IsSafeFilePath(file.Path) {
 			return false
 		}
 		files = append(files, skillbundle.File{Path: file.Path, Content: file.Content})
@@ -152,10 +152,6 @@ func validateSkillBundle(ref SkillRefData, bundle SkillData) bool {
 		return false
 	}
 	return true
-}
-
-func safeSkillFilePath(p string) bool {
-	return skillpkg.IsSafeFilePath(p)
 }
 
 func safeCacheSegment(s string) string {
