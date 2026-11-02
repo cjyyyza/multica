@@ -27,6 +27,62 @@ func TestRequirementExecuteBriefOffersDedicatedBlockCommand(t *testing.T) {
 	}
 }
 
+func TestRequirementBriefWinsOverProjectWorkflow(t *testing.T) {
+	out := buildMetaSkillContent("claude", TaskContextForEnv{
+		IssueID: "issue-1", RequirementID: "req-1", HasProjectWorkflow: true,
+	})
+	for _, want := range []string{
+		"the daemon writes those",
+		"`multica requirement block`",
+		"do not use this to move a Requirement Issue to `in_progress` or `in_review`",
+		"**Requirement status — daemon-owned transitions**",
+		"Do not call `issue status` for those transitions",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("requirement brief missing %q\n---\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{
+		"run its Step done command",
+		"this issue follows its project workflow",
+		"This issue's statuses and commands are in `[Project workflow]`",
+		"you ran the matching command from `[Project workflow]`",
+		"Needs changes command",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("requirement brief still carries project workflow handoff %q", unwanted)
+		}
+	}
+}
+
+func TestSquadRequirementBriefKeepsLeaderReviewHandoff(t *testing.T) {
+	out := buildMetaSkillContent("claude", TaskContextForEnv{
+		IssueID: "issue-1", RequirementID: "req-1", HasProjectWorkflow: true, IsSquadLeader: true,
+	})
+	for _, want := range []string{
+		"**Requirement status — Squad leader review handoff**",
+		"completion does not record `in_review`",
+		"Completion of a squad turn does not move it to `in_review`",
+		"multica issue status <id> in_review",
+		"all delegated work is complete",
+		"multica requirement block",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("squad requirement brief missing %q\n---\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{
+		"the daemon writes those",
+		"Do not call `issue status` for those transitions",
+		"run its Step done command",
+		"you ran the matching command from `[Project workflow]`",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("squad requirement brief carries conflicting status guidance %q\n---\n%s", unwanted, out)
+		}
+	}
+}
+
 func TestOrdinaryIssueBriefOmitsDedicatedRequirementBlockCommand(t *testing.T) {
 	out := buildMetaSkillContent("claude", TaskContextForEnv{IssueID: "issue-1"})
 	if strings.Contains(out, "multica requirement block") {

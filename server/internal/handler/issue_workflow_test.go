@@ -868,6 +868,15 @@ func TestClaimCarriesProjectWorkflow(t *testing.T) {
 	if testHandler.claimProjectWorkflow(context.Background(), plainIssue, nil, false) != nil {
 		t.Fatal("an issue outside a project must not carry a workflow")
 	}
+
+	requirementTask := db.AgentTaskQueue{AgentID: util.MustParseUUID(agentID), RequirementID: util.MustParseUUID(agentID)}
+	if testHandler.claimProjectWorkflow(context.Background(), quietIssue, &requirementTask, false) != nil {
+		t.Fatal("a requirement run must not carry a project workflow brief")
+	}
+	boundIssue, _ := testHandler.Queries.GetIssue(context.Background(), util.MustParseUUID(issueID))
+	if testHandler.claimProjectWorkflow(context.Background(), boundIssue, &requirementTask, false) != nil {
+		t.Fatal("a requirement run on a handoff project must not carry a project workflow brief")
+	}
 }
 
 // claimBriefForTest renders the workflow brief a claim of task would carry

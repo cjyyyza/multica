@@ -32,6 +32,17 @@ func TestBuildPromptSkipsEmptyWorkflowBrief(t *testing.T) {
 	}
 }
 
+func TestBuildPromptSkipsProjectWorkflowForRequirement(t *testing.T) {
+	task := Task{
+		IssueID: "issue-1", RequirementID: "req-1",
+		ProjectWorkflow: &ProjectWorkflowData{Brief: deliveryBrief},
+	}
+	out := BuildPrompt(task, "claude")
+	if strings.Contains(out, "[Project workflow]") || strings.Contains(out, "Step done") {
+		t.Fatalf("requirement run injected the project workflow block:\n%s", out)
+	}
+}
+
 // A handoff note is the caller's own instruction now; the workflow brief
 // arrives through the claim, so a handoff run gets both.
 func TestBuildPromptKeepsWorkflowBlockBesideHandoffNote(t *testing.T) {
@@ -63,6 +74,7 @@ func TestTaskHasProjectWorkflowMatchesTheRenderedBlock(t *testing.T) {
 		"none":        {IssueID: "issue-1"},
 		"blank brief": {IssueID: "issue-1", ProjectWorkflow: &ProjectWorkflowData{Brief: "  \n"}},
 		"brief":       {IssueID: "issue-1", ProjectWorkflow: &ProjectWorkflowData{Brief: deliveryBrief}},
+		"requirement": {IssueID: "issue-1", RequirementID: "req-1", ProjectWorkflow: &ProjectWorkflowData{Brief: deliveryBrief}},
 	} {
 		rendered := buildProjectWorkflowBlock(task) != ""
 		if got := taskHasProjectWorkflow(task); got != rendered {

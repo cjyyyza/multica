@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/issueworkflow"
@@ -335,6 +336,13 @@ func (h *Handler) assigneeActiveRuns(ctx context.Context, issue db.Issue) []db.A
 // legacyRuntimeRules is true for a daemon that does not advertise
 // protocol.DaemonCapabilityWorkflowStatusRulesV1; see BriefInput.
 func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task *db.AgentTaskQueue, legacyRuntimeRules bool) *TaskProjectWorkflowData {
+	// A requirement issue keeps its own in_progress / in_review / block path.
+	// The task row copies the binding at enqueue; the issue binding covers a
+	// run whose row did not. Either one is enough. A failed lookup is not
+	// treated as a requirement, so an ordinary issue still gets its brief.
+	if h.issueHasRequirementBinding(ctx, issue, task) {
+		return nil
+	}
 	def, project, err := issueworkflow.ForProject(ctx, h.Queries, issue.WorkspaceID, issue.ProjectID)
 	if err != nil {
 		slog.Warn("task claim: failed to load project workflow for brief injection",
@@ -353,6 +361,25 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task
 		}
 	}
 	return &TaskProjectWorkflowData{Brief: issueworkflow.Brief(in)}
+}
+
+func (h *Handler) issueHasRequirementBinding(ctx context.Context, issue db.Issue, task *db.AgentTaskQueue) bool {
+	if task != nil && task.RequirementID.Valid {
+		return true
+	}
+	_, err := h.Queries.GetRequirementByIssue(ctx, db.GetRequirementByIssueParams{
+		WorkspaceID: issue.WorkspaceID,
+		IssueID:     issue.ID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false
+	}
+	if err != nil {
+		slog.Warn("task claim: requirement binding lookup failed",
+			"issue_id", uuidToString(issue.ID), "error", err)
+		return false
+	}
+	return true
 }
 
 // taskRunsForAssignee reports whether a run works on the issue as its

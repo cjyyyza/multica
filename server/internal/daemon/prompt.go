@@ -92,6 +92,12 @@ func perTurnContextBlocks(task Task, opts promptOpts) string {
 // renders on — so the runtime brief points at it instead of its built-in
 // status rules (MUL-8145).
 func taskHasProjectWorkflow(task Task) bool {
+	// A requirement run keeps its own status path. A brief that arrived anyway
+	// must not be injected, and must not flip the runtime brief onto the
+	// project-workflow status rules.
+	if task.RequirementID != "" {
+		return false
+	}
 	return task.ProjectWorkflow != nil && strings.TrimSpace(task.ProjectWorkflow.Brief) != ""
 }
 
