@@ -260,20 +260,15 @@ var hermesSessionPublishMu sync.Mutex
 // cannot interleave a publish into that window. Always nil in production.
 var hermesSessionPublishBarrier func(storeDir string)
 
-// removeHermesSessionDBFamily clears a directory's state.db family. Called
-// once the database is either safely in the store or deliberately being
-// replaced by the link; leaving a stale `-wal` next to the link would be
-// dead weight SQLite never reads (it derives the sidecar paths from the
-// resolved store path) and a confusing thing to find in a task directory.
-//
-// Only entries this code can identify are removed, and never recursively: a
-// regular file is SQLite's, and a symlink is a prior mount's store link (left
-// when the store path changed under a live overlay, e.g. a profile switch
-// mid-conversation) — os.Remove unlinks it without touching its target. A
-// directory or any other irregular type under a state.db name is not a
-// database remnant this code recognises, and deleting content it cannot
-// identify is exactly the failure this file exists to prevent, so it fails
-// closed and the caller keeps its source.
+// removeHermesSessionDBFamily clears a directory's state.db family. The
+// conversation store is the home, so this runs while a leftover task-local
+// database is migrated into that store and then removed from the source, and
+// while an empty store is cleared of remnants before a staged publish. A
+// symlink under a state.db name is a prior mount's store link; os.Remove
+// unlinks it without touching its target. A directory or any other irregular
+// type under a state.db name is not a database remnant this code recognises,
+// and deleting content it cannot identify is exactly the failure this file
+// exists to prevent, so it fails closed and the caller keeps its source.
 func removeHermesSessionDBFamily(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

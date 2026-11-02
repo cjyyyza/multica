@@ -823,8 +823,8 @@ func stubHermesSessionPublishBarrier(t *testing.T, fn func(storeDir string)) (re
 }
 
 // requireSymlinks skips a test on a host that cannot create symlinks. The
-// production path degrades to a task-local database there rather than copying,
-// so there is nothing to assert about the mounted layout.
+// skip is for the links this test creates. The conversation store is the
+// home and does not keep state.db task-local when a link cannot be created.
 func requireSymlinks(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS != "windows" {
