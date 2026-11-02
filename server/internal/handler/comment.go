@@ -1986,15 +1986,47 @@ func (h *Handler) triggerTasksForComment(ctx context.Context, issue db.Issue, co
 		}
 		triggers = ownedTriggers
 	}
-	h.noteBlockedRuntimeTargets(ctx, issue, targets)
+	// Notices follow the same audience as steer/enqueue. The recovery owner was
+	// removed on purpose; a runtime or invocation refusal on that agent is not
+	// why this comment did not start them.
+	noticeTargets := commentTargetsWithoutRecoveryOwner(targets, recoveryOwner, owned)
+	h.noteBlockedRuntimeTargets(ctx, issue, noticeTargets)
 	triggers, steered := h.steerCommentAgentTriggers(ctx, issue, comment, actorType, actorID, originatorUserID, triggers, steer)
 	enqueued := h.enqueueCommentAgentTriggers(ctx, issue, comment.ID, triggers)
 	for agentID, result := range steered {
 		enqueued[agentID] = result
 	}
 	outcomes := commentTriggerOutcomes(targets, enqueued)
-	h.noteCommentInvocationDenied(ctx, issue, comment, outcomes)
+	h.noteCommentInvocationDenied(ctx, issue, comment, commentTriggerOutcomes(noticeTargets, enqueued))
 	return outcomes
+}
+
+// commentTargetsWithoutRecoveryOwner drops the agent whose requirement
+// recovery owns this comment, including a squad mention that resolved to that
+// agent. Other targets stay. owned false leaves the slice unchanged.
+func commentTargetsWithoutRecoveryOwner(targets []commentMentionTarget, owner pgtype.UUID, owned bool) []commentMentionTarget {
+	if !owned || !owner.Valid || len(targets) == 0 {
+		return targets
+	}
+	ownerID := uuidToString(owner)
+	filtered := make([]commentMentionTarget, 0, len(targets))
+	for _, target := range targets {
+		if commentTargetIsRecoveryOwner(target, owner, ownerID) {
+			continue
+		}
+		filtered = append(filtered, target)
+	}
+	return filtered
+}
+
+func commentTargetIsRecoveryOwner(target commentMentionTarget, owner pgtype.UUID, ownerID string) bool {
+	if target.unusable != nil && target.unusable.agent.ID == owner {
+		return true
+	}
+	if target.ExecAgentID == ownerID {
+		return true
+	}
+	return target.TargetType == "agent" && target.TargetID == ownerID
 }
 
 // noteBlockedRuntimeTargets leaves one system comment per agent refused for an
