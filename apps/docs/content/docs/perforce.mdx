@@ -79,10 +79,10 @@ refs #<ticket> <issue title>
 Multica: <ISSUE-KEY>
 ```
 
-`refs #<ticket>` is the 易协作 ticket number. Multica reads it from the issue's import record, from the issue's structured source fields (the `易协作链接` link property and the `yixiezuo_id` metadata), or from a `refs #123456` in the issue title or description.
+`refs #<ticket>` is the 易协作 ticket number. Multica reads it from the issue's import record, from the issue's structured source fields (the `易协作单子` or `易协作链接` property and the `yixiezuo_id` metadata), or from a `refs #123456` in the issue title or description. Either property accepts a bare ticket number or a 易协作 issue URL.
 
 <Callout type="warn">
-Without a ticket the agent cannot open any file: `multica p4 edit` returns `ticket_required`. Set the issue's 易协作 link or add `refs #<ticket>` to the issue description, then trigger the agent again. Multica never invents a number.
+Without a ticket the agent cannot open any file: `multica p4 edit` returns `ticket_required`. Set the issue's 易协作单子 or 易协作链接 property or add `refs #<ticket>` to the issue description, then trigger the agent again. Multica never invents a number.
 </Callout>
 
 Re-running the same issue on the same client reuses the pending changelist, matched on the `Multica: <ISSUE-KEY>` trailer.

@@ -144,7 +144,7 @@ func (d *Daemon) runWorkspaceP4(ctx context.Context, b *p4TaskBinding, req p4Mut
 		return d.workspaceQuery(ctx, b, cwd, req)
 	}
 	if actionOpensFiles(action) && strings.TrimSpace(b.ticket) == "" {
-		return nil, rejectP4(p4CodeTicketRequired, "this task has no 易协作 ticket; ask a person to add refs #<number> to the task description before opening files", nil, nil), nil
+		return nil, rejectP4(p4CodeTicketRequired, "this task has no 易协作 ticket; ask a person to set the issue's 易协作单子 or 易协作链接 property, or add refs #<number> to the task description before opening files", nil, nil), nil
 	}
 
 	switch action {

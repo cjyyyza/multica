@@ -593,7 +593,7 @@ func writeP4Workspace(b *strings.Builder, ws *P4WorkspaceForEnv) {
 		// I7: no ticket, no changelist, no opened files. Stated before the
 		// command list so an agent reading top-down never reaches `p4 edit`
 		// believing it is available.
-		b.WriteString("**This task has no 易协作 ticket, so you cannot open any file.** Every changelist description must carry `refs #<ticket>`, and inventing a number is worse than not having one. If the task needs a file change, post a comment asking a person to set the issue's 易协作 link or add `refs #<ticket>` to the issue description, then end your turn. Do not write to the workspace any other way.\n\n")
+		b.WriteString("**This task has no 易协作 ticket, so you cannot open any file.** Every changelist description must carry `refs #<ticket>`, and inventing a number is worse than not having one. If the task needs a file change, post a comment asking a person to set the issue's 易协作单子 or 易协作链接 property or add `refs #<ticket>` to the issue description, then end your turn. Do not write to the workspace any other way.\n\n")
 		b.WriteString("You can still read history with `multica p4 filelog -- <files>` and `multica p4 describe -c <number>`, and read file state with `multica p4 fstat -- <files>` or `multica p4 changes`.\n\n")
 		return
 	}

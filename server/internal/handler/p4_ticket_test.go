@@ -148,6 +148,22 @@ func TestResolveIssueP4Ticket(t *testing.T) {
 		}
 	})
 
+	t.Run("易协作单子 custom property fills the ticket", func(t *testing.T) {
+		propertyID := dbfx.Insert(t, "issue_property", testutil.Cols{
+			"workspace_id": testWorkspaceID,
+			"name":         "易协作单子",
+			"type":         "url",
+		})
+		issueID := dbfx.Issue(t, "linked through the custom ticket field", testutil.Cols{
+			"properties": testutil.Raw(fmt.Sprintf(
+				`jsonb_build_object('%s', to_jsonb('https://dj01.pm.netease.com/v6/issues/issue_109425'::text))`,
+				propertyID)),
+		})
+		if got := testHandler.resolveIssueP4Ticket(ctx, loadIssue(t, issueID)); got != "109425" {
+			t.Fatalf("ticket = %q, want 109425 from the 易协作单子 property", got)
+		}
+	})
+
 	t.Run("link property pointing below the issue falls through to the text", func(t *testing.T) {
 		propertyID := ensureSourceLinkProperty(t)
 		issueID := dbfx.Issue(t, "linked through the issue field", testutil.Cols{

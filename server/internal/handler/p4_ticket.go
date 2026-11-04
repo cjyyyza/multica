@@ -32,9 +32,8 @@ const yixiezuoIDMetadataKey = "yixiezuo_id"
 //     is ignored rather than passed through: `refs #DJ-1` is not a ticket the
 //     depot's submit trigger accepts.
 //  2. Structured issue fields written when the task was linked to its source:
-//     the `yixiezuo_id` metadata and the workspace's stable 易协作 link
-//     property. These are what the issue UI shows as the 易协作 source and
-//     link, so a person can set them without editing the description.
+//     the `yixiezuo_id` metadata and the workspace's 易协作链接 or custom
+//     易协作单子 property. A person can set them without editing the description.
 //  3. `refs #<n>` in the title, then in the description — the manual path for
 //     an issue created in Multica.
 func (h *Handler) resolveIssueP4Ticket(ctx context.Context, issue db.Issue) string {
@@ -57,7 +56,7 @@ func (h *Handler) resolveIssueP4Ticket(ctx context.Context, issue db.Issue) stri
 	if ticket := ticketFromIssueMetadata(issue.Metadata); ticket != "" {
 		return ticket
 	}
-	if ticket := h.ticketFromIssueSourceLink(ctx, issue); ticket != "" {
+	if ticket := h.ticketFromIssueProperties(ctx, issue); ticket != "" {
 		return ticket
 	}
 	if ticket := p4depot.TicketFromText(issue.Title); ticket != "" {
@@ -77,33 +76,35 @@ func ticketFromIssueMetadata(raw []byte) string {
 	return ticketFromJSONScalar(metadata[yixiezuoIDMetadataKey])
 }
 
-// ticketFromIssueSourceLink reads the workspace's stable 易协作 link property
-// from the issue. Imports populate it from the source URL; a person can also
-// fill it in the issue sidebar. Only the value is read, so a missing definition
-// or an empty value degrades to the text sources.
-func (h *Handler) ticketFromIssueSourceLink(ctx context.Context, issue db.Issue) string {
+// ticketFromIssueProperties reads the stable 易协作 properties from the issue.
+// Imports populate 易协作链接 from the source URL; workspaces can also use the
+// custom 易协作单子 field. Only values are read, so a missing definition or an
+// empty value degrades to the next structured or text source.
+func (h *Handler) ticketFromIssueProperties(ctx context.Context, issue db.Issue) string {
 	if len(issue.Properties) == 0 {
 		return ""
 	}
-	value, err := h.Queries.GetIssuePropertyValueByName(ctx, db.GetIssuePropertyValueByNameParams{
-		IssueID:     issue.ID,
-		WorkspaceID: issue.WorkspaceID,
-		Name:        yixiezuo.SourceLinkPropertyName,
-	})
-	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
-			slog.Warn("resolve p4 ticket: load 易协作 link property failed",
-				"issue_id", uuidToString(issue.ID), "error", err)
+	for _, name := range [...]string{yixiezuo.SourceLinkPropertyName, "易协作单子"} {
+		value, err := h.Queries.GetIssuePropertyValueByName(ctx, db.GetIssuePropertyValueByNameParams{
+			IssueID:     issue.ID,
+			WorkspaceID: issue.WorkspaceID,
+			Name:        name,
+		})
+		if err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				slog.Warn("resolve p4 ticket: load 易协作 ticket property failed",
+					"issue_id", uuidToString(issue.ID), "property_name", name, "error", err)
+			}
+			continue
 		}
-		return ""
-	}
-	for _, candidate := range propertyStrings(value) {
-		candidate = strings.TrimSpace(candidate)
-		if p4depot.ValidTicket(candidate) {
-			return candidate
-		}
-		if ticket := p4depot.TicketFromSourceURL(candidate); ticket != "" {
-			return ticket
+		for _, candidate := range propertyStrings(value) {
+			candidate = strings.TrimSpace(candidate)
+			if p4depot.ValidTicket(candidate) {
+				return candidate
+			}
+			if ticket := p4depot.TicketFromSourceURL(candidate); ticket != "" {
+				return ticket
+			}
 		}
 	}
 	return ""

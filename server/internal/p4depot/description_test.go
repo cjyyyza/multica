@@ -14,6 +14,7 @@ func TestTicketFromSourceURL(t *testing.T) {
 		" https://dj01.pm.netease.com/issues/7?tab=comments#c1 ":  "7",
 		"https://dj01.pm.netease.com/project/DJ01/issues/42":      "42",
 		"https://dj01.pm.netease.com/v6/my?issue_id=109425":       "109425",
+		"https://dj01.pm.netease.com/v6/issues/issue_109425":      "109425",
 		"http://pm.internal.example/issues/000123":                "000123",
 		"https://dj01.pm.netease.com/issues/DJ-7":                 "",
 		"https://dj01.pm.netease.com/issues/110156/attachments/9": "",

@@ -19,8 +19,9 @@ func TicketFromText(text string) string {
 }
 
 // TicketFromSourceURL extracts the ticket a 易协作 issue URL points at, e.g.
-// "https://dj01.pm.netease.com/issues/110156" -> "110156". Links such as
-// "/v6/my?issue_id=110156" carry the same ticket in the query instead.
+// "https://dj01.pm.netease.com/issues/110156" -> "110156". The v6 route uses
+// "issue_110156", while links such as "/v6/my?issue_id=110156" carry the same
+// ticket in the query instead.
 //
 // A path must be the issue route itself (`.../issues/<number>`); a link to
 // something under the issue, such as an attachment, returns "" rather than the
@@ -46,7 +47,11 @@ func TicketFromSourceURL(raw string) string {
 		return ticket
 	}
 	ticket := path[start+len(issueRoute):]
-	if strings.Contains(ticket, "/") || !ValidTicket(ticket) {
+	if strings.Contains(ticket, "/") {
+		return ""
+	}
+	ticket = strings.TrimPrefix(ticket, "issue_")
+	if !ValidTicket(ticket) {
 		return ""
 	}
 	return ticket
