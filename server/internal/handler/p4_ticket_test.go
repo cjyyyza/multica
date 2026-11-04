@@ -136,11 +136,11 @@ func TestResolveIssueP4Ticket(t *testing.T) {
 		}
 	})
 
-	t.Run("易协作 link property fills the ticket", func(t *testing.T) {
+	t.Run("易协作 v6/my link property fills the ticket", func(t *testing.T) {
 		propertyID := ensureSourceLinkProperty(t)
 		issueID := dbfx.Issue(t, "linked through the issue field", testutil.Cols{
 			"properties": testutil.Raw(fmt.Sprintf(
-				`jsonb_build_object('%s', '["https://dj01.pm.netease.com/issues/220033"]'::jsonb)`,
+				`jsonb_build_object('%s', '["https://dj01.pm.netease.com/v6/my?issue_id=220033"]'::jsonb)`,
 				propertyID)),
 		})
 		if got := testHandler.resolveIssueP4Ticket(ctx, loadIssue(t, issueID)); got != "220033" {
