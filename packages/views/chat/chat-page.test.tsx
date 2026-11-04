@@ -382,7 +382,7 @@ beforeEach(() => {
 });
 
 describe("ChatPage Requirement intake entry", () => {
-  it.each([FOLD_INNER, DESKTOP])("offers first-time intake at width %s when enabled", (width) => {
+  it.each([FOLD_INNER_PORTRAIT, DESKTOP])("offers first-time intake at width %s when enabled", (width) => {
     layout.width = width;
     configStore.getState().setFeatureFlags({ requirement_flow: true });
     renderPage("");
