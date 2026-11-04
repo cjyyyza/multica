@@ -72,9 +72,13 @@ type IssueResponse struct {
 	OriginType    *string `json:"origin_type,omitempty"`
 	OriginID      *string `json:"origin_id,omitempty"`
 	// RequirementID is the Requirement this issue was approved from (additive).
-	// A missing key means the binding is unknown (old backend or a hydration
-	// failure), never an authoritative "unbound" response.
+	// A missing id means unbound only when RequirementBindingKnown is true;
+	// without that marker it can be an old backend or failed hydration.
 	RequirementID *string `json:"requirement_id,omitempty"`
+	// RequirementBindingKnown distinguishes a successful unbound lookup from an
+	// old backend or failed hydration. Consumers with external side effects must
+	// not treat an absent value as confirmation that no Requirement owns it.
+	RequirementBindingKnown *bool `json:"requirement_binding_known,omitempty"`
 	// DuplicateOf is the original this issue duplicates (MUL-7349), set only
 	// while the mark counts: the issue is cancelled and the original still
 	// exists. newIssueResponseFiller resolves it from duplicateOfIssueID;
@@ -375,11 +379,10 @@ func (h *Handler) fillStatusCategories(ctx context.Context, wsID pgtype.UUID, re
 }
 
 // issueRequirementIDs resolves a page's bindings in one read, keyed by issue id.
-// A missing or failed hydration stays omitted from JSON rather than asserting
-// an authoritative empty binding.
-func (h *Handler) issueRequirementIDs(ctx context.Context, wsID pgtype.UUID, issueIDs []pgtype.UUID) map[string]string {
+// A failed hydration leaves both the id and its certainty omitted from JSON.
+func (h *Handler) issueRequirementIDs(ctx context.Context, wsID pgtype.UUID, issueIDs []pgtype.UUID) (map[string]string, bool) {
 	if len(issueIDs) == 0 {
-		return nil
+		return nil, true
 	}
 	rows, err := h.Queries.ListRequirementIDsForIssues(ctx, db.ListRequirementIDsForIssuesParams{
 		WorkspaceID: wsID,
@@ -387,13 +390,13 @@ func (h *Handler) issueRequirementIDs(ctx context.Context, wsID pgtype.UUID, iss
 	})
 	if err != nil {
 		slog.Warn("resolve issue requirement ids failed", "error", err, "count", len(issueIDs))
-		return nil
+		return nil, false
 	}
 	byIssue := make(map[string]string, len(rows))
 	for _, row := range rows {
 		byIssue[uuidToString(row.IssueID)] = uuidToString(row.RequirementID)
 	}
-	return byIssue
+	return byIssue, true
 }
 
 // newIssueResponseFiller resolves bindings, duplicate originals and custom
@@ -404,7 +407,7 @@ func (h *Handler) issueRequirementIDs(ctx context.Context, wsID pgtype.UUID, iss
 // up front, the way labelsByIssue loads a page's labels; an original that was
 // not passed still resolves, one read per distinct original. (MUL-7349)
 func (h *Handler) newIssueResponseFiller(ctx context.Context, wsID pgtype.UUID, issueIDs []pgtype.UUID, originals ...pgtype.UUID) func(*IssueResponse) {
-	requirements := h.issueRequirementIDs(ctx, wsID, issueIDs)
+	requirements, requirementsKnown := h.issueRequirementIDs(ctx, wsID, issueIDs)
 	resolver := issuestatus.NewResolver(wsID)
 	refs := duplicateOriginals{}
 	h.loadDuplicateOriginals(ctx, wsID, refs, originals)
@@ -413,8 +416,13 @@ func (h *Handler) newIssueResponseFiller(ctx context.Context, wsID pgtype.UUID, 
 			return
 		}
 		resp.RequirementID = nil
-		if requirementID, ok := requirements[resp.ID]; ok {
-			resp.RequirementID = &requirementID
+		resp.RequirementBindingKnown = nil
+		if requirementsKnown {
+			known := true
+			resp.RequirementBindingKnown = &known
+			if requirementID, ok := requirements[resp.ID]; ok {
+				resp.RequirementID = &requirementID
+			}
 		}
 		// Every response that resolves its status also resolves its duplicate
 		// mark, so the two never disagree about which endpoints carry them.

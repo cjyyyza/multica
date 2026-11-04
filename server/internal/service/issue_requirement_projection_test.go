@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -35,6 +36,20 @@ func TestIssueToMapResolvedOmitsRequirementIDOnLookupFailure(t *testing.T) {
 	payload := IssueToMapResolved(context.Background(), requirementProjectionErrorQuerier{err: errors.New("database unavailable")}, issue, "REQ")
 	if value, exists := payload["requirement_id"]; exists {
 		t.Fatalf("failed requirement lookup emitted %#v", value)
+	}
+	if value, exists := payload["requirement_binding_known"]; exists {
+		t.Fatalf("failed requirement lookup emitted binding certainty %#v", value)
+	}
+}
+
+func TestIssueToMapResolvedMarksRequirementBindingKnown(t *testing.T) {
+	issue := db.Issue{Status: "in_progress"}
+	payload := IssueToMapResolved(context.Background(), requirementProjectionErrorQuerier{err: pgx.ErrNoRows}, issue, "REQ")
+	if value, exists := payload["requirement_id"]; !exists || value != nil {
+		t.Fatalf("unbound requirement_id = %#v, exists=%v; want explicit null", value, exists)
+	}
+	if got := payload["requirement_binding_known"]; got != true {
+		t.Fatalf("requirement_binding_known = %#v, want true", got)
 	}
 }
 

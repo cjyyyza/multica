@@ -25,6 +25,9 @@ func TestRequirementIssueProjectionAcrossSurfaces(t *testing.T) {
 			if issue.RequirementID == nil || *issue.RequirementID != f.Detail.ID {
 				t.Fatalf("bound issue %s projects requirement_id=%v, want %s", issue.ID, issue.RequirementID, f.Detail.ID)
 			}
+			if issue.RequirementBindingKnown == nil || !*issue.RequirementBindingKnown {
+				t.Fatalf("bound issue %s does not confirm requirement binding", issue.ID)
+			}
 			return
 		}
 		t.Fatalf("requirement issue %s missing from response", issueID)

@@ -83,4 +83,15 @@ describe("IssueSchema additive requirement projection", () => {
     expect(parsed.origin_id).toBe("chat-1");
     expect(parsed.id).toBe("issue-1");
   });
+
+  it("degrades an unknown requirement binding certainty without dropping the issue", () => {
+    const parsed = IssueSchema.parse({
+      ...baseIssue,
+      requirement_id: null,
+      requirement_binding_known: "yes",
+    });
+    expect(parsed.requirement_id).toBeNull();
+    expect(parsed.requirement_binding_known).toBeUndefined();
+    expect(parsed.id).toBe("issue-1");
+  });
 });

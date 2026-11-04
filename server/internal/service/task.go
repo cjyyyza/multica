@@ -8296,8 +8296,10 @@ func IssueToMapResolved(ctx context.Context, q IssueMapQuerier, issue db.Issue, 
 	switch {
 	case err == nil:
 		m["requirement_id"] = util.UUIDToString(requirement.ID)
+		m["requirement_binding_known"] = true
 	case errors.Is(err, pgx.ErrNoRows):
 		m["requirement_id"] = nil
+		m["requirement_binding_known"] = true
 	default:
 		slog.Warn("resolve issue requirement failed",
 			"issue_id", util.UUIDToString(issue.ID), "error", err)

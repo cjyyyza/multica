@@ -75,7 +75,7 @@ match, or the link resolves to the wrong entity (or to nothing).
 | -------------------- | -------- | --------------- | -------------------------------------------------------- |
 | trigger an agent     | `agent`  | agent.id        | enqueues a run for that agent                            |
 | hand work to a squad | `squad`  | squad.id        | resolves the squad's `leader_id` and enqueues a run for the LEADER agent |
-| link a person        | `member` | member.user_id  | renders a link; enqueues NOTHING — no agent run          |
+| link a person        | `member` | member.user_id  | renders a link and creates an inbox notification; enqueues NO agent run |
 | reference an issue   | `issue`  | issue.id        | renders a link; enqueues NOTHING — always safe           |
 
 The backend computes the trigger set from two types only: the `squad` branch
@@ -83,9 +83,20 @@ resolves the squad and adds its leader to the set; everything that is not
 `agent` after that is skipped, then the `agent` branch adds that agent. A
 `member` or `issue` mention reaches neither branch, so it enqueues no task.
 
-A `member` mention therefore does NOT make a person "run", and no notification
-is delivered through the comment path. What IS guaranteed is the contract above:
-only `agent` and `squad` mentions enqueue work.
+A `member` mention therefore does NOT make a person "run". It creates an inbox
+notification. When a daemon-managed agent posts the comment through
+`multica issue comment add` on Windows, the CLI also looks up each explicitly
+mentioned member's email and sends one POPO P2P message containing the comment
+and the current issue link via `popo-cli popo message_send_p2p`. Duplicate
+mentions of the same member produce only one POPO message. Requirement-owned
+issues keep their dedicated POPO notification flow instead. If the server cannot
+confirm whether the issue is Requirement-owned, generic POPO delivery is skipped.
+
+POPO delivery happens only after the comment succeeds and is best-effort: a CLI
+lookup, rejected acknowledgement, or send failure prints a warning but does not
+turn the successful comment into a failure. A failed or unknown POPO result is
+not retried automatically.
+Only `agent` and `squad` mentions enqueue work.
 
 ## Preview and per-comment suppression
 

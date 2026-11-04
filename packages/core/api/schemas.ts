@@ -1560,9 +1560,13 @@ export const IssueSchema = z.object({
   revision: z.number().int().positive().optional(),
   origin_type: z.string().nullable().optional().catch(undefined),
   origin_id: z.string().nullable().optional().catch(undefined),
-  // Additive Requirement pointer. Missing means either an older backend or a
-  // hydration failure, so the client may probe origin_id; null means unbound.
+  // Additive Requirement pointer. A missing id means unbound only when the
+  // certainty marker below is true; otherwise it can be an old backend or a
+  // hydration failure, so the client may probe origin_id. Null means unbound.
   requirement_id: z.string().nullable().optional().catch(undefined),
+  // True only after the server successfully resolves the binding. External
+  // side effects must stay disabled when this optional marker is absent.
+  requirement_binding_known: z.boolean().optional().catch(undefined),
   // Optional for compatibility with older self-hosted backends; a current
   // backend emits null until its historical backfill reaches the issue.
   last_activity_at: z.string().nullable().optional(),

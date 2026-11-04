@@ -2634,6 +2634,9 @@ func runIssueCommentAdd(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(os.Stderr, "Comment added to issue %s.\n", issueRef.Display)
 	reportSteerOutcomes(os.Stderr, steerTargets, result)
+	if postedContent, ok := body["content"].(string); ok {
+		maybeNotifyIssueMentionsViaPOPO(client, issueID, postedContent)
+	}
 
 	output, _ := cmd.Flags().GetString("output")
 	if output == "table" {
