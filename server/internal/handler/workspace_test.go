@@ -940,13 +940,10 @@ VALUES ($1, $2, 'owner')
 		req := newRequest("PATCH", "/api/workspaces/"+wsID, map[string]any{
 			"p4_depots": []map[string]any{
 				{
-					"port":           "  SSL:perforce.example.com:1666  ",
-					"depot":          "  //depot/game  ",
-					"stream":         "  //depot/game/main  ",
-					"description":    "  client  ",
-					"allow_submit":   true,
-					"allow_sync":     true,
-					"allow_unshelve": true,
+					"port":        "  SSL:perforce.example.com:1666  ",
+					"depot":       "  //depot/game  ",
+					"stream":      "  //depot/game/main  ",
+					"description": "  client  ",
 				},
 				{
 					"port":   "ssl:perforce.example.com:1666",
@@ -964,21 +961,15 @@ VALUES ($1, $2, 'owner')
 
 		var resp struct {
 			P4Depots []struct {
-				Port          string `json:"port"`
-				Depot         string `json:"depot"`
-				Stream        string `json:"stream"`
-				Description   string `json:"description"`
-				AllowSubmit   bool   `json:"allow_submit"`
-				AllowSync     bool   `json:"allow_sync"`
-				AllowUnshelve bool   `json:"allow_unshelve"`
+				Port        string `json:"port"`
+				Depot       string `json:"depot"`
+				Stream      string `json:"stream"`
+				Description string `json:"description"`
 			} `json:"p4_depots"`
 		}
 		w.JSON(&resp)
 		if len(resp.P4Depots) != 2 {
 			t.Fatalf("expected duplicate identity to be deduped, got %d depots: %+v", len(resp.P4Depots), resp.P4Depots)
-		}
-		if !resp.P4Depots[0].AllowSubmit || !resp.P4Depots[0].AllowSync || !resp.P4Depots[0].AllowUnshelve {
-			t.Fatalf("human administrator's permissions were lost: %+v", resp.P4Depots[0])
 		}
 		if resp.P4Depots[0].Port != "SSL:perforce.example.com:1666" ||
 			resp.P4Depots[0].Depot != "//depot/game" ||

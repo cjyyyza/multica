@@ -25,19 +25,6 @@ type Ref struct {
 	// SwarmURL is the Helix Swarm / P4 Code Review origin for this depot.
 	// It is not part of Identity; credentials stay on the daemon host.
 	SwarmURL string `json:"swarm_url,omitempty"`
-	// AllowExclusive lets an agent open +l (exclusive) files through the
-	// daemon in workspace mode. Off by default: an exclusive open blocks every
-	// other person until the changelist is submitted or reverted.
-	AllowExclusive bool `json:"allow_exclusive,omitempty"`
-	// NoAutoReview skips the automatic Swarm review when a workspace-mode task
-	// shelves its changelist. The zero value keeps auto review on.
-	NoAutoReview bool `json:"no_auto_review,omitempty"`
-	// AllowSubmit, AllowSync, and AllowUnshelve are set in the workspace
-	// Perforce settings. All three default off. Sync only updates a workspace
-	// the task is already bound to; it does not create a client.
-	AllowSubmit   bool `json:"allow_submit,omitempty"`
-	AllowSync     bool `json:"allow_sync,omitempty"`
-	AllowUnshelve bool `json:"allow_unshelve,omitempty"`
 }
 
 var (

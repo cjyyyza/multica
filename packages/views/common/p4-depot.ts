@@ -33,13 +33,6 @@ export function toP4DepotPayload(depot: WorkspaceP4Depot): WorkspaceP4Depot {
   if (changelist) payload.changelist = changelist;
   if (description) payload.description = description;
   if (swarmURL) payload.swarm_url = swarmURL;
-  // Workspace-mode switches. Dropping them on an unrelated edit would turn
-  // exclusive opens off and auto review back on without anyone asking.
-  if (depot.allow_exclusive) payload.allow_exclusive = true;
-  if (depot.no_auto_review) payload.no_auto_review = true;
-  if (depot.allow_submit) payload.allow_submit = true;
-  if (depot.allow_sync) payload.allow_sync = true;
-  if (depot.allow_unshelve) payload.allow_unshelve = true;
   return payload;
 }
 

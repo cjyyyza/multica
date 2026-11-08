@@ -448,11 +448,9 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				// the bounded-reads rule must name it rather than leave an
 				// agent choosing between two contradicting instructions.
 				"that read is the bounded scan",
-				// D3: agents shelve, humans submit. Stated in the router
-				// because an agent that only reads this file must still not
-				// submit, and the mode detail stays in the reference.
-				"Perforce submit, sync, and unshelve default to disabled",
-				"multica p4 status",
+				"Perforce uses the installed native CLI",
+				"`p4` directly",
+				"multica p4 changelist link --changelist <number>",
 			},
 			notWant: []string{
 				"--no-start",
@@ -461,6 +459,8 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"there is never a reason to read all eight",
 				// The submit verb is gone from every Perforce surface.
 				"multica p4 submit",
+				"multica p4 <the same args>",
+				"forwards argv and stdin",
 			},
 		},
 		{
@@ -663,28 +663,19 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"the daemon polls and claims the task",
 				"multica runtime list --output json",
 				"multica repo checkout <url>",
-				"multica p4 edit -- <files>",
-				"multica p4 fstat -- <files>",
-				"multica p4 changes",
-				"multica p4 status --output json",
-				"multica p4 swarm create --output json",
-				"Do not pass `--port` or `--depot`",
-				// The daemon edits the person's existing client and refuses to
-				// create one. An agent that syncs a new client downloads the depot.
+				"p4 edit <files>",
+				"p4 fstat -Ol <files>",
+				"p4 changes -m 20",
+				"multica p4 swarm create --port <p4port>",
+				"multica p4 changelist link --changelist <number>",
+				"Swarm create/link also associates the CL",
+				"Never revert the whole shared client",
+				"native `p4` CLI",
+				"Always use the installed native `p4` CLI directly",
 				"Workspace mode",
-				"Do not create a Helix client",
-				"An agent shelves",
-				// I7 / D1: no ticket, no changelist, no opened files — and no
-				// inventing a number.
+				"trusted-agent, shared-workspace mode",
 				"refs #<ticket>",
-				"ticket_required",
-				// The per-depot switches that change what a task may do.
-				"allow_exclusive",
-				"no_auto_review",
-				"allow_submit",
-				"allow_sync",
-				"allow_unshelve",
-				"Project resources cannot grant",
+				"does not create, reuse, revert, shelve, submit",
 				"MULTICA_DAEMON_PORT",
 				"resource_ref.ref",
 				"github_repo",
@@ -698,14 +689,13 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"task-local Git metadata",
 			},
 			notWant: []string{
-				// Default-off guidance must not contradict explicitly enabled actions.
-				"An agent never submits",
-				"Do not request `multica p4 sync`",
-				"do not run `multica p4 sync`",
-				"multica p4 sync --port <p4port> --depot <depot-path>",
-				// Workspace file commands must not teach the agent to supply P4PORT.
-				"multica p4 edit --port <p4port>",
-				"multica p4 swarm create --port <p4port>",
+				"multica p4 status",
+				"ticket_required",
+				"allow_submit",
+				"Raw `p4` writes are blocked",
+				"multica p4 edit",
+				"thin `multica p4` proxy",
+				"forwards argv and stdin",
 			},
 		},
 		{

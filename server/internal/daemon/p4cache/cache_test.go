@@ -18,6 +18,10 @@ func main(){
  if strings.Contains(joined," info "){fmt.Println("User name: testuser");return}
  if strings.Contains(joined," login -s"){fmt.Println("... TicketExpiration 3600\n... User alice");return}
  if strings.Contains(joined," tickets"){fmt.Println("p4:1666 (alice) TESTTICKET");return}
+ if strings.Contains(joined," describe "){
+  if strings.Contains(joined," -S "){fmt.Print(os.Getenv("P4_FAKE_SHELF"));return}
+  fmt.Print(os.Getenv("P4_FAKE_DESCRIBE"));return
+ }
  panic("unexpected p4 command: "+joined)
 }`
 	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {

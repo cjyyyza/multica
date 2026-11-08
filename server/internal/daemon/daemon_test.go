@@ -597,19 +597,19 @@ func TestTaskMulticaEnvironmentIncludesPrivateConfigRoot(t *testing.T) {
 	}
 }
 
-func TestTaskMulticaEnvironmentBlocksRawP4WritesWhenWorkspaceBound(t *testing.T) {
+func TestTaskMulticaEnvironmentUsesNativeP4Workspace(t *testing.T) {
 	t.Parallel()
-	ws := &p4cache.Workspace{Port: "ssl:p4.example:1666", User: "alice", Charset: "utf8"}
+	ws := &p4cache.Workspace{Port: "ssl:p4.example:1666", User: "alice", Client: "alice_DEV", Charset: "utf8"}
 	env := taskMulticaEnvironment(Task{}, "codex", "", "", "", "", "", 0, 0, "/task/tmp", ws)
-	if env["P4CONFIG"] != ".multica-p4-disabled" || env["P4CLIENT"] != "multica-blocked" {
-		t.Fatalf("workspace binding did not shield raw p4 writes: %#v", env)
+	if env["P4PORT"] != ws.Port || env["P4USER"] != ws.User || env["P4CLIENT"] != ws.Client || env["P4CHARSET"] != ws.Charset {
+		t.Fatalf("resolved native connection was lost: %#v", env)
 	}
-	if env["P4PORT"] != ws.Port || env["P4USER"] != ws.User || env["P4CHARSET"] != ws.Charset {
-		t.Fatalf("disabling P4CONFIG lost the resolved read connection: %#v", env)
+	if _, ok := env["P4CONFIG"]; ok {
+		t.Fatal("workspace mode overrode P4CONFIG")
 	}
 	plain := taskMulticaEnvironment(Task{}, "codex", "", "", "", "", "", 0, 0, "/task/tmp", nil)
-	if _, ok := plain["P4CONFIG"]; ok {
-		t.Fatal("a task outside workspace mode inherited the p4 write shield")
+	if _, ok := plain["P4CLIENT"]; ok {
+		t.Fatal("a task outside workspace mode inherited a P4 client")
 	}
 }
 

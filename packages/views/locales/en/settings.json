@@ -1559,7 +1559,7 @@
   },
   "perforce": {
     "section_title": "Perforce",
-    "description": "Agents sync these Helix depots with the host login (P4USER, P4TICKETS, P4CONFIG). Multica does not store a Perforce password.",
+    "description": "Agents use these Helix depots with the host login (P4USER, P4TICKETS, P4CONFIG). Multica does not store a Perforce password.",
     "port_placeholder": "perforce.example.com:1666",
     "depot_placeholder": "//depot/project",
     "stream_placeholder": "Stream (optional)",
@@ -1574,10 +1574,6 @@
     "delete_confirm_cancel": "Cancel",
     "delete_confirm_action": "Delete depot",
     "manage_hint": "Only admins and owners can manage Perforce depots.",
-    "action_switches_hint": "Submission writes to the shared depot and cannot be undone by switching this off. Sync updates the entire bound client view, including stream imports.",
-    "allow_submit": "Agent may submit",
-    "allow_sync": "Agent may sync",
-    "allow_unshelve": "Agent may unshelve",
     "toast_saved": "Perforce depots saved",
     "toast_save_failed": "Failed to save Perforce depots"
   },

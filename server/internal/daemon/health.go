@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/multica-ai/multica/server/internal/daemon/p4cache"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/internal/util"
 )
@@ -415,10 +414,11 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux.HandleFunc("/health", d.healthHandler(startedAt))
 	mux.HandleFunc("/shutdown", d.shutdownHandler())
 	mux.HandleFunc("/repo/checkout", d.repoCheckoutHandler())
-	mux.HandleFunc("/p4/sync", d.p4SyncHandler())
-	mux.HandleFunc("/p4/status", d.p4StatusHandler())
-	mux.HandleFunc("/p4/run", d.p4RunHandler())
+	mux.HandleFunc("/p4/run", legacyP4Handler())
+	mux.HandleFunc("/p4/status", legacyP4Handler())
+	mux.HandleFunc("/p4/sync", legacyP4Handler())
 	mux.HandleFunc("/p4/swarm", d.p4SwarmHandler())
+	mux.HandleFunc("/p4/changelist/link", d.p4ChangelistLinkHandler())
 
 	srv := &http.Server{Handler: mux}
 
@@ -559,40 +559,6 @@ func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
-	}
-}
-
-func (d *Daemon) p4SyncHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		var req p4MutateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		activeTask, authResult := d.activeRepoCheckoutTask(r)
-		if authResult != repoCheckoutAuthOK {
-			d.writeRepoCheckoutAuthError(w, authResult)
-			return
-		}
-		if binding := d.p4Binding(activeTask.TaskID); binding != nil {
-			req.Action = "sync"
-			d.serveWorkspaceP4Run(w, r, activeTask, binding, req)
-			return
-		}
-		if _, _, ok := d.authorizeP4Call(w, r, req.WorkspaceID, req.TaskID, req.WorkDir, "p4 sync"); !ok {
-			return
-		}
-		// A new Helix client is created only so it can be synced, and syncing
-		// downloads the depot. The allow-sync switch does not bring that back:
-		// it only syncs a workspace the task is already bound to.
-		writeP4Rejection(w, p4Rejection{
-			Code:    p4CodeActionNotAllowed,
-			Message: p4cache.ErrTaskClientNotCreated.Error(),
-		})
 	}
 }
 

@@ -20,10 +20,8 @@ import (
 // ticket source in its own right — not just a copy of the import row.
 const yixiezuoIDMetadataKey = "yixiezuo_id"
 
-// resolveIssueP4Ticket finds the 易协作 ticket every changelist description on
-// the shared depot must reference as `refs #<n>`. The agent never invents one:
-// without a ticket the daemon refuses to open files, and a person has to link
-// the ticket or put `refs #<n>` in the issue description.
+// resolveIssueP4Ticket finds optional 易协作 traceability context for native
+// changelist descriptions. It does not gate Perforce operations.
 //
 // Sources, in order of authority:
 //

@@ -62,12 +62,16 @@ mentioning, triggering and status changes mutate durable workspace state or
 start agent runs that cost real budget. Never run one to see what happens. When
 the user has not asked for a specific mutation, propose it instead of making it.
 
-**Perforce submit, sync, and unshelve default to disabled.** Use them only when
-the runtime brief's Perforce workspace section explicitly enables the action.
-Otherwise open files with `multica p4 edit`, let the task changelist shelve,
-and report its number (`multica p4 status`) for a person to verify and submit.
-Never create a client for the task. See `references/runtimes.md` for the
-workspace binding and action permissions.
+**Perforce uses the installed native CLI.** In a bound workspace, always run
+`p4` directly. Multica does not inject a changelist or maintain a flag
+allowlist; `multica p4` is reserved for the separate `registry`, `changelist`,
+and `swarm` integrations. The workspace is shared with a person, so only touch files and
+changelists needed for the task. Multica does not automatically revert, shelve,
+submit, or create a review at task exit. Link each changelist you create or use
+with `multica p4 changelist link --changelist <number>`. For a pending review,
+shelve with native `p4` and then use `multica p4 swarm create`; Swarm create/link
+also associates the changelist. See `references/runtimes.md` for workspace
+binding and the close-out checklist.
 
 **Status keys identify workflow states; categories describe lifecycle only.**
 Custom statuses do not inherit built-in automation behavior. For status side

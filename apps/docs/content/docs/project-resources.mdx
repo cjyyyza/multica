@@ -39,7 +39,7 @@ A resource's `ref` sets the branch, tag, or commit that later checkouts use by d
 
 ## Add a Perforce depot
 
-Pick a Helix depot already listed on the workspace, or paste a port and depot path. `--stream` is optional; the rest of the fields (`user`, `charset`, `changelist`, `swarm_url`, `allow_exclusive`, `no_auto_review`) are set with a JSON `--ref` payload.
+Pick a Helix depot already listed on the workspace, or paste a port and depot path. `--stream` is optional; the remaining fields (`user`, `charset`, `changelist`, `swarm_url`) can be set with a JSON `--ref` payload.
 
 ```bash
 multica project resource add <project-id> --type perforce_depot \

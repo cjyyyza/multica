@@ -209,8 +209,6 @@ func daemonCommonCapabilities() []string {
 		protocol.DaemonCapabilityRPCV1,
 		protocol.DaemonCapabilityPlatformSkillV1,
 		protocol.DaemonCapabilityCheckoutKeepsWorkV1,
-		protocol.DaemonCapabilityPerforceSyncV1,
-		protocol.DaemonCapabilityPerforceMutateV1,
 		protocol.DaemonCapabilityJoinedWakeupsV1,
 		protocol.DaemonCapabilityPlanModeV1,
 		protocol.DaemonCapabilityWorkflowStatusRulesV1,

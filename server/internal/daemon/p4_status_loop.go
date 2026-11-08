@@ -231,8 +231,12 @@ func (d *Daemon) registeredP4PollIdentity(ctx context.Context, ref p4depot.Ref, 
 	if err != nil {
 		return false
 	}
+	serverID := info["ServerID"]
+	if serverID == "" {
+		serverID = info["serverID"]
+	}
 	edge := &p4cache.Workspace{
-		Port: ref.Port, ServerID: firstNonEmpty(info["ServerID"], info["serverID"]),
+		Port: ref.Port, ServerID: serverID,
 		Replica: info["replica"], Edge: strings.Contains(strings.ToLower(info["serverServices"]), "edge"),
 	}
 	for _, data := range cl.P4Depots {

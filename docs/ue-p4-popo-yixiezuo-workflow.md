@@ -9,7 +9,7 @@
 | Multica | 使用合并后的服务端、CLI 和 Web/Desktop，应用全部迁移；启用 `MULTICA_POPO_ENABLED=true`。 |
 | DJ01Bot | Windows 通道完成配对，机器人绑定智能体，发送者绑定同一工作区的 Multica 成员。负责 POPO 消息、任务评论、运行结果与控制。 |
 | 易协作本机桥接 | 在已登录 `popo-cli` 的 Windows 上，以发送者绑定的 Multica 成员账号运行 `multica yixiezuo bridge --workspace-id <workspace-uuid>`。负责该成员明确请求的来源读取和回写。 |
-| UE 项目与运行时 | 项目资源配置 `perforce_depot`（port、depot、stream、可选 changelist）和一条 `in_place` 的 `local_directory`，指向这台机器上的 P4 工作区根目录（放着 `p4config.txt` 的那一层，如 `D:\DJ`）。Windows 守护进程上的 P4 登录、UE 安装、构建工具和项目验证步骤须可用。 |
+| UE 项目与运行时 | 项目资源配置 `perforce_depot` 和一条 `in_place` 的 `local_directory`，指向这台机器上的 P4 工作区根目录（放着 `p4config.txt` 的那一层，如 `D:\DJ`）。Windows 守护进程上的 P4 登录、UE 安装、构建工具和项目验证步骤须可用。 |
 
 来源访问权限属于运行易协作本机桥接的成员。DJ01Bot 通道凭证保持工作区范围；服务端持久化操作和回执，Windows 本机负责访问来源。
 
@@ -25,7 +25,7 @@
 
 预览不创建任务。确认导入后返回 Multica 任务编号，任务保持未分配且不启动智能体。重复导入复用已有任务，保留本地编辑、负责人和已建立的通知路由。若任务此前从网页导入且尚未关联聊天，在机器人中确认导入同一工单可建立通知路由。
 
-在 Multica 中确认项目与负责人，再分配给已连接 Windows 运行时的智能体。任务被认领时携带所选项目的 P4 资源和易协作单号。改动流程见下一节。
+在 Multica 中确认项目与负责人，再分配给已连接 Windows 运行时的智能体。任务被认领时携带所选项目的 P4 资源和易协作单号。
 
 ```text
 /reply <Multica 任务编号> <补充说明>
@@ -37,16 +37,15 @@
 
 ## 端到端：从单号到提交
 
-全流程只有一个 changelist，它从创建到提交都带着易协作单号，所以任何一环都能回溯到工单。
+Multica 提供工作区和来源上下文，P4 命令保持原生语义。智能体与人共用真实 client，应避免触碰任务之外的文件和 changelist。
 
-1. **绑定工作区。** 守护进程在 `local_directory` 下解析出你的 P4 client（`p4 set -q` + `p4 info`，由 `P4CONFIG` 决定），校验 Owner 是本人、Host 是本机、本地路径在 client Root 之内，然后给 `port|client` 加锁 —— 同一个工作区同时只跑一条智能体任务。校验不通过时任务直接失败并说明原因，不会退回到“直接写只读文件”。
-2. **解析单号。** 从易协作导入的任务用导入记录里的工单号；任务上有「易协作单子」、「易协作链接」属性或 `yixiezuo_id` metadata 时从这些结构化字段读，属性值可以是纯单号或易协作工单 URL；手工建的任务在标题或描述里写 `refs #<单号>`。**没有单号就打不开文件**：`multica p4 edit` 返回 `ticket_required`，智能体会留言请人补单号然后结束，不会编造一个号。
-3. **创建任务 CL。** 智能体第一次 `multica p4 edit` 时创建，描述为 `refs #<单号> <任务标题>` 加 `Multica: <任务编号>` 尾注。同一条任务返工时按尾注找回原来的 pending CL 继续用。
-4. **改文件。** `multica p4 edit` 打开、`multica p4 add`（`add-files` 相同）新增，全部自动进这个 CL。文件默认只读，不要改只读属性。查历史用 `multica p4 filelog` 和 `multica p4 describe -c <编号>`；`-c` 就是 `--changelist`。看这个 client 的文件状态用 `multica p4 fstat`，列 changelist 用 `multica p4 changes`，输出就是 p4 自己的文本。智能体进程里的原生 `p4` 写操作已被 `P4CONFIG` / `P4CLIENT` 屏蔽，depot 只读查询（`files`、`print`、`filelog`、`describe`）仍可用，但原生 `fstat` 看不到这个 client。不同步、不提交、不碰别的 CL；遇到 `opened_by_you`、`exclusive_locked`、`exclusive_not_allowed`、`not_head` 就停下并在任务里说明。
-5. **收尾。** 任务成功、失败、取消都执行：`revert -a` 退回“打开了但没改”的文件 → CL 空了就删掉 → 否则 shelve（edge 工作区加 `-p`）→ 除非 depot 设了 `no_auto_review`，自动建 Swarm review 并关联到任务。**改过的文件保持打开状态。**
-6. **人工验证并提交。** 用 `multica p4 status` 或任务上的 changelist 卡片拿到 CL 号，在 UE 里验证，再用 P4V / safesubmit 提交。智能体不提交。
-7. **状态回流。** 守护进程轮询这条 CL，提交后（包括 commit server 改号后的新号）把状态写回服务端；关联的 CL 全部提交、且任务上没有关联 Pull Request 时，任务状态自动推进。
-8. **回写易协作。** 下一节的 `publish` 回执里带上 CL 号和 Swarm review。
+1. **绑定工作区。** 守护进程在 `local_directory` 下解析 P4 client（由 `P4CONFIG` 决定），校验 Owner、Host 和 Root，并把真实的 `P4PORT`、`P4USER`、`P4CHARSET`、`P4CLIENT` 注入任务环境。校验不通过时任务直接失败。
+2. **提供单号。** 易协作导入记录、结构化属性、metadata 或标题/描述中的 `refs #<单号>` 会进入运行说明。单号用于建议在 CL 描述里写 `refs #<单号>`，不再阻止文件操作。
+3. **使用原生 P4。** 智能体直接运行本机 `p4`。子命令、flag、stdin、stdout、stderr 和退出码保持原生语义；Multica 不自动选择或注入 CL，也不提供 `multica p4` 原生命令代理。
+4. **按需创建和收尾 CL。** 需要时使用 `p4 change`、`p4 edit -c`、`p4 shelve -c` 等原生命令。Agent 收尾前检查 `p4 opened`，只清理自己在任务 CL 中打开但未修改的文件，不对整个共享 client 执行 revert。任务结束后 daemon 不再隐式 revert、shelve、submit 或建 Swarm review。
+5. **验证与提交。** 在 UE 里验证，通过原生 P4、P4V / safesubmit 或明确要求的智能体命令提交。Multica 不再提供额外的 depot 级开关。
+6. **关联与状态回流。** Agent 用 `multica p4 changelist link --changelist <编号>` 显式关联 CL；`multica p4 swarm create/link` 会同时关联 CL 和 review。也可以在任务详情按编号手动关联。守护进程轮询已关联 CL，识别提交和改号；全部 CL 已提交且没有关联 Pull Request 时，按现有设置推进任务。
+7. **回写易协作。** 下一节的 `publish` 回执带上已关联的 CL 号和 Swarm review。
 
 ## 刷新来源与回写
 
@@ -75,6 +74,6 @@
 
 ## 验证范围
 
-数据库集成测试覆盖 POPO 入站、确认导入、原生任务评论双向传递、明确分配后的 P4 资源认领、停止运行、复核确认、重复确认、过期与跨聊天拒绝。Windows P4 测试使用测试构建的可执行文件，覆盖客户端创建、stream、fresh 同步和服务器目录隔离。工作区模式的单元测试同样使用假 `p4`，覆盖 client 解析与 Host / Owner / Root 校验、每条不变量的拒绝路径、没有单号时的 `ticket_required`、sidecar 落在 depot 里时任务失败，以及收尾的两条分支（CL 变空删掉 / 有改动则 shelve）。
+数据库集成测试覆盖 POPO 入站、确认导入、原生任务评论双向传递、明确分配后的 P4 资源认领、停止运行、复核确认、重复确认、过期与跨聊天拒绝。Windows P4 测试使用测试构建的可执行文件，覆盖 client 解析、Host / Owner / Root 校验、真实 client 环境、不自动创建或收尾 CL、Multica 专用 CLI 命名空间，以及 Swarm 创建不隐式 shelve。
 
-这些检查使用模拟的来源快照和 P4 可执行文件。真实 POPO 账号收发、易协作工单写入、P4 服务端和 UE 编辑器/构建必须在配置好的工作区另行验收；本次代码合并不会自动部署、执行真实智能体、提交 P4 changelist 或改写生产工单。实机验收需要单独授权：它会在共享服务器上产生一条 pending CL、一个 shelf，可能还有一个 Swarm review，验收后需要删除 CL、归档 review。
+这些检查使用模拟的来源快照和 P4 可执行文件。真实 POPO 账号收发、易协作工单写入、P4 服务端和 UE 编辑器/构建必须在配置好的工作区另行验收；代码合并不等于完成这些实机验收。原生 P4 写命令会直接作用于共享工作区，验收时应使用专门的测试目录和 CL。

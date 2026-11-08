@@ -93,11 +93,6 @@ func validatePerforceDepotRef(ref json.RawMessage) (json.RawMessage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("perforce_depot: %w", err)
 	}
-	// Project resources select a depot; only the human-managed workspace
-	// catalog grants these actions at claim time. Do not persist inert grants.
-	normalized.AllowSubmit = false
-	normalized.AllowSync = false
-	normalized.AllowUnshelve = false
 	out, err := p4depot.MarshalJSON(normalized)
 	if err != nil {
 		return nil, err
@@ -1140,7 +1135,7 @@ func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, wor
 				if len(ws.P4Depots) > 0 && json.Unmarshal(ws.P4Depots, &workspaceDepots) != nil {
 					workspaceDepots = nil
 				}
-				overlayP4ActionSwitches(out.P4Depots, workspaceDepots)
+				overlayP4DepotDefaults(out.P4Depots, workspaceDepots)
 			}
 		case errors.Is(err, pgx.ErrNoRows):
 			// Stale/deleted/foreign reference: degrade to workspace context.
@@ -1184,9 +1179,8 @@ func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, wor
 }
 
 // projectResourcesForClaim maps resource rows onto the claim wire shape and
-// lifts github_repo / perforce_depot resources into the checkout lists so
-// `multica repo checkout`, `multica p4 sync`, and the meta-skill render them
-// as the task's code sources. Either kind makes the project the authoritative
+// lifts github_repo / perforce_depot resources into the code-source lists used
+// by native Git/P4 commands and the meta-skill. Either kind makes the project the authoritative
 // code source; see resolveClaimProjectContext for the fallback rule.
 func projectResourcesForClaim(rows []db.ProjectResource, runtime *db.AgentRuntime) ([]ProjectResourceData, []RepoData, []P4DepotData) {
 	if len(rows) == 0 {
@@ -1234,13 +1228,9 @@ func projectResourcesForClaim(rows []db.ProjectResource, runtime *db.AgentRuntim
 	return resources, repos, depots
 }
 
-// overlayP4ActionSwitches copies submit, sync, and unshelve from the workspace
-// Perforce settings onto the project's depots. Those switches are edited in
-// Settings → Code; a project resource keeps its own port and depot, and picks
-// up a later change to the switches without being reattached. Project members
-// can edit resources, so only an exact match in the admin-managed workspace
-// catalog can grant these actions. Missing or invalid entries grant nothing.
-func overlayP4ActionSwitches(project, workspace []P4DepotData) {
+// overlayP4DepotDefaults fills omitted connection metadata from the exact
+// workspace catalog entry. A project resource never supplies a Swarm destination.
+func overlayP4DepotDefaults(project, workspace []P4DepotData) {
 	byID := make(map[string]P4DepotData, len(workspace))
 	for _, depot := range workspace {
 		ref, err := p4depot.Normalize(p4depot.Ref(depot))
@@ -1250,9 +1240,6 @@ func overlayP4ActionSwitches(project, workspace []P4DepotData) {
 		byID[p4depot.Identity(ref)] = P4DepotData(ref)
 	}
 	for i, depot := range project {
-		project[i].AllowSubmit = false
-		project[i].AllowSync = false
-		project[i].AllowUnshelve = false
 		project[i].SwarmURL = ""
 		ref, err := p4depot.Normalize(p4depot.Ref(depot))
 		if err != nil {
@@ -1262,9 +1249,6 @@ func overlayP4ActionSwitches(project, workspace []P4DepotData) {
 		if !ok {
 			continue
 		}
-		project[i].AllowSubmit = src.AllowSubmit
-		project[i].AllowSync = src.AllowSync
-		project[i].AllowUnshelve = src.AllowUnshelve
 		if project[i].User == "" {
 			project[i].User = src.User
 		}

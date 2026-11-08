@@ -38,6 +38,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func emit(key string) {
@@ -51,6 +52,7 @@ func emit(key string) {
 
 func main() {
 	args := os.Args[1:]
+	if delay, _ := time.ParseDuration(os.Getenv("P4_FAKE_DELAY")); delay > 0 { time.Sleep(delay) }
 	cwd, _ := os.Getwd()
 	if log := os.Getenv("P4_FAKE_LOG"); log != "" {
 		f, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)

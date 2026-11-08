@@ -3906,15 +3906,6 @@ export const WorkspaceP4DepotSchema = z.object({
   changelist: z.string().optional().default(""),
   description: z.string().optional().default(""),
   swarm_url: z.string().optional().default(""),
-  // Both guard a behavior, so an unreadable value must read as "not granted":
-  // allow_exclusive lets agents open +l files, no_auto_review suppresses the
-  // automatic Swarm review.
-  allow_exclusive: z.boolean().optional().default(false).catch(false),
-  no_auto_review: z.boolean().optional().default(false).catch(false),
-  // Submit, sync, and unshelve stay off until someone enables them on the depot.
-  allow_submit: z.boolean().optional().default(false).catch(false),
-  allow_sync: z.boolean().optional().default(false).catch(false),
-  allow_unshelve: z.boolean().optional().default(false).catch(false),
 }).loose();
 
 export const WorkspaceSchema = z.object({

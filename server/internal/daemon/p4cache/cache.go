@@ -7,7 +7,6 @@ package p4cache
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -24,11 +23,6 @@ import (
 // The daemon sets Timeout from MULTICA_P4_TIMEOUT; tests and the zero value
 // keep this.
 const defaultP4Timeout = 10 * time.Minute
-
-// ErrTaskClientNotCreated is returned for every attempt to create a
-// task-scoped Helix client and sync a depot into the task directory.
-// Creating that client runs `p4 sync`, which downloads the depot.
-var ErrTaskClientNotCreated = errors.New("Multica does not create a task Perforce client or sync a depot into the task directory; that would download the depot. Attach an in_place local_directory that is your existing Helix workspace")
 
 // Cache runs the p4 CLI. P4Path defaults to "p4" on PATH.
 type Cache struct {
@@ -138,16 +132,25 @@ func (c *Cache) baseArgs(ref p4depot.Ref, user, client string) []string {
 }
 
 func (c *Cache) commandAt(ctx context.Context, dir string, args ...string) (*exec.Cmd, context.CancelFunc, error) {
+	runCtx, cancel := context.WithTimeout(ctx, c.timeout())
+	cmd, err := c.commandAtContext(runCtx, dir, args...)
+	if err != nil {
+		cancel()
+		return nil, func() {}, err
+	}
+	return cmd, cancel, nil
+}
+
+func (c *Cache) commandAtContext(ctx context.Context, dir string, args ...string) (*exec.Cmd, error) {
 	bin := c.p4bin()
 	if filepath.IsAbs(bin) {
 		if _, err := os.Stat(bin); err != nil {
-			return nil, func() {}, fmt.Errorf("p4 is not installed on this machine (install the Helix p4 CLI and run `p4 login`): %w", err)
+			return nil, fmt.Errorf("p4 is not installed on this machine (install the Helix p4 CLI and run `p4 login`): %w", err)
 		}
 	} else if _, err := exec.LookPath(bin); err != nil {
-		return nil, func() {}, fmt.Errorf("p4 is not installed on this machine (install the Helix p4 CLI and run `p4 login`): %w", err)
+		return nil, fmt.Errorf("p4 is not installed on this machine (install the Helix p4 CLI and run `p4 login`): %w", err)
 	}
-	runCtx, cancel := context.WithTimeout(ctx, c.timeout())
-	cmd := exec.CommandContext(runCtx, c.p4bin(), args...)
+	cmd := exec.CommandContext(ctx, c.p4bin(), args...)
 	cmd.Env = os.Environ()
 	if strings.TrimSpace(dir) != "" {
 		cmd.Dir = dir
@@ -161,5 +164,5 @@ func (c *Cache) commandAt(ctx context.Context, dir string, args ...string) (*exe
 		cmd.Dir = filepath.VolumeName(os.TempDir()) + string(os.PathSeparator)
 	}
 	c.logger().Debug("p4 command", "args", args)
-	return cmd, cancel, nil
+	return cmd, nil
 }

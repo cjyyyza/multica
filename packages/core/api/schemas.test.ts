@@ -2683,32 +2683,6 @@ describe("WorkspaceSchema", () => {
       extra: "ok",
     });
   });
-
-  // Both flags permit something (opening +l files, skipping the Swarm review),
-  // so a server that omits them or sends junk must read as "not granted".
-  it("defaults the depot permission flags to off", () => {
-    const parsed = WorkspaceSchema.parse({
-      ...baseWorkspace,
-      p4_depots: [{ port: "p4:1666", depot: "//depot/game" }],
-    });
-    expect(parsed.p4_depots[0]).toMatchObject({
-      allow_exclusive: false,
-      no_auto_review: false,
-      allow_submit: false,
-      allow_sync: false,
-      allow_unshelve: false,
-    });
-  });
-
-  it("keeps a granted depot flag and drops a malformed one", () => {
-    const parsed = WorkspaceSchema.parse({
-      ...baseWorkspace,
-      p4_depots: [
-        { port: "p4:1666", depot: "//depot/game", allow_exclusive: true, no_auto_review: "yes" },
-      ],
-    });
-    expect(parsed.p4_depots[0]).toMatchObject({ allow_exclusive: true, no_auto_review: false });
-  });
 });
 
 describe("P4ChangelistSchema", () => {

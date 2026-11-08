@@ -195,13 +195,9 @@ func taskMulticaEnvironment(task Task, provider, agentName, token, configRoot, w
 		"TEMP":                 tempDir,
 	}
 	if p4Workspace != nil {
-		// A missing P4CONFIG file hides the directory's real one, and an
-		// unknown P4CLIENT makes workspace writes fail. Depot reads still
-		// work. This map is the agent's environment only.
-		env["P4CONFIG"] = ".multica-p4-disabled"
-		env["P4CLIENT"] = "multica-blocked"
 		env["P4PORT"] = p4Workspace.Port
 		env["P4USER"] = p4Workspace.User
+		env["P4CLIENT"] = p4Workspace.Client
 		env["P4CHARSET"] = p4Workspace.Charset
 	}
 	if issueID := strings.TrimSpace(task.IssueID); issueID != "" {
@@ -742,11 +738,6 @@ type Daemon struct {
 	// waits. See MUL-2663.
 	localPathLocks *LocalPathLocker
 
-	// p4ClientLocks serialises workspace-mode tasks that share a Helix client.
-	// The key is "port|client", so two local directories on the same client
-	// cannot open files at the same time.
-	p4ClientLocks *LocalPathLocker
-
 	p4BindingsMu sync.Mutex
 	p4Bindings   map[string]*p4TaskBinding
 
@@ -829,7 +820,6 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		activeStores:                      make(map[string]int),
 		deletingStores:                    make(map[string]bool),
 		localPathLocks:                    NewLocalPathLocker(),
-		p4ClientLocks:                     NewLocalPathLocker(),
 		p4Bindings:                        make(map[string]*p4TaskBinding),
 		runtimeGoneInflight:               make(map[string]struct{}),
 		pendingWorkInflight:               make(map[string]struct{}),
@@ -6099,12 +6089,8 @@ func asLocalDirectorySetupFailure(err error) error {
 func taskCancelAcknowledgement(result TaskResult, runErr error, provider string) TaskCancelAck {
 	ack := TaskCancelAck{BranchName: result.BranchName, DurableWorkDir: result.DurableWorkDir, RetiredSessionID: result.RetiredSessionID}
 	var preserved *worktreePreservedError
-	var p4Failure *p4FinalizeError
 	if errors.As(runErr, &preserved) {
 		ack.ErrorMessage = preserved.Error()
-		ack.FailureReason = "local_directory_error"
-	} else if errors.As(runErr, &p4Failure) {
-		ack.ErrorMessage = p4Failure.Error()
 		ack.FailureReason = "local_directory_error"
 	}
 	confirmed := result.FailureReason != taskfailure.ReasonProcessCleanupUnconfirmed.String()
@@ -6115,8 +6101,6 @@ func taskCancelAcknowledgement(result TaskResult, runErr error, provider string)
 		ack.ErrorMessage = result.Comment
 		if preserved != nil {
 			ack.ErrorMessage += "; " + preserved.Error()
-		} else if p4Failure != nil {
-			ack.ErrorMessage += "; " + p4Failure.Error()
 		}
 		ack.FailureReason = result.FailureReason
 	}
@@ -6124,10 +6108,6 @@ func taskCancelAcknowledgement(result TaskResult, runErr error, provider string)
 }
 
 func taskRunFailureReason(err error) string {
-	var p4Failure *p4FinalizeError
-	if errors.As(err, &p4Failure) {
-		return "local_directory_error"
-	}
 	if errors.Is(err, errInvalidTaskIdentity) {
 		return taskfailure.ReasonInvalidTaskIdentity.String()
 	}
@@ -7942,18 +7922,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	var taskP4Binding *p4TaskBinding
 	if localAssignment != nil && !localAssignment.UsesWorktree() && taskTargetsP4(task, localAssignment) {
 		var err error
-		taskP4Binding, err = d.bindP4Workspace(ctx, task, localAssignment, provider)
+		taskP4Binding, err = d.bindP4Workspace(ctx, task, localAssignment)
 		if err != nil {
 			return TaskResult{}, asLocalDirectorySetupFailure(fmt.Errorf("perforce workspace: %w", err))
 		}
 		if taskP4Binding != nil {
-			defer func() {
-				finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*d.p4CommandTimeout())
-				defer finishCancel()
-				if err := d.finishP4Workspace(finishCtx, task, taskP4Binding); err != nil {
-					returnErr = errors.Join(returnErr, &p4FinalizeError{err: err})
-				}
-			}()
+			defer d.forgetP4Binding(task.ID)
 		}
 	}
 
@@ -8922,12 +8896,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	for key, value := range skillConfigEnv {
 		agentEnv[key] = value
-	}
-	// custom_env is allowed to set P4PORT for a read, but it must not put the
-	// human's client back. Re-apply the shield after the overlay.
-	if d.p4Binding(task.ID) != nil {
-		agentEnv["P4CONFIG"] = ".multica-p4-disabled"
-		agentEnv["P4CLIENT"] = "multica-blocked"
 	}
 	if provider == "reasonix" {
 		reasonixStateHome, err := prepareReasonixTaskStateHome(d.cfg.Profile, task.RuntimeID, task.AgentID)

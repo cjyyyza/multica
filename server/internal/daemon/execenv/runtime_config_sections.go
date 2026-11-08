@@ -267,11 +267,8 @@ func writeAvailableCommands(b *strings.Builder, provider string, ctx TaskContext
 	if !p4OnlyTask(ctx) {
 		b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>] [--fresh]` — repository checkout on a dedicated branch; re-running it keeps a checkout that has uncommitted or unpushed work, or is already on this task's branch, and only fetches; a clean, fully pushed checkout on another branch starts over on a new branch. `--fresh` discards uncommitted and untracked files for a new branch; commits stay on the old branch, so push any you still need first.\n")
 	}
-	// The workspace section is the single source of action permissions. A plan
-	// task holds no Perforce workspace and may not open files at all, so the
-	// edit command is withheld rather than contradicted by a later rule.
 	if !ctx.PlanMode {
-		b.WriteString("- `multica p4 edit -- <files>` — checkout files for edit (`checkout` is an alias). Do not pass `--port` or `--depot`, and do not look up P4PORT: the daemon fills both from the bound workspace. Also: `add` / `add-files`, `delete`, `revert`, `reopen`, `opened`, `reconcile`, `change`, `shelve`, `filelog`, `describe`, `fstat`, `changes`, `status`. `-c` is `--changelist`. Swarm: `multica p4 swarm create`. Follow the action permissions stated for this task's Perforce workspace; without them, file operations are unavailable. Never create a Perforce client for the task.\n\n")
+		b.WriteString("- `p4 <args>` — run the installed native P4 CLI directly in a bound workspace; use its `p4 help` for supported commands and flags. `multica p4 changelist link ...` associates a native CL with the issue, and `multica p4 swarm ...` provides the Swarm integration.\n\n")
 	}
 	if !p4OnlyTask(ctx) {
 		b.WriteString("Git commits use the user's configured identity; keep it unless asked. For a requested override in a managed checkout use `git config --worktree user.name` / `user.email` — plain or `--local` config can leak into a shared cache; never change the global identity.\n\n")
@@ -535,7 +532,7 @@ func writeP4Depots(b *strings.Builder, ctx TaskContextForEnv) {
 	}
 	b.WriteString("## Perforce depots\n\n")
 	b.WriteString("This task is not bound to an existing Helix workspace, so you cannot open or sync these files. Do not submit or unshelve. Multica does not create a task Perforce client: a new client syncs the depot into the task directory.\n\n")
-	b.WriteString("Ask a person to attach an `in_place` local directory at the workspace root (the directory that contains `p4config`) together with the `perforce_depot`. Do not run `multica p4 sync`, and do not create a client yourself.\n\n")
+	b.WriteString("Ask a person to attach an `in_place` local directory at the workspace root (the directory that contains `p4config`) together with the `perforce_depot`. Do not run `p4 sync`, and do not create a client yourself.\n\n")
 	for _, depot := range ctx.P4Depots {
 		line := fmt.Sprintf("- `%s` `%s`", depot.Port, depot.Depot)
 		if depot.Stream != "" {
@@ -560,83 +557,22 @@ func writeP4Depots(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("\n")
 }
 
-// writeP4Workspace emits the workspace-mode Perforce section.
-//
-// Workspace mode is the only brief section where the agent shares a mutable
-// working area with the person who asked for the work: the files are in that
-// person's own Helix client, their other changelists are one command away,
-// and the editor they will verify in is reading the same tree. So the copy is
-// organised around what must not be disturbed rather than around how to sync.
-//
-// Two rules carry the whole design decision (plan §0) and are stated without
-// hedging: the agent never submits, and the changelist description must keep
-// its `refs #<ticket>` trailer — which is why a task with no ticket cannot
-// open a file at all, and says so instead of improvising a number.
-//
-// Values are rendered inside backticks: they come from `p4 info` /
-// `p4 client -o` rather than from a user-authored field, and the surrounding
-// code tokens keep a surprising one from breaking the markdown around it.
+// writeP4Workspace describes the resolved client without reimplementing the
+// installed p4 binary's command-line contract.
 func writeP4Workspace(b *strings.Builder, ws *P4WorkspaceForEnv) {
 	b.WriteString("## Perforce workspace\n\n")
-	fmt.Fprintf(b, "You are working inside `%s`'s own Helix workspace — client `%s`, root `%s`", ws.User, ws.Client, ws.Root)
+	fmt.Fprintf(b, "You are working inside `%s`'s Helix workspace — client `%s`, root `%s`", ws.User, ws.Client, ws.Root)
 	if ws.Stream != "" {
 		fmt.Fprintf(b, ", stream `%s`", ws.Stream)
 	}
-	b.WriteString(". Their other work lives in the same tree, so touch only what this task needs.\n\n")
-
-	if ws.ReadOnly {
-		b.WriteString("This chat or coordination task has read-only Perforce access. Do not modify workspace files or run P4 write commands. Create or use an issue to request file changes.\n\n")
-		b.WriteString("Read history with `multica p4 filelog -- <files>` and `multica p4 describe -c <number>`. File state is `multica p4 fstat -- <files>`; changelist lists are `multica p4 changes`. All of these stay inside this task's authorized depots.\n\n")
-		return
+	b.WriteString(". The real P4CONFIG, P4PORT, P4USER, P4CHARSET and P4CLIENT are available to the task.\n\n")
+	b.WriteString("Use the installed native `p4` CLI directly with the flags supported by that version. Multica does not inject changelists, restrict flags, or block native p4 writes.\n\n")
+	b.WriteString("This is a shared human workspace, so only touch files and changelists needed for this task. Multica does not create, reuse, revert, shelve, submit, or automatically review a changelist; use native p4 commands when the task needs those steps. Open read-only depot files with `p4 edit` before editing them.\n\n")
+	b.WriteString("After creating or using a changelist, link it with `multica p4 changelist link --changelist <number>`. Before finishing, inspect `p4 opened` and clean up only unchanged files you opened in that changelist; never revert the whole shared client. When a pending review is needed, run `p4 shelve -c <number>` and then `multica p4 swarm create --changelist <number>`. Swarm create/link also links the changelist, so do not repeat the association.\n\n")
+	if ws.Ticket != "" {
+		fmt.Fprintf(b, "The associated 易协作 ticket is `%s`; when creating a changelist, include `refs #%s` in its description for traceability.\n\n", ws.Ticket, ws.Ticket)
 	}
-	if ws.Ticket == "" {
-		// I7: no ticket, no changelist, no opened files. Stated before the
-		// command list so an agent reading top-down never reaches `p4 edit`
-		// believing it is available.
-		b.WriteString("**This task has no 易协作 ticket, so you cannot open any file.** Every changelist description must carry `refs #<ticket>`, and inventing a number is worse than not having one. If the task needs a file change, post a comment asking a person to set the issue's 易协作单子 or 易协作链接 property or add `refs #<ticket>` to the issue description, then end your turn. Do not write to the workspace any other way.\n\n")
-		b.WriteString("You can still read history with `multica p4 filelog -- <files>` and `multica p4 describe -c <number>`, and read file state with `multica p4 fstat -- <files>` or `multica p4 changes`.\n\n")
-		return
-	}
-
-	fmt.Fprintf(b, "The task changelist is described `refs #%s`; the daemon writes that trailer, so do not edit it away.\n\n", ws.Ticket)
-	b.WriteString("- Open a file with `multica p4 edit -- <files>` BEFORE you change it, and create new files with `multica p4 add -- <files>` or `multica p4 add-files -- <files>`. Do not pass `--port` or `--depot`, and do not copy the port out of Project Context, `p4 set`, or `p4 info` — the daemon already has it. Files on disk are read-only until Helix opens them — never clear the read-only bit to write one: Helix would not know the file changed, and the change would be lost.\n")
-	b.WriteString("- Everything you open goes into this task's changelist automatically. `multica p4 status` reports its number and the files in it. Do not pass `-c`/`--changelist` on edit, add, or reopen; another number is rejected. `multica p4 describe -c <number>` only reads that changelist.\n")
-	b.WriteString("- `multica p4 opened -F \"%depotFile% %change%\"` prints each file's depot path and changelist number (`%change%` is the number or `default`). `--output json` returns those rows in `files`. `-c` is `--changelist`, not a passthrough. Other p4 flags are not forwarded; do not run `p4 opened -a`.\n")
-	b.WriteString("- Read history with `multica p4 filelog -- <files>` (each revision and its changelist description) and `multica p4 describe -c <number>`. File state in this client is `multica p4 fstat -- <files>` (have, action, otherOpen); changelist lists are `multica p4 changes`. Both print p4's own output and forward flags after the verb. Do not use raw `p4` to write. Raw depot reads such as `p4 print` still work, but raw `p4 fstat` cannot see this client.\n")
-	writeP4WorkspaceActionPolicy(b, ws)
-	b.WriteString("- If a command reports `opened_by_you`, `exclusive_locked`, `exclusive_not_allowed`, or `not_head`, stop on that file and explain it in the issue. These mean the human already has it open, someone else holds the lock, or your copy is behind — none of them is worked around.\n")
-	if ws.AllowExclusive {
-		b.WriteString("- This depot allows opening exclusive-lock (`+l`) files. You still hold the lock while they are open, so open them late and keep the list short.\n")
-	}
-	b.WriteString("- When the task ends with a pending changelist, the daemon reverts the files you opened but did not change, shelves the rest while retaining existing shelf-only files, and opens a Helix Swarm review unless auto review is disabled. Pending changes stay open for the human to verify. A read-only continuation leaves existing opens and shelves untouched. A submitted changelist is reported with its actual submitted number and is not shelved again.\n")
-	b.WriteString("- Your final reply must state what you changed, the changelist number (`multica p4 status`), and how to verify it in Unreal Editor.\n")
-	b.WriteString("- Read `Game/DJ01/AGENTS.md` first when it is present: it carries the project's own rules from the depot and overrides general guidance here.\n\n")
-}
-
-// writeP4WorkspaceActionPolicy states which of submit, sync, and unshelve
-// this daemon will run. All three default to off, and that sentence is what
-// the brief tests pin.
-func writeP4WorkspaceActionPolicy(b *strings.Builder, ws *P4WorkspaceForEnv) {
-	if ws == nil || (!ws.AllowSubmit && !ws.AllowSync && !ws.AllowUnshelve) {
-		b.WriteString("- Never sync, never submit, and never touch a changelist other than this task's. The person who owns this workspace syncs and submits; shelved and under review is where your work stops.\n")
-		return
-	}
-	b.WriteString("- Never touch a changelist other than this task's.\n")
-	if ws.AllowSync {
-		b.WriteString("- This daemon allows `multica p4 sync` in this workspace.\n")
-	} else {
-		b.WriteString("- Do not sync. The person who owns this workspace syncs it.\n")
-	}
-	if ws.AllowSubmit {
-		b.WriteString("- This daemon allows `multica p4 submit` of this task's changelist.\n")
-	} else {
-		b.WriteString("- Do not submit. The person verifies in-editor and submits.\n")
-	}
-	if ws.AllowUnshelve {
-		b.WriteString("- This daemon allows `multica p4 unshelve` of this task's changelist.\n")
-	} else {
-		b.WriteString("- Do not unshelve.\n")
-	}
+	b.WriteString("Your final reply must state what changed, any changelist number you created or used, and how to verify it in Unreal Editor. Read `Game/DJ01/AGENTS.md` first when present.\n\n")
 }
 
 // hasProjectResourceType reports whether the project carries at least one

@@ -93,12 +93,9 @@ const (
 	TaskSupplementFailureTimeout          = "timeout"
 	TaskSupplementFailureTurnEnded        = "turn_ended"
 
-	// DaemonCapabilityPerforceSyncV1 advertises that the daemon implements
-	// `multica p4 sync` / POST /p4/sync for perforce_depot resources.
+	// DaemonCapabilityPerforceSyncV1 is the legacy perforce sync protocol.
 	DaemonCapabilityPerforceSyncV1 = "perforce-sync-v1"
-	// DaemonCapabilityPerforceMutateV1 advertises task-scoped Perforce file
-	// operations (edit/checkout, add, submit, shelve) and Helix Swarm reviews
-	// via POST /p4/run and POST /p4/swarm.
+	// DaemonCapabilityPerforceMutateV1 is the legacy POST /p4/run protocol.
 	DaemonCapabilityPerforceMutateV1 = "perforce-mutate-v1"
 	// DaemonCapabilityPlanModeV1 advertises durable mode handling, task-tool
 	// stripping, and provider-native Plan Mode selection. Servers must not

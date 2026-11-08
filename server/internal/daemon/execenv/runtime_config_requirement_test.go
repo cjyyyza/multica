@@ -149,7 +149,7 @@ func TestPlanBriefOmitsDeniedWriteCommands(t *testing.T) {
 		"multica issue status",
 		"- `multica issue wakeup <create|list|get|update|disable|trigger|delete|runs|events>`",
 		"multica issue comment add",
-		"multica p4 edit",
+		"p4 edit",
 		"multica attachment upload",
 		"create issues, update status",
 		"multica requirement candidate",

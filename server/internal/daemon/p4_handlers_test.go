@@ -37,7 +37,7 @@ func TestP4SwarmDestinationMustBeConfigured(t *testing.T) {
 				got, ok := d.allowP4Ref(rec, httptest.NewRequest(http.MethodPost, "/p4/swarm", nil), "ws", "task", ref)
 				if requested != "" && requested != wantURL {
 					if ok || rec.Code != http.StatusForbidden {
-						t.Fatalf("unconfigured credential destination accepted: %+v, status %d", got, rec.Code)
+						t.Fatalf("unconfigured destination accepted: %+v, status %d", got, rec.Code)
 					}
 				} else if !ok || got.SwarmURL != wantURL {
 					t.Fatalf("configured destination lost: %+v, status %d", got, rec.Code)
@@ -58,111 +58,124 @@ func TestP4SwarmCannotSupplyURLForDepotWithoutSwarm(t *testing.T) {
 	}
 }
 
-func TestP4HandlersRejectUnboundWritesEvenWithOldCheckout(t *testing.T) {
+func TestP4SwarmCreateDoesNotShelve(t *testing.T) {
+	bin := writeDaemonFakeP4(t)
 	root := t.TempDir()
-	d := &Daemon{logger: slog.Default(), p4Cache: &p4cache.Cache{P4Path: filepath.Join(root, "missing-p4")}}
-	ref := p4depot.Ref{Port: "p4:1666", Depot: "//depot/UE", User: "alice", AllowSubmit: true, AllowSync: true}
+	logPath := filepath.Join(t.TempDir(), "p4.log")
+	t.Setenv("P4_FAKE_LOG", logPath)
+	t.Setenv("P4_FAKE_TICKETS", "p4:1666 (alice) TESTTICKET\n")
+	var creates atomic.Int32
+	swarm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v11/reviews" {
+			t.Errorf("unexpected Swarm call: %s %s", r.Method, r.URL.Path)
+		}
+		creates.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"review":{"id":77,"changes":[1001]}}`))
+	}))
+	defer swarm.Close()
+	ref := p4depot.Ref{Port: "p4:1666", Depot: "//depot/main", User: "alice", SwarmURL: swarm.URL}
+	d := &Daemon{workspaces: map[string]*workspaceState{"ws": {}}, logger: slog.Default(), p4Cache: &p4cache.Cache{P4Path: bin, HTTPClient: swarm.Client()}}
+	d.workspaces["ws"].setP4Depots([]P4DepotData{P4DepotData(ref)})
 	d.registerTaskP4Depots("ws", "task", []P4DepotData{P4DepotData(ref)})
-	d.registerActiveRepoCheckoutTask("mat_p4_test", activeRepoCheckoutTask{WorkspaceID: "ws", TaskID: "task", WorkDir: root})
-	checkout := filepath.Join(root, "p4", "mc-legacy-task-client")
-	if err := os.MkdirAll(checkout, 0755); err != nil {
+	d.registerActiveRepoCheckoutTask("mat_test", activeRepoCheckoutTask{WorkspaceID: "ws", TaskID: "task", WorkDir: root})
+	request := p4SwarmRequest{Port: ref.Port, Depot: ref.Depot, WorkspaceID: "ws", TaskID: "task", WorkDir: root, Action: "create", Changelist: "1001"}
+	body, _ := json.Marshal(request)
+	req := httptest.NewRequest(http.MethodPost, "/p4/swarm", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer mat_test")
+	rec := httptest.NewRecorder()
+	d.p4SwarmHandler()(rec, req)
+	if rec.Code != http.StatusOK || creates.Load() != 1 {
+		t.Fatalf("status=%d creates=%d body=%s", rec.Code, creates.Load(), rec.Body.String())
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	for _, action := range []string{"edit", "submit", "sync"} {
-		body, _ := json.Marshal(map[string]any{"workspace_id": "ws", "task_id": "task", "workdir": checkout, "port": ref.Port, "depot": ref.Depot, "action": action, "changelist": "1001"})
-		req := httptest.NewRequest(http.MethodPost, "/p4/run", bytes.NewReader(body))
-		req.Header.Set("Authorization", "Bearer mat_p4_test")
-		rec := httptest.NewRecorder()
-		handler := d.p4RunHandler()
-		if action == "sync" {
-			handler = d.p4SyncHandler()
-		}
-		handler(rec, req)
-		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "action_not_allowed") {
-			t.Fatalf("unbound %s with old checkout: %d %s", action, rec.Code, rec.Body.String())
-		}
+	if strings.Contains(string(log), "shelve") {
+		t.Fatalf("review creation shelved the change: %s", log)
 	}
 }
 
-func TestP4SwarmShelvesOnlyTheBoundChange(t *testing.T) {
+func TestP4SwarmUsesBoundDepotDefaults(t *testing.T) {
 	bin := writeDaemonFakeP4(t)
-	for _, tc := range []struct {
-		name, change     string
-		bound, submitted bool
-		want             int
-	}{
-		{"no binding", "1001", false, false, http.StatusConflict},
-		{"other change", "9999", true, false, http.StatusConflict},
-		{"pending task change", "1001", true, false, http.StatusOK},
-		{"submitted task change", "1001", true, true, http.StatusOK},
-		{"omitted resource fields", "", true, false, http.StatusOK},
-		{"verified local endpoint", "1001", true, false, http.StatusOK},
-		{"read-only binding rejects create", "1001", true, false, http.StatusConflict},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			logPath := filepath.Join(root, "p4.log")
-			t.Setenv("P4_FAKE_LOG", logPath)
-			t.Setenv("P4_FAKE_OPENED", "... depotFile //depot/main/A.cpp\n... action edit\n... change 1001\n")
-			t.Setenv("P4_FAKE_DEPOT", "//depot/main")
-			t.Setenv("P4_FAKE_TICKETS", "p4:1666 (alice) TESTTICKET\n")
-			var creates atomic.Int32
-			swarm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPost || r.URL.Path != "/api/v11/reviews" {
-					t.Errorf("unexpected Swarm call: %s %s", r.Method, r.URL.Path)
-				}
-				creates.Add(1)
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"review":{"id":77,"changes":[1001]}}`))
-			}))
-			defer swarm.Close()
-			ref := p4depot.Ref{Port: "p4:1666", Depot: "//depot/main", User: "alice", SwarmURL: swarm.URL}
-			d := &Daemon{workspaces: map[string]*workspaceState{"ws": {}}, logger: slog.Default(), p4Cache: &p4cache.Cache{P4Path: bin, HTTPClient: swarm.Client()}}
-			d.workspaces["ws"].setP4Depots([]P4DepotData{P4DepotData(ref)})
-			d.registerTaskP4Depots("ws", "task", []P4DepotData{P4DepotData(ref)})
-			d.registerActiveRepoCheckoutTask("mat_test", activeRepoCheckoutTask{WorkspaceID: "ws", TaskID: "task", WorkDir: root})
-			if tc.bound {
-				localPort := ref.Port
-				if tc.name == "verified local endpoint" {
-					localPort = "p4-alias:1666"
-				}
-				d.rememberP4Binding(&p4TaskBinding{
-					ws:        &p4cache.Workspace{Port: localPort, Client: "alice_main", User: "alice", Root: root, Dir: root},
-					ref:       ref,
-					taskID:    "task",
-					change:    "1001",
-					submitted: tc.submitted,
-					readOnly:  tc.name == "read-only binding rejects create",
-				})
-			}
-			request := p4SwarmRequest{Port: ref.Port, Depot: ref.Depot, WorkspaceID: "ws", TaskID: "task", WorkDir: root, Action: "create", Changelist: tc.change, Shelve: tc.name != "read-only binding rejects create"}
-			if tc.name == "omitted resource fields" {
-				request.Port, request.Depot = "", ""
-			}
-			if tc.name == "verified local endpoint" {
-				request.Port = "p4-alias:1666"
-			}
-			body, _ := json.Marshal(request)
-			req := httptest.NewRequest(http.MethodPost, "/p4/swarm", bytes.NewReader(body))
-			req.Header.Set("Authorization", "Bearer mat_test")
-			rec := httptest.NewRecorder()
-			d.p4SwarmHandler()(rec, req)
-			if rec.Code != tc.want {
-				t.Fatalf("status %d, want %d: %s", rec.Code, tc.want, rec.Body.String())
-			}
-			log, err := os.ReadFile(logPath)
-			if err != nil && !os.IsNotExist(err) {
-				t.Fatal(err)
-			}
-			if tc.want != http.StatusOK {
-				if creates.Load() != 0 || len(log) != 0 {
-					t.Fatalf("rejected request reached P4/Swarm: %s", log)
-				}
-				return
-			}
-			if creates.Load() != 1 || strings.Contains(string(log), "shelve -f -Af -c 1001") == tc.submitted {
-				t.Fatalf("wrong shelf/review behavior: creates=%d calls=%s", creates.Load(), log)
-			}
-		})
+	root := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "p4.log")
+	t.Setenv("P4_FAKE_LOG", logPath)
+	t.Setenv("P4_FAKE_TICKETS", "p4:1666 (alice) TESTTICKET\n")
+	var creates atomic.Int32
+	swarm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v11/reviews" {
+			t.Errorf("unexpected Swarm call: %s %s", r.Method, r.URL.Path)
+		}
+		creates.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"review":{"id":77,"changes":[1001]}}`))
+	}))
+	defer swarm.Close()
+	ref := p4depot.Ref{Port: "p4:1666", Depot: "//depot/main", User: "alice", Charset: "utf8", SwarmURL: swarm.URL}
+	d := &Daemon{workspaces: map[string]*workspaceState{"ws": {}}, logger: slog.Default(), p4Cache: &p4cache.Cache{P4Path: bin, HTTPClient: swarm.Client()}}
+	d.workspaces["ws"].setP4Depots([]P4DepotData{P4DepotData(ref)})
+	d.registerTaskP4Depots("ws", "task", []P4DepotData{P4DepotData(ref)})
+	d.rememberP4Binding(&p4TaskBinding{ws: &p4cache.Workspace{Port: ref.Port, User: ref.User, Charset: ref.Charset, Dir: root}, ref: ref, taskID: "task"})
+	d.registerActiveRepoCheckoutTask("mat_test", activeRepoCheckoutTask{WorkspaceID: "ws", TaskID: "task", WorkDir: root})
+	request := p4SwarmRequest{WorkspaceID: "ws", TaskID: "task", WorkDir: root, Action: "create", Changelist: "1001"}
+	body, _ := json.Marshal(request)
+	req := httptest.NewRequest(http.MethodPost, "/p4/swarm", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer mat_test")
+	rec := httptest.NewRecorder()
+	d.p4SwarmHandler()(rec, req)
+	if rec.Code != http.StatusOK || creates.Load() != 1 {
+		t.Fatalf("status=%d creates=%d body=%s", rec.Code, creates.Load(), rec.Body.String())
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(log), "shelve") {
+		t.Fatalf("review creation shelved the change: %s", log)
+	}
+}
+
+func TestP4ChangelistLinkReportsVerifiedNativeChange(t *testing.T) {
+	bin := writeDaemonFakeP4(t)
+	root := t.TempDir()
+	t.Setenv("P4_FAKE_DESCRIBE", "... change 1001\n... oldChange 1001\n... status pending\n... client alice_DEV\n... description Fix the editor crash\n... depotFile0 //depot/UE/Source/A.cpp\n")
+	t.Setenv("P4_FAKE_SHELF", "... change 1001\n... status pending\n... depotFile0 //depot/UE/Source/A.cpp\n")
+	var report p4ChangelistReport
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemon/tasks/task/p4/changelists" {
+			t.Errorf("unexpected report path: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+			t.Error(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"number":1001,"status":"shelved"}`))
+	}))
+	defer api.Close()
+	ref := p4depot.Ref{Port: "p4:1666", Depot: "//depot/UE", User: "alice"}
+	ws := &p4cache.Workspace{Port: ref.Port, User: "alice", Client: "alice_DEV", Charset: "utf8", ServerCluster: "cluster", Root: root, Dir: root}
+	d := &Daemon{logger: slog.Default(), p4Cache: &p4cache.Cache{P4Path: bin}, client: NewClient(api.URL)}
+	d.rememberP4Binding(&p4TaskBinding{ws: ws, ref: ref, ticket: "123", taskID: "task"})
+	d.registerActiveRepoCheckoutTask("mat_test", activeRepoCheckoutTask{WorkspaceID: "ws", TaskID: "task", WorkDir: root})
+	body, _ := json.Marshal(p4ChangelistLinkRequest{WorkspaceID: "ws", TaskID: "task", WorkDir: root, Changelist: "1001"})
+	req := httptest.NewRequest(http.MethodPost, "/p4/changelist/link", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer mat_test")
+	rec := httptest.NewRecorder()
+	d.p4ChangelistLinkHandler()(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if report.Number != 1001 || report.Status != "shelved" || report.Client != "alice_DEV" || report.ServerKey != "cluster" || report.FilesCount != 1 || report.Ticket != "123" {
+		t.Fatalf("unexpected report: %+v", report)
+	}
+}
+
+func TestP4LegacyEndpointExplainsVersionSkew(t *testing.T) {
+	rec := httptest.NewRecorder()
+	legacyP4Handler()(rec, httptest.NewRequest(http.MethodPost, "/p4/run", nil))
+	if rec.Code != http.StatusGone || !strings.Contains(rec.Body.String(), "upgrade the multica CLI") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

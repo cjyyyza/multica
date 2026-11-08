@@ -154,7 +154,7 @@ func taskTargetsP4(task Task, assignment *localDirectoryAssignment) bool {
 		return false
 	}
 	// A project's in-place directory can use the workspace depot catalog.
-	// Preserve binding (including the raw-p4 shield) for that existing setup.
+	// Preserve the resolved client as the task's native P4 environment.
 	if assignment != nil && !assignment.UsesWorktree() {
 		return true
 	}

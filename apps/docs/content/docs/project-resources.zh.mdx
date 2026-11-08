@@ -39,7 +39,7 @@ import { LocalDirModeDemo } from "@/components/demos/local-dir-mode-demo";
 
 ## 添加 Perforce depot
 
-可以选择工作区上已有的 Helix depot，也可以直接填 port 和 depot 路径。`--stream` 可选；其余字段（`user`、`charset`、`changelist`、`swarm_url`、`allow_exclusive`、`no_auto_review`）通过 JSON `--ref` 设置。
+可以选择工作区上已有的 Helix depot，也可以直接填 port 和 depot 路径。`--stream` 可选；其余字段（`user`、`charset`、`changelist`、`swarm_url`）通过 JSON `--ref` 设置。
 
 ```bash
 multica project resource add <project-id> --type perforce_depot \
