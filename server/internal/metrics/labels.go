@@ -47,8 +47,8 @@ var businessMetricLabels = map[string][]string{
 	"multica_agent_task_queue_wait_seconds":     {labelSource, labelRuntimeMode},
 	"multica_agent_task_claimable_wait_seconds": {labelSource, labelRuntimeMode},
 	// claim_decision reason is a closed enum. It is mirrored by claimReasonFor
-	// and by claimDecisionSeries: agent cap is agent_concurrency_cap, squad cap
-	// is squad_concurrency_cap, and an unclassified outcome stays error.
+	// and by claimDecisionSeries: agent, runtime and squad caps use their
+	// respective *_concurrency_cap reasons; an unclassified outcome stays error.
 	"multica_agent_task_claim_decision_total":          {labelClaimPath, labelOutcome, labelReason},
 	"multica_agent_task_run_seconds":                   {labelSource, labelRuntimeMode, labelTerminalStatus},
 	"multica_agent_task_total_seconds":                 {labelSource, labelRuntimeMode, labelTerminalStatus},
@@ -167,6 +167,7 @@ var (
 		"mcode":         "mcode",
 		"muse":          "muse",
 		"zeroclaw":      "zeroclaw",
+		"zcode":         "zcode",
 		"multica_agent": "multica_agent",
 		"openclaw":      "openclaw",
 		"opencode":      "opencode",

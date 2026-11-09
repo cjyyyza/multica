@@ -3,11 +3,13 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/util"
@@ -292,7 +294,9 @@ func unusedDriveLetter(t *testing.T) string {
 func createDirSymlink(t *testing.T, target, link string) {
 	t.Helper()
 	if out, err := exec.Command("cmd", "/c", "mklink", "/D", link, target).CombinedOutput(); err != nil {
-		if strings.Contains(strings.ToLower(string(out)), "privilege") {
+		const errorPrivilegeNotHeld syscall.Errno = 1314
+		probe := filepath.Join(t.TempDir(), "symlink-privilege-probe")
+		if probeErr := os.Symlink(t.TempDir(), probe); errors.Is(probeErr, errorPrivilegeNotHeld) || strings.Contains(strings.ToLower(string(out)), "privilege") {
 			t.Skipf("symlink privilege unavailable on this host: %s", out)
 		}
 		t.Fatalf("mklink /D %s -> %s: %s: %v", link, target, out, err)

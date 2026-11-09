@@ -227,6 +227,56 @@ func TestClaimDecisionDBBatchNoVisibleCandidates(t *testing.T) {
 	}
 }
 
+// TestClaimDecisionDBRuntimeCapCheckedBeforeSquadCap pins the order in
+// claimTask: when a runtime-wide cap and a squad cap are both full, the
+// attempt is attributed to the runtime cap because that check runs before the
+// claim and its squad recheck. Both cap flavors keep their own metric series.
+func TestClaimDecisionDBRuntimeCapCheckedBeforeSquadCap(t *testing.T) {
+	f := newClaimDecisionFixture(t, 5)
+	f.insertTask(t, "queued")
+	ctx := context.Background()
+
+	squadID := f.fx.Squad(t, "claim-decision-runtime-squad", util.UUIDToString(f.agentID), testutil.Cols{
+		"max_concurrent_tasks": 1,
+	})
+	f.fx.SquadMember(t, squadID, "agent", util.UUIDToString(f.agentID), testutil.Cols{"role": "leader"})
+	f.fx.Exec(t, `UPDATE issue SET assignee_type = 'squad', assignee_id = $1 WHERE id = $2`, squadID, f.issueID)
+	busyIssue := f.fx.Issue(t, "claim-decision-squad-busy", testutil.Cols{
+		"assignee_type": "squad", "assignee_id": squadID,
+	})
+	f.fx.Task(t, util.UUIDToString(f.agentID), testutil.Cols{
+		"issue_id": busyIssue, "runtime_id": util.UUIDToString(f.runtimeID),
+		"status": "running", "started_at": testutil.Raw("now()"),
+	})
+
+	outsider := f.fx.Agent(t, "claim-decision-runtime-outsider", util.UUIDToString(f.runtimeID), testutil.Cols{
+		"owner_id": f.fx.UserID, "max_concurrent_tasks": 5,
+	})
+	outsiderIssue := f.fx.Issue(t, "claim-decision-runtime-outsider-issue")
+	f.fx.Task(t, outsider, testutil.Cols{
+		"issue_id": outsiderIssue, "runtime_id": util.UUIDToString(f.runtimeID),
+		"status": "running", "started_at": testutil.Raw("now()"),
+	})
+	f.setRuntimeCap(t, int32Ptr(1))
+
+	claimed, err := f.svc.ClaimTaskForRuntime(ctx, f.runtimeID)
+	if err != nil {
+		t.Fatalf("ClaimTaskForRuntime: %v", err)
+	}
+	if claimed != nil {
+		t.Fatalf("claimed %s with both caps full", util.UUIDToString(claimed.ID))
+	}
+	if got := claimDecisionCount(t, f.metrics, claimPathRuntime, claimOutcomeRuntimeNoCapacity, claimReasonRuntimeConcurrencyCap); got != 1 {
+		t.Fatalf("claim_decision_total{runtime,runtime_no_capacity,runtime_concurrency_cap} = %v, want 1", got)
+	}
+	if got := claimDecisionCount(t, f.metrics, claimPathRuntime, claimOutcomeNoSquadCapacity, claimReasonSquadConcurrencyCap); got != 0 {
+		t.Fatalf("claim_decision_total{runtime,no_squad_capacity,squad_concurrency_cap} = %v, want 0", got)
+	}
+	if got := claimDecisionCount(t, f.metrics, claimPathRuntime, claimOutcomeNoCapacity, claimReasonAgentConcurrencyCap); got != 0 {
+		t.Fatalf("claim_decision_total{runtime,no_capacity,agent_concurrency_cap} = %v, want 0", got)
+	}
+}
+
 // TestClaimDecisionDBBatchCandidatesUnclaimed mirrors the singular-path
 // unclaimed scenario through the batch poll: the runtime goes offline after
 // enqueue, the candidate stays visible, and the claim attempt records

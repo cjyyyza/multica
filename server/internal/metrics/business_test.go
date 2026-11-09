@@ -123,6 +123,22 @@ func TestBusinessMetricsLLMPricingAndUnpricedTokens(t *testing.T) {
 	}
 }
 
+func TestBusinessMetricsLLMPricingCursorFastVariant(t *testing.T) {
+	m := NewBusinessMetrics()
+
+	m.RecordLLMUsage("issue", "local", "cursor", "claude-opus-4-7-thinking-high-fast", 1_000_000, 1_000_000, 0, 0, 0)
+
+	if got := testutil.ToFloat64(m.llmCostUSD.WithLabelValues("cursor", "claude-opus-4-7-fast", "input", "local", "issue")); got != 30 {
+		t.Fatalf("cursor fast input cost = %v, want 30", got)
+	}
+	if got := testutil.ToFloat64(m.llmCostUSD.WithLabelValues("cursor", "claude-opus-4-7-fast", "output", "local", "issue")); got != 150 {
+		t.Fatalf("cursor fast output cost = %v, want 150", got)
+	}
+	if got := testutil.ToFloat64(m.llmRequests.WithLabelValues("cursor", "claude-opus-4-7-fast", "local")); got != 1 {
+		t.Fatalf("cursor fast request counter = %v, want 1", got)
+	}
+}
+
 func TestBusinessMetricsRegistryExposesAllFamilies(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	m := NewBusinessMetrics()
@@ -420,6 +436,27 @@ func TestBusinessMetricsRecordsProviderCostForUnpricedModel(t *testing.T) {
 	// "unpriced" describes the rate table, not the money.
 	if got := testutil.ToFloat64(m.llmUnpricedTokens.WithLabelValues("grok", "grok-composer-2.5-fast", "input")); got != 500 {
 		t.Errorf("unpriced input tokens = %v, want 500", got)
+	}
+}
+
+// TestClaimDecisionSeriesPrewarmsRuntimeAndSquadCaps pins both concurrency
+// flavors in the closed prewarm table: the runtime-wide cap (GitHub #9626) and
+// the squad cap (MUL-8438) must each have a zero-valued series so a dashboard
+// can distinguish "never fired" from "not instrumented".
+func TestClaimDecisionSeriesPrewarmsRuntimeAndSquadCaps(t *testing.T) {
+	want := map[[2]string]bool{
+		{"runtime_no_capacity", "runtime_concurrency_cap"}: false,
+		{"no_squad_capacity", "squad_concurrency_cap"}:     false,
+	}
+	for _, series := range claimDecisionSeries() {
+		if _, ok := want[[2]string{series.outcome, series.reason}]; ok {
+			want[[2]string{series.outcome, series.reason}] = true
+		}
+	}
+	for key, found := range want {
+		if !found {
+			t.Fatalf("claimDecisionSeries lacks {%q, %q}", key[0], key[1])
+		}
 	}
 }
 

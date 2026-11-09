@@ -67,9 +67,71 @@ func TestBuildPiArgsPreservesProjectTrustFlags(t *testing.T) {
 }
 
 func TestBuildPiArgsAppendsPrivateSkills(t *testing.T) {
-	args := buildPiArgs("/tmp/s.jsonl", ExecOptions{PiSkillDirs: []string{`E:\task\skills\alpha`, `E:\task\skills\beta`}}, slog.Default())
-	if !strings.Contains(strings.Join(args, "\n"), "--skill\nE:\\task\\skills\\alpha\n--skill\nE:\\task\\skills\\beta") {
-		t.Fatalf("args = %#v", args)
+	dirs := []string{`E:\task\skills\alpha`, `E:\task\skills\beta`}
+	want := "--skill\nE:\\task\\skills\\alpha\n--skill\nE:\\task\\skills\\beta"
+	args := buildPiArgs("/tmp/s.jsonl", ExecOptions{PiSkillDirs: dirs}, slog.Default())
+	if !strings.Contains(strings.Join(args, "\n"), want) {
+		t.Fatalf("pi args = %#v", args)
+	}
+	// omp shares the Pi backend and loads P4 private skills through the same
+	// repeatable directory flag, so it must not lose them either.
+	ompArgs := buildOmpArgs("", "", ExecOptions{PiSkillDirs: dirs}, slog.Default())
+	if !strings.Contains(strings.Join(ompArgs, "\n"), want) {
+		t.Fatalf("omp args = %#v", ompArgs)
+	}
+}
+
+func TestBuildPiArgsLoadsMulticaSkills(t *testing.T) {
+	for _, mode := range []string{"json", "rpc"} {
+		t.Run(mode, func(t *testing.T) {
+			opts := ExecOptions{
+				Cwd:                  t.TempDir(),
+				EnableTaskSupplement: mode == "rpc",
+				PiSkillPaths: []string{
+					filepath.Join(t.TempDir(), "managed skills", "local-ci", "SKILL.md"),
+					filepath.Join(t.TempDir(), "review-multica", "SKILL.md"),
+				},
+				CustomArgs: []string{"--no-approve"},
+			}
+			args := buildPiArgs("/tmp/s.jsonl", opts, slog.Default())
+			if countArg(args, "--skill") != len(opts.PiSkillPaths) {
+				t.Fatalf("want one --skill per managed file: %v", args)
+			}
+			joined := strings.Join(args, "\x00")
+			for _, path := range opts.PiSkillPaths {
+				if !strings.Contains(joined, "--skill\x00"+path+"\x00") {
+					t.Errorf("managed skill %q missing from %v", path, args)
+				}
+			}
+			wantPrint := 0
+			if mode == "json" {
+				wantPrint = 1
+			}
+			if !strings.Contains(joined, "--mode\x00"+mode+"\x00") || countArg(args, "-p") != wantPrint {
+				t.Errorf("wrong invocation mode: %v", args)
+			}
+			if countArg(args, "--approve") != 0 || countArg(args, "--no-approve") != 1 {
+				t.Errorf("project trust flags changed: %v", args)
+			}
+			if got := buildOmpArgs("", "", opts, slog.Default()); countArg(got, "--skill") != 0 {
+				t.Fatalf("omp must not get managed Pi skill files: %v", got)
+			}
+		})
+	}
+}
+
+func TestBuildPiArgsDoesNotDiscoverProjectSkills(t *testing.T) {
+	cwd := t.TempDir()
+	path := filepath.Join(cwd, ".pi", "skills", "untrusted", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("repository-owned skill"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args := buildPiArgs("", ExecOptions{Cwd: cwd}, slog.Default())
+	if countArg(args, "--skill") != 0 {
+		t.Fatalf("project skill was explicitly loaded without a managed path: %v", args)
 	}
 }
 

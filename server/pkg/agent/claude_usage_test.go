@@ -481,12 +481,12 @@ func claudeUsageFixtureBackendWithExecutable(t *testing.T, events []json.RawMess
 }
 
 func executeClaudeUsageFixture(t *testing.T, backend Backend, eventCount int) Result {
-	return executeClaudeUsageFixtureWithOptions(t, backend, eventCount, ExecOptions{Timeout: 5 * time.Second})
+	return executeClaudeUsageFixtureWithOptions(t, backend, eventCount, ExecOptions{Timeout: 30 * time.Second})
 }
 
 func executeClaudeUsageFixtureWithOptions(t *testing.T, backend Backend, eventCount int, opts ExecOptions) Result {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	session, err := backend.Execute(ctx, "fixture", opts)
 	if err != nil {

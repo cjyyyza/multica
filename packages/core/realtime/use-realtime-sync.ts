@@ -11,6 +11,9 @@ import { clearWorkspaceStorage } from "../platform/storage-cleanup";
 import { defaultStorage } from "../platform/storage";
 import { getCurrentWsId, getCurrentSlug } from "../platform/workspace-storage";
 import { issueKeys } from "../issues/queries";
+import { isSidebarTableRequest, type SidebarIssuesRequest } from "../issues/sidebar-list";
+import { refreshIssueUnread } from "../issues/unread";
+import { refreshSubscribedIssues, subscribedIssueKeys } from "../issues/subscribed";
 import { projectKeys } from "../projects/queries";
 import { pinKeys } from "../pins/queries";
 import { autopilotKeys } from "../autopilots/queries";
@@ -21,6 +24,8 @@ import { issueStatusKeys } from "../issue-statuses/queries";
 import { issueWorkflowKeys } from "../issue-workflows/queries";
 import { requirementKeys } from "../requirements/queries";
 import { applyRequirementEventToCache } from "../requirements/realtime";
+import { issueViewKeys } from "../issue-views/queries";
+import { issueViewPrefKeys } from "../issue-views/preferences";
 import {
   agentTaskSnapshotKeys,
   workspaceWorkingAgentsKeys,
@@ -88,6 +93,7 @@ import type {
   IssueDeletedPayload,
   IssueAttachmentsChangedPayload,
   IssueLabelsChangedPayload,
+  IssueUnreadChangedPayload,
   IssueMetadataChangedPayload,
   IssuePropertiesChangedPayload,
   InboxNewPayload,
@@ -649,6 +655,8 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
   const wsId = getCurrentWsId();
   if (wsId) {
     qc.invalidateQueries({ queryKey: issueKeys.all(wsId) });
+    void refreshIssueUnread(qc, wsId);
+    qc.invalidateQueries({ queryKey: subscribedIssueKeys.all(wsId) });
     // Through the inbox's own entry point, not a plain invalidate: a reconnect
     // can land during the list's first load, and a plain invalidate would be
     // answered by the request already on the wire (see refreshInboxQuery).
@@ -674,6 +682,8 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: issueStatusKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: issueWorkflowKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: requirementKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: issueViewKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: issueViewPrefKeys.all(wsId) });
   }
   // Cross-workspace, so outside the wsId guard: a reconnect may have missed
   // inbox events from any workspace, so re-pull the switcher-dot summary.
@@ -726,6 +736,13 @@ async function refreshWorkingAgentQueries(qc: QueryClient, wsId: string): Promis
         // depend on this membership, not only rows and group descriptors.
         return spec?.filters.working_only === true ||
           spec?.filters.working_issue_ids !== undefined;
+      },
+    },
+    {
+      queryKey: issueKeys.sidebarAll(wsId),
+      predicate: ({ queryKey }) => {
+        const request = queryKey[4] as SidebarIssuesRequest | undefined;
+        return !!request && isSidebarTableRequest(request) && request.table.filters.working_only === true;
       },
     },
   ];
@@ -846,6 +863,8 @@ export function useRealtimeSync(
           // against, and project writes are rare, so refresh the table
           // queries unconditionally rather than guess.
           qc.invalidateQueries({ queryKey: issueKeys.tableAll(wsId) });
+          // Deleting a project deletes the saved views scoped to it.
+          qc.invalidateQueries({ queryKey: issueViewKeys.all(wsId) });
         }
       },
       squad: () => {
@@ -884,6 +903,9 @@ export function useRealtimeSync(
         const wsId = getCurrentWsId();
         if (wsId) {
           qc.invalidateQueries({ queryKey: issueStatusKeys.all(wsId) });
+          // Creating or archiving a status also adds it to, or drops it from,
+          // the stored Default workflow.
+          qc.invalidateQueries({ queryKey: issueWorkflowKeys.all(wsId) });
           // Status-group order is server-owned and depends on catalog positions.
           // Rows/facets and unrelated groupings do not change on catalog edits.
           qc.invalidateQueries({
@@ -905,6 +927,22 @@ export function useRealtimeSync(
         const wsId = getCurrentWsId();
         const userId = authStore.getState().user?.id;
         if (wsId && userId) qc.invalidateQueries({ queryKey: pinKeys.all(wsId, userId) });
+      },
+      issue_view: () => {
+        const wsId = getCurrentWsId();
+        if (wsId) qc.invalidateQueries({ queryKey: issueViewKeys.all(wsId) });
+      },
+      // The member's own preferences, saved on another tab or device.
+      issue_view_preference: () => {
+        const wsId = getCurrentWsId();
+        if (!wsId) return;
+        // A document with a write still in flight here refetches when that
+        // write settles; refetching it now could paint an older copy over the
+        // optimistic one. Every other document refreshes now.
+        qc.invalidateQueries({
+          queryKey: issueViewPrefKeys.all(wsId),
+          predicate: (query) => qc.isMutating({ mutationKey: query.queryKey, exact: true }) === 0,
+        });
       },
       daemon: () => {
         const wsId = getCurrentWsId();
@@ -1061,7 +1099,7 @@ export function useRealtimeSync(
     // Event types handled by specific handlers below -- skip generic refresh
     const specificEvents = new Set([
       "workspace:updated",
-      "issue:updated", "issue:created", "issue:deleted", "issue_attachments:changed", "issue_labels:changed", "issue_metadata:changed", "issue_properties:changed", "property:created", "property:updated", "inbox:new",
+      "issue:updated", "issue:created", "issue:deleted", "issue_attachments:changed", "issue_labels:changed", "issue_unread:changed", "issue_metadata:changed", "issue_properties:changed", "property:created", "property:updated", "inbox:new",
       "requirement:created", "requirement:updated",
       "comment:created", "comment:updated", "comment:deleted",
       "comment:resolved", "comment:unresolved",
@@ -1098,6 +1136,15 @@ export function useRealtimeSync(
               qc.invalidateQueries({ queryKey: requirementKeys.all(wsId) });
             });
           }
+        }
+      }
+      if (msg.type === "skill:deleted") {
+        const wsId = getCurrentWsId();
+        if (wsId) {
+          // Agent lists and details embed skill summaries used by duplication.
+          debouncedRefresh("skill:deleted", () => {
+            qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+          });
         }
       }
       const refresh = refreshMap[prefix];
@@ -1168,6 +1215,12 @@ export function useRealtimeSync(
       if (!issue_id) return;
       const wsId = getCurrentWsId();
       if (wsId) onIssueLabelsChanged(qc, wsId, issue_id, labels ?? [], issue_revision);
+    });
+
+    // Personal; may belong to a workspace other than the open one.
+    const unsubIssueUnreadChanged = ws.on("issue_unread:changed", (p) => {
+      const { workspace_id } = p as IssueUnreadChangedPayload;
+      if (workspace_id) void refreshIssueUnread(qc, workspace_id);
     });
 
     const unsubIssueAttachmentsChanged = ws.on("issue_attachments:changed", (p) => {
@@ -1340,15 +1393,22 @@ export function useRealtimeSync(
       }
     });
 
-    const unsubSubscriberAdded = ws.on("subscriber:added", (p) => {
-      const { issue_id } = p as SubscriberAddedPayload;
-      if (issue_id) qc.invalidateQueries({ queryKey: issueKeys.subscribers(issue_id) });
-    });
-
-    const unsubSubscriberRemoved = ws.on("subscriber:removed", (p) => {
-      const { issue_id } = p as SubscriberRemovedPayload;
-      if (issue_id) qc.invalidateQueries({ queryKey: issueKeys.subscribers(issue_id) });
-    });
+    // The viewer's own subscription changing also moves issues in and out of
+    // views filtered by the "subscribed" relation.
+    const onSubscriberChanged = (p: SubscriberAddedPayload | SubscriberRemovedPayload) => {
+      if (!p.issue_id) return;
+      qc.invalidateQueries({ queryKey: issueKeys.subscribers(p.issue_id) });
+      const wsId = getCurrentWsId();
+      if (wsId && p.user_type === "member" && p.user_id === authStore.getState().user?.id) {
+        void refreshSubscribedIssues(qc, wsId);
+      }
+    };
+    const unsubSubscriberAdded = ws.on("subscriber:added", (p) =>
+      onSubscriberChanged(p as SubscriberAddedPayload),
+    );
+    const unsubSubscriberRemoved = ws.on("subscriber:removed", (p) =>
+      onSubscriberChanged(p as SubscriberRemovedPayload),
+    );
 
     // --- Side-effect handlers (toast, navigation) ---
 
@@ -1866,6 +1926,7 @@ export function useRealtimeSync(
       unsubRequirementUpdated();
       unsubIssueAttachmentsChanged();
       unsubIssueLabelsChanged();
+      unsubIssueUnreadChanged();
       unsubIssueMetadataChanged();
       unsubIssuePropertiesChanged();
       unsubPropertyChanged.forEach((unsub) => unsub());

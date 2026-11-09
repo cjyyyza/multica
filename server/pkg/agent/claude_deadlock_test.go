@@ -43,7 +43,34 @@ func TestMain(m *testing.M) {
 		runFakeCursorStream(mode)
 		os.Exit(0)
 	}
+	if os.Getenv("HERMES_TEST_GATEWAY_HELPER") != "" {
+		os.Exit(m.Run())
+	}
 	switch mode := os.Getenv("CLAUDE_FAKE_MODE"); mode {
+	case "usage_fixture":
+		runFakeClaudeUsageFixture()
+		os.Exit(0)
+	case "pending_control_result":
+		runFakeClaudePendingControlResult()
+		os.Exit(0)
+	case "supplement":
+		runFakeClaudeSupplement()
+		os.Exit(0)
+	case "startup_stdout_burst":
+		runFakeClaudeStartupStdoutBurst()
+		os.Exit(0)
+	case "control_request":
+		runFakeClaudeControlRequest()
+		os.Exit(0)
+	case "plan_permissions":
+		runFakeClaudePlanPermissions()
+		os.Exit(0)
+	case "background_control_request":
+		runFakeClaudeBackgroundControlRequest()
+		os.Exit(0)
+	case "async_launched_tool_result":
+		runFakeClaudeAsyncLaunchedToolResult()
+		os.Exit(0)
 	case "":
 		// Preserve the production relationships while avoiding hundreds of
 		// milliseconds of intentional silence in every ACP fixture.
@@ -71,27 +98,6 @@ func TestMain(m *testing.M) {
 			os.Exit(m.Run())
 		}
 		os.Exit(testenv.RunIsolated(m.Run))
-	case "usage_fixture":
-		runFakeClaudeUsageFixture()
-		os.Exit(0)
-	case "supplement":
-		runFakeClaudeSupplement()
-		os.Exit(0)
-	case "startup_stdout_burst":
-		runFakeClaudeStartupStdoutBurst()
-		os.Exit(0)
-	case "control_request":
-		runFakeClaudeControlRequest()
-		os.Exit(0)
-	case "plan_permissions":
-		runFakeClaudePlanPermissions()
-		os.Exit(0)
-	case "background_control_request":
-		runFakeClaudeBackgroundControlRequest()
-		os.Exit(0)
-	case "async_launched_tool_result":
-		runFakeClaudeAsyncLaunchedToolResult()
-		os.Exit(0)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown CLAUDE_FAKE_MODE: %q\n", mode)
 		os.Exit(2)

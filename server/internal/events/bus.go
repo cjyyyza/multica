@@ -40,6 +40,12 @@ type Event struct {
 	// the list is empty. It is not a client payload and must not be cached as
 	// a grant.
 	ChatContentReaderIDs []string `json:"-"`
+
+	// MemberPrivateUserID marks an event as private to one member of
+	// WorkspaceID, such as their own preferences or a private saved view. The
+	// realtime layer delivers it only to that user's connections bound to
+	// WorkspaceID.
+	MemberPrivateUserID string
 }
 
 // Handler is a function that processes an event.

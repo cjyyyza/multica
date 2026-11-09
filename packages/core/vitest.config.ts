@@ -5,6 +5,7 @@ export default defineConfig({
   test: {
     ...platformTestOptions,
     globals: true,
+    setupFiles: ["@multica/vitest-setup/web-storage"],
     include: ["**/*.test.{ts,tsx}"],
     passWithNoTests: true,
   },

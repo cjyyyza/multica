@@ -103,10 +103,17 @@ func chatContentReaderIDs(ids []string) []string {
 	return out
 }
 
+// memberPrivateEvents never leave their member, so one published without
+// MemberPrivateUserID is dropped instead of reaching the workspace.
+var memberPrivateEvents = map[string]bool{
+	protocol.EventIssueViewPreferenceChanged: true,
+}
+
 // registerListeners wires up event bus listeners for WS broadcasting.
 // Personal events (inbox, invites) are sent only to the target user via
-// SendToUser, and chat content only to the readers named on the event. All
-// other events are broadcast to the workspace room.
+// SendToUser, chat content only to the readers named on the event, and
+// member-private events only to that member's connections to the workspace.
+// All other events are broadcast to the workspace room.
 //
 // The broadcaster parameter is intentionally typed as the realtime.Broadcaster
 // interface (not *realtime.Hub) so that this layer can later be swapped out
@@ -124,6 +131,7 @@ func registerListeners(bus *events.Bus, b realtime.Broadcaster) {
 		protocol.EventInboxBatchArchived: true,
 		protocol.EventInvitationCreated:  true,
 		protocol.EventInvitationRevoked:  true,
+		protocol.EventIssueUnreadChanged: true,
 	}
 
 	// Helper: marshal event and send to a specific user.
@@ -154,10 +162,12 @@ func registerListeners(bus *events.Bus, b realtime.Broadcaster) {
 	})
 
 	// inbox:read, inbox:archived, inbox:unarchived, inbox:batch-read,
-	// inbox:batch-archived — extract recipient from top-level payload
+	// inbox:batch-archived, issue_unread:changed — extract recipient from
+	// top-level payload
 	for _, eventType := range []string{
 		protocol.EventInboxRead, protocol.EventInboxArchived, protocol.EventInboxUnarchived,
 		protocol.EventInboxBatchRead, protocol.EventInboxBatchArchived,
+		protocol.EventIssueUnreadChanged,
 	} {
 		bus.Subscribe(eventType, func(e events.Event) {
 			payload, ok := e.Payload.(map[string]any)
@@ -307,6 +317,16 @@ func registerListeners(bus *events.Bus, b realtime.Broadcaster) {
 		data, err := json.Marshal(msg)
 		if err != nil {
 			slog.Error("failed to marshal event", "event_type", e.Type, "error", err)
+			return
+		}
+
+		if e.MemberPrivateUserID != "" || memberPrivateEvents[e.Type] {
+			if e.MemberPrivateUserID == "" || e.WorkspaceID == "" {
+				slog.Warn("realtime: dropping member-private event without recipient", "event_type", e.Type)
+				return
+			}
+			realtime.M.RecordEvent(e.Type)
+			b.BroadcastToScope(realtime.ScopeWorkspaceMember, realtime.WorkspaceMemberScopeID(e.WorkspaceID, e.MemberPrivateUserID), data)
 			return
 		}
 

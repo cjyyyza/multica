@@ -14,7 +14,7 @@ import {
   Plus,
   TriangleAlert,
   Unlink,
-} from "lucide-react";
+} from "@multica/ui/icons";
 import {
   issueP4ChangelistsOptions,
   p4ChangelistSummaryEntries,

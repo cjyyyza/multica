@@ -1,7 +1,11 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { arrayMove } from "@dnd-kit/sortable";
-import { createPersistStorage, defaultStorage } from "@multica/core/platform";
+import { defaultStorage } from "@multica/core/platform";
+import {
+  createWindowTabStorage,
+  type WindowTabStorage,
+} from "./tab-store-storage";
 import { createSafeId } from "@multica/core/utils";
 import { workspaceSlugForPath } from "@multica/core/paths";
 
@@ -311,31 +315,46 @@ export function splitTabUrl(url: string): { pathname: string; suffix: string } {
 /**
  * Dedup identity of a tab URL.
  *
- * Normally the pathname: search/hash are view state. A Chat opened for a
- * specific Requirement (`/<slug>/chat?requirement=<uuid>`) is the exception —
- * each Requirement is its own resource, so different Requirements must not
- * reuse one tab. The Requirement join keeps the same pathname-only semantics
- * for every other route and for invalid/missing requirement params.
+ * Normally the pathname: search/hash are view state. Two URL shapes name a
+ * resource of their own and keep separate tabs:
+ *  - a Chat opened for a specific Requirement
+ *    (`/<slug>/chat?requirement=<uuid>`)
+ *  - a list URL that opens a saved view (`?view=`) or built-in scope
+ *    (`?scope=`, e.g. My agents' work)
+ *
+ * Priority is requirement, then view, then scope, then pathname, so a saved
+ * view that also carries a scope keeps the view's identity, and invalid or
+ * missing requirement params fall back to pathname-only semantics.
  */
 export function resourceKeyForUrl(url: string): string {
-  return chatRequirementKeyForUrl(url) ?? splitTabUrl(url).pathname;
+  const { pathname, suffix } = splitTabUrl(url);
+  const params = searchParamsOfSuffix(suffix);
+  const requirement = chatRequirementKeyForUrl(pathname, params);
+  if (requirement) return requirement;
+  const view = params.get("view");
+  if (view) return `${pathname}?view=${encodeURIComponent(view)}`;
+  const scope = params.get("scope");
+  return scope ? `${pathname}?scope=${encodeURIComponent(scope)}` : pathname;
 }
 
 const CHAT_REQUIREMENT_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function chatRequirementKeyForUrl(url: string): string | null {
-  const { pathname, suffix } = splitTabUrl(url);
+function chatRequirementKeyForUrl(
+  pathname: string,
+  params: URLSearchParams,
+): string | null {
   const segments = pathname.split("/").filter(Boolean);
   if (segments.length !== 2 || segments[1] !== "chat") return null;
-  if (!suffix.startsWith("?")) return null;
-
-  const hashIndex = suffix.indexOf("#");
-  const search = hashIndex === -1 ? suffix.slice(1) : suffix.slice(1, hashIndex);
-  const requirement = new URLSearchParams(search).get("requirement");
+  const requirement = params.get("requirement");
   if (!requirement || !CHAT_REQUIREMENT_UUID_RE.test(requirement)) return null;
-
   return `${pathname}?requirement=${encodeURIComponent(requirement)}`;
+}
+
+function searchParamsOfSuffix(suffix: string): URLSearchParams {
+  if (!suffix.startsWith("?")) return new URLSearchParams();
+  const hashIndex = suffix.indexOf("#");
+  return new URLSearchParams(hashIndex === -1 ? suffix.slice(1) : suffix.slice(1, hashIndex));
 }
 
 /**
@@ -354,11 +373,8 @@ function inboxSelectionKeyForUrl(url: string): string | null {
   const { pathname, suffix } = splitTabUrl(url);
   const segments = pathname.split("/").filter(Boolean);
   if (segments.length !== 2 || segments[1] !== "inbox") return null;
-  if (!suffix.startsWith("?")) return null;
 
-  const hashIndex = suffix.indexOf("#");
-  const search = hashIndex === -1 ? suffix.slice(1) : suffix.slice(1, hashIndex);
-  const selectedKey = new URLSearchParams(search).get("issue");
+  const selectedKey = searchParamsOfSuffix(suffix).get("issue");
   if (!selectedKey) return null;
 
   return `${pathname}?issue=${encodeURIComponent(selectedKey)}`;
@@ -751,6 +767,11 @@ function buildCloseOtherTabsResult(
 
 // Store
 
+const TAB_STORE_KEY = "multica_tabs";
+// Built inside createJSONStorage's getter, which turns persistence off
+// instead of throwing when storage is unavailable.
+let tabStorage = null as WindowTabStorage | null;
+
 export const useTabStore = create<TabStore>()(
   persist(
     (set, get) => ({
@@ -763,7 +784,16 @@ export const useTabStore = create<TabStore>()(
         // NavigationAdapter's path-parser should already have filtered
         // these, but belt-and-braces keeps garbage out of the store.
         if (!slug) return;
-        const { byWorkspace } = get();
+        const current = get();
+        // Another window may have shown this workspace since this window
+        // last did; pick up its tabs instead of reviving a stale copy.
+        const refreshed =
+          slug !== current.activeWorkspaceSlug
+            ? storedGroupIfNewer(slug, current.byWorkspace[slug])
+            : undefined;
+        const byWorkspace = refreshed
+          ? { ...current.byWorkspace, [slug]: refreshed }
+          : current.byWorkspace;
         const existing = byWorkspace[slug];
 
         // Decide the desired active path for this workspace.
@@ -839,7 +869,11 @@ export const useTabStore = create<TabStore>()(
         }
 
         // No openPath (or openPath was rejected) — just restore the group.
-        set({ activeWorkspaceSlug: slug });
+        set(
+          refreshed
+            ? { activeWorkspaceSlug: slug, byWorkspace }
+            : { activeWorkspaceSlug: slug },
+        );
       },
 
       openTab(path, title, opts) {
@@ -1290,9 +1324,11 @@ export const useTabStore = create<TabStore>()(
       },
     }),
     {
-      name: "multica_tabs",
+      name: TAB_STORE_KEY,
       version: 5,
-      storage: createJSONStorage(() => createPersistStorage(defaultStorage)),
+      storage: createJSONStorage(
+        () => (tabStorage = createWindowTabStorage(defaultStorage)),
+      ),
       migrate: (persistedState, version) => {
         // v1 → v2: flat `tabs` array → per-workspace grouping.
         // Tabs whose path isn't workspace-scoped (root `/`, login, etc.)
@@ -1321,38 +1357,69 @@ export const useTabStore = create<TabStore>()(
         }
         return state as V5Persisted;
       },
-      partialize: (state) => ({
-        activeWorkspaceSlug: state.activeWorkspaceSlug,
-        // mountGeneration is deliberately excluded: reload pressure must
-        // never persist across restarts.
-        byWorkspace: Object.fromEntries(
-          Object.entries(state.byWorkspace).map(([slug, group]) => [
-            slug,
-            {
-              activeTabId: group.activeTabId,
-              // Persisted so the first close after a restart still lands on
-              // the tab you were last looking at rather than falling back to
-              // the positional neighbour.
-              recentTabIds: group.recentTabIds,
-              browsingHistory: group.browsingHistory,
-              browsingHistoryTitles: group.browsingHistoryTitles,
-              tabs: group.tabs.map((t) => ({
-                id: t.id,
-                url: t.url,
-                title: t.title,
-                pinned: t.pinned,
-                history: t.history,
-                memento: t.memento,
-              })),
-            },
-          ]),
-        ),
-      }),
+      partialize: (state) => partializeTabs(state),
       merge: (persistedState, currentState) =>
         mergePersistedTabs(persistedState, currentState),
     },
   ),
 );
+
+// Hydration from localStorage is synchronous, so by now the store holds
+// exactly what this window loaded; later writes merge against it.
+tabStorage?.setBaseline(partializeTabs(useTabStore.getState()).byWorkspace);
+
+function partializeTabs(state: PersistedTabState) {
+  return {
+    activeWorkspaceSlug: state.activeWorkspaceSlug,
+    // mountGeneration is deliberately excluded: reload pressure must
+    // never persist across restarts.
+    byWorkspace: Object.fromEntries(
+      Object.entries(state.byWorkspace).map(([slug, group]) => [
+        slug,
+        {
+          activeTabId: group.activeTabId,
+          // Persisted so the first close after a restart still lands on
+          // the tab you were last looking at rather than falling back to
+          // the positional neighbour.
+          recentTabIds: group.recentTabIds,
+          browsingHistory: group.browsingHistory,
+          browsingHistoryTitles: group.browsingHistoryTitles,
+          tabs: group.tabs.map((t) => ({
+            id: t.id,
+            url: t.url,
+            title: t.title,
+            pinned: t.pinned,
+            history: t.history,
+            memento: t.memento,
+          })),
+        },
+      ]),
+    ),
+  };
+}
+
+/**
+ * The newest persisted copy of `slug`'s group when another window changed
+ * it since this window last held it, normalized like a hydrated group.
+ */
+function storedGroupIfNewer(
+  slug: string,
+  current: WorkspaceTabGroup | undefined,
+): WorkspaceTabGroup | undefined {
+  const stored = tabStorage?.readStoredGroup(TAB_STORE_KEY, slug);
+  if (stored === undefined) return undefined;
+  if (current) {
+    const own = partializeTabs({
+      activeWorkspaceSlug: slug,
+      byWorkspace: { [slug]: current },
+    }).byWorkspace[slug];
+    if (JSON.stringify(own) === JSON.stringify(stored)) return undefined;
+  }
+  return mergePersistedTabs(
+    { activeWorkspaceSlug: slug, byWorkspace: { [slug]: stored } },
+    { activeWorkspaceSlug: null, byWorkspace: {} } as PersistedTabState,
+  ).byWorkspace[slug];
+}
 
 /** The persisted slice of the store — what `merge` reads and rebuilds. */
 interface PersistedTabState {

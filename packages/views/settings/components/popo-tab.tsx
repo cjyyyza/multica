@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, ChevronRight, Copy, RefreshCw, Trash2 } from "lucide-react";
+import { Check, ChevronRight, Copy, RefreshCw, Trash2 } from "@multica/ui/icons";
 // Named import, NOT default: react-qr-code is CJS; electron-vite's default
 // import interop hands back the module namespace (see lark-tab.tsx).
 import { QRCode } from "react-qr-code";

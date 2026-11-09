@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ChevronRight, MoreHorizontal, Plus } from "lucide-react";
+import { Check, ChevronRight, MoreHorizontal, Plus } from "@multica/ui/icons";
 import type { RequirementDetail } from "@multica/core/requirements";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";

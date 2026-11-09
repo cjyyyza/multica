@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { PenLine } from "lucide-react";
+import { PenLine } from "@multica/ui/icons";
 import { api, ApiError, clientErrorMessage, errorCode } from "@multica/core/api";
 import { isAgentRuntimeBound } from "@multica/core/agents";
 import { useAuthStore } from "@multica/core/auth";

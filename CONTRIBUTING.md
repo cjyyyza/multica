@@ -1,9 +1,10 @@
 # Contributing Guide
 
-This guide documents the local development workflow for contributors working on the Multica codebase.
+This guide documents issue and pull request requirements and the local development workflow for contributors working on the Multica codebase.
 
 It covers:
 
+- issue templates, pull request requirements, and review evidence
 - first-time setup
 - environments: starting, inspecting, stopping and deleting them
 - day-to-day development in the main checkout
@@ -50,14 +51,14 @@ upstream names sharing their numbers are frozen in
 `server/internal/migrations/fork_history_test.go`; new migrations remain subject
 to the unique-number check.
 
-Number every **new** fork migration from the reserved **9001–9099** range.
-Upstream numbers its migrations sequentially from the same counter this fork
-used to share, so a fork migration taking the next free low number collides
-with whatever upstream publishes at that number — and a published migration
-cannot be renamed, because its full name is the applied version in
-`schema_migrations`. Migrations run in filename order, and a table in the
-reserved range depends on nothing upstream adds later, so the high numbers cost
-nothing.
+Number every **new** fork migration from the reserved **9001+** range, choosing
+a number not already used in this checkout. Upstream numbers its migrations
+sequentially from the same counter this fork used to share, so a fork migration
+taking the next free low number collides with whatever upstream publishes at
+that number — and a published migration cannot be renamed, because its full
+name is the applied version in `schema_migrations`. Migrations run in filename
+order, and a table in the reserved range depends on nothing upstream adds later,
+so the high numbers cost nothing.
 
 Run the relevant checks below and `pnpm exec playwright test
 e2e/fork-integrations.spec.ts` against the checkout's managed environment. The
@@ -68,6 +69,47 @@ Submit the branch as a PR to this fork. Merge synchronization PRs with a **merge
 commit**, preserving the upstream ancestry so later synchronizations can find
 the correct common base. Do not squash or rebase these PRs. Ordinary feature
 PRs can continue to follow the repository's usual policy.
+
+## Opening an Issue
+
+Choose the form that fits your report:
+
+- **[Feature request](.github/ISSUE_TEMPLATE/feature_request.yml):** Explain the
+  **Problem** and **Goal**. A high-level **Proposal**, **Alternatives**, and
+  **Screenshots** are optional; you can raise a problem without designing its
+  solution.
+- **[Bug report](.github/ISSUE_TEMPLATE/bug_report.yml):** Describe the
+  **Problem**, **Expected behavior**, and **Steps to reproduce**. For intermittent
+  bugs, explain what you tried and how often it happens. Screenshots, logs, and
+  environment details are optional supporting information.
+
+Select the affected area so we can route the report. Bug reports also ask for
+the deployment type. Screenshots are optional for issues; the mandatory
+screenshot rule below applies to PRs that change UI or interactions.
+
+## Pull Request Requirements
+
+Use the [PR template](.github/PULL_REQUEST_TEMPLATE.md) with these five sections:
+
+1. **Problem:** Describe the concrete problem, who is affected, and why it matters.
+2. **Goal:** State the intended outcome of the change.
+3. **Proposal:** Explain the high-level design and why it achieves the goal.
+   Make it understandable to a reader without much project background. Keep
+   implementation details to a minimum.
+4. **Alternatives (optional):** When useful, briefly describe other approaches
+   and why you did not choose them.
+5. **Screenshots:** For UI or interaction changes, attach screenshots or a
+   screen recording from the running app showing the affected screens and
+   states. Before/after comparisons are strongly preferred; for a new screen,
+   show the after state. If there is no UI or interaction impact, write "N/A"
+   and explain why.
+
+End the description with `Closes #<issue>` when the PR resolves an issue.
+
+**UI or interaction PRs without screenshots or a recording are rejected by
+default.** Reviewers should request changes or close the PR until one is
+provided. PRs
+missing the problem, goal, or high-level proposal are also not ready for review.
 
 ## Development Model
 
@@ -119,6 +161,40 @@ conversations require file symlink support. If unavailable, preparation reports
 the missing capability and retains existing database/WAL files. Codex history
 and Hermes memory directories use Windows directory junctions without requiring
 file symlink privileges.
+
+Outside mobile, `pnpm typecheck` uses the native TypeScript 7 compiler (`tsc`,
+provided by the `@typescript/native` npm alias). The `typescript` dependency
+aliases `@typescript/typescript6` so ESLint, Next.js builds, and repository
+scripts retain the compatible TypeScript 6 API. Use `tsc6` to check with that
+compiler explicitly. Keep both dependencies when updating the toolchain;
+replacing the API package with TypeScript 7 breaks API consumers.
+Mobile keeps its own TypeScript dependency.
+When removing TS6 compatibility, update the `typescript` peer range in
+`packages/eslint-config/package.json` together with TypeScript API support in
+`typescript-eslint`.
+
+### Editor TypeScript SDK
+
+The compatibility package provides the compiler API but does not include
+`node_modules/typescript/lib/tsserver.js`. An existing workspace SDK selection
+or `typescript.tsdk` setting pointing to `node_modules/typescript/lib` can
+therefore become invalid or fall back to the editor's bundled TypeScript.
+
+To keep TS6 in VS Code with the repository root open:
+
+1. After `pnpm install`, set the SDK directory to
+   `node_modules/@typescript/old/lib`, the real TS6 installation in this
+   repository's pnpm layout. Use `typescript.tsdk`, or `js/ts.tsdk.path` in
+   versions using that setting name. The selected directory must contain
+   `tsserver.js`.
+2. Open a TypeScript file, run **TypeScript: Select TypeScript Version**, and
+   select the workspace version. Confirm TS6 is selected in the language
+   status item. See [VS Code's SDK selection instructions](https://code.visualstudio.com/docs/typescript/typescript-transpiling#_using-newer-typescript-versions).
+
+To use the TS7 language server instead, remove the TS6 SDK override, install
+the [official TypeScript 7 extension](https://marketplace.visualstudio.com/items?itemName=TypeScriptTeam.native-preview),
+and run **TypeScript: Enable TypeScript 7**. The editor language server is
+selected separately from the CLI compiler used by `pnpm typecheck`.
 
 ## Important Rules
 
