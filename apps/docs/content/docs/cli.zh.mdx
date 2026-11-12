@@ -448,6 +448,7 @@ CLI 配置文件包含可代表你访问 Multica 的令牌。不要提交到仓�
 
 | 命令 | 子命令 | 用途 | 关键 flag |
 | --- | --- | --- | --- |
+| `notify` | `config` / `send` / `watch` / `confirm-delivery` | 通过部署 JSON 或协调智能体自身 AGENTS.md 配置的[工作伙伴通知](/workpartner-notifications) | `--config`（`MULTICA_NOTIFY_CONFIG`）、`--target`、`--agents-file`、`send --message-file --event --idempotency-key`、`watch --requirement` 或 `--issue`、`--background` |
 | `auth` | `status` / `logout` | 查看认证状态；`logout` 只删除本地保存的令牌，不吊销服务端令牌 | |
 | `user` | `profile get/update` | 查看或更新当前用户资料 | |
 | `login` | — | 浏览器登录并自动配置全部工作区 | `--token`（不带值时在终端交互式输入） |

@@ -19,6 +19,7 @@ omp
 openclaw
 opencode
 pi
+popo-cli
 qodercli
 qoderclicn
 qwen

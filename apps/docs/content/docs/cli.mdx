@@ -470,6 +470,7 @@ Migration from CSV parsing: replace `--attachment a,b` with `--attachment a --at
 
 | Command | Subcommand | Purpose | Key flags |
 | --- | --- | --- | --- |
+| `notify` | `config` / `send` / `watch` / `confirm-delivery` | [Work partner notifications](/workpartner-notifications) from deployment JSON or the coordinator's AGENTS.md | `--config` (`MULTICA_NOTIFY_CONFIG`), `--target`, `--agents-file`, `send --message-file --event --idempotency-key`, `watch --requirement` or `--issue`, `--background` |
 | `auth` | `status` / `logout` | Check auth status; `logout` only deletes the locally saved token and does not revoke it on the server | |
 | `user` | `profile get/update` | View or update the current user's profile | |
 | `login` | — | Sign in via the browser and configure all workspaces automatically | `--token` (prompts interactively in the terminal when passed without a value) |

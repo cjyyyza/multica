@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "defaultTarget": "project",
+  "appUrl": "https://multica.example",
+  "targets": {
+    "project": {
+      "robotName": "Your work partner",
+      "receiver": "1234567",
+      "atUids": ["person@corp.netease.com"]
+    }
+  }
+}

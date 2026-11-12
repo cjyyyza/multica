@@ -1,0 +1,116 @@
+---
+title: 工作伙伴通知
+description: 通过已连接的 POPO 工作伙伴发送通知，并在对话结束后继续跟踪 Multica 任务。
+---
+
+`multica notify` 与 POPO 工作伙伴、已登录的 POPO CLI 运行在同一环境，三者可与 Multica 一起部署到服务器。通用发送命令 `send` 使用指定工作伙伴的完整名称调用 `popo-cli popo use_robot_send_msg`；独立的 `watch` 进程读取 Multica 状态，复用同一个发送入口通知问题和交付结果。
+
+## 配置工作伙伴
+
+在运行工作伙伴的服务器上安装包含 `notify` 的 Multica CLI，并以通知进程的运行账号登录支持 `use_robot_send_msg`、`userinfo_search` 和 `team_info_query` 的 POPO CLI。工作伙伴及被 @ 的人需已经在目标群中。
+
+服务器部署时，把路由放到独立配置文件，例如 `/etc/multica/notify.json`。Multica 仓库的 AGENTS.md 保留为开发约定，不写入部署目标或个人账号。把示例中的工作伙伴、群号和账号换成该环境的实际值：
+
+```json
+{
+  "version": 1,
+  "defaultTarget": "project",
+  "appUrl": "https://your-multica-app.example",
+  "targets": {
+    "project": {
+      "robotName": "DeepSeek Harness",
+      "receiver": "1234567",
+      "atUids": ["person@corp.netease.com"]
+    },
+    "owner": {
+      "robotName": "DeepSeek Harness",
+      "receiver": "person@corp.netease.com"
+    }
+  }
+}
+```
+
+`receiver` 为群号或 POPO 账号；只有群聊可配置 `atUids`。发送前会按账号精确查询显示名、核对群成员，同时发送可见的 `@显示名` 和真正触发提醒的 `atUids`。不会自动邀请成员或改用其他发送身份。
+
+使用 `--config /etc/multica/notify.json` 或环境变量 `MULTICA_NOTIFY_CONFIG=/etc/multica/notify.json` 选择 JSON 文件。若由 DSH、OpenCode 等工作伙伴管理路由，也可把同一份 JSON 放进**该协调智能体自己的** AGENTS.md 中唯一的 `multica-notify` 代码块，通过 `--agents-file /srv/workpartner/AGENTS.md` 选择。
+
+这两个文件参数互斥；显式参数优先于环境变量。指定文件有误时直接报错，不回退到仓库指令。只有没有文件参数和配置环境变量时，才查找最近的 AGENTS.md；不合并配置。使用 `--target owner` 切换已配置目标。以下命令只检查并显示路由，不访问 POPO：
+
+```bash
+multica notify config --config /etc/multica/notify.json
+```
+
+网页地址可能与 API 地址不同。监听时依次使用 `--app-url`、`MULTICA_APP_URL`、所选配置中的 `appUrl`。凭证放在进程环境中，不写入路由 JSON 或 AGENTS.md。
+
+## 发送问题或其他通知
+
+```bash
+multica notify send --config /etc/multica/notify.json --event question --title "发布窗口确认" --message-file question.txt --url https://your-multica-app.example/team/issues/MUL-123 --idempotency-key MUL-123-question-1
+```
+
+`event` 由调用者定义，完成、询问、构建失败等调用方共用 `Notification` 和 `Sender` 接口。单独发送不要求 Multica 任务 ID 或凭证。正文使用 `--message`、`--message-file`、`--message-stdin` 三选一；Windows 建议读取已有的 UTF-8 文件。文件和标准输入正文保持原文，实际调用 POPO 时统一使用 UTF-8 临时文件和参数数组。
+
+`--dry-run` 只输出目标和消息，不联网、不写投递记录，也不核验登录、显示名和群成员。通用发送超过 CLI 的 3000 字符预算会报错；长内容请提供摘要及链接。
+
+成功回执包含 POPO `messageId`、工作伙伴名称、接收目标和被 @ 的账号。同一个幂等键和相同请求会回放已有回执；同一键下改正文或目标会报错。省略键时按目标和正文自动生成；确需重复发送时使用新的显式键。
+
+## 跟踪 Multica 任务
+
+通知进程的环境需明确提供成员凭证 `MULTICA_SERVER_URL`、`MULTICA_WORKSPACE_ID` 和 `MULTICA_TOKEN`。监听不会读取本机 profile，也不接受随运行结束而过期的任务令牌。若配置中省略 appUrl，需提供 `MULTICA_APP_URL`。服务器上交给进程管理器以前台方式运行：
+
+```bash
+multica notify watch --requirement <需求ID> --config /etc/multica/notify.json --state-dir /var/lib/multica-notify
+multica notify watch --issue MUL-123 --config /etc/multica/notify.json --state-dir /var/lib/multica-notify
+```
+
+每条任务选一种监听。Requirement 创建 Issue 后仍监听 Requirement ID；`--issue` 会拒绝已归属 Requirement 的任务，避免双重通知。
+
+| 观察到的状态 | 通知 |
+| --- | --- |
+| `awaiting_approval` | 方案待批准，去 Multica 决定 |
+| `blocked` | Requirement 的当前具体问题和链接；普通任务发送阻塞提醒 |
+| `in_review` | 执行结果待验收 |
+| `done` | 任务已完成 |
+| `cancelled` | 停止监听，不额外提醒 |
+
+默认每 10 秒读取一次。首次注册会通知当前需要人工处理的状态。新问题或新候选会再次提醒；普通标题、revision 变化不会重复发送。观察到返工后再次送审时会重新提醒。某个 Run 结束不会自动当成 Requirement 已验收。
+
+前台模式由进程管理器持续托管，不依赖 DSH 的某轮对话。服务器需以运行通知服务的同一系统账号完成 POPO CLI 登录，并提供同一配置环境。若 Multica 运行在容器中，通知进程可与工作伙伴一起放在服务器宿主机上，使用可访问的 API 地址；仅仅在同一台服务器，并不会让不同容器自动共享 POPO 登录态。
+
+由协调智能体直接启动独立进程时，可追加 `--background`。启动先核验 Multica 访问权限，在子进程取得监听锁后返回 PID、检查点和日志路径。Windows 使用隐藏进程并要求允许脱离调用者的 Job Object。单独的后台进程不会随服务器重启自动恢复；服务器部署应使用进程管理器，或用固定持久目录调度 `--once`。
+
+## 服务器服务示例
+
+仓库提供 `examples/workpartner-notifications/notify.example.json`、`notify.env.example` 和 Linux systemd 模板 `multica-notify@.service`。把配置复制到仓库以外，填写实际环境值，并把模板的 `User` 改为已登录 POPO 的工作伙伴系统账号，调整两个可执行文件路径。环境文件含成员令牌，只允许服务管理器读取。
+
+```bash
+sudo install -d /etc/multica
+sudo install -m 0644 examples/workpartner-notifications/notify.example.json /etc/multica/notify.json
+sudo install -m 0600 examples/workpartner-notifications/notify.env.example /etc/multica/notify.env
+# Edit the deployed files and service User/executable paths before enabling.
+sudo install -m 0644 examples/workpartner-notifications/multica-notify@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now multica-notify@<需求ID>.service
+```
+
+每个实例监听一个 Requirement。systemd 保留状态目录并在进程异常退出时重启；正常进入 `done` 或 `cancelled` 后不会重启。服务重启仍受 unknown 投递记录保护，不会重复发送。其他进程管理器（包括 Windows 服务宿主）使用相同的前台命令，不在服务内使用 `--background`。模板默认用独立 JSON；若要读取工作伙伴自己的 AGENTS.md，在服务命令上显式加 `--agents-file` 即可。
+
+可把下面这条规则放到协调智能体自己的 AGENTS.md，不改 Multica 仓库开发指令：
+
+> 创建或找回 Multica Requirement 后，确保使用主机部署配置注册了一个通知监听。已有进程管理器托管的监听则复用，否则在结束当前轮次前启动独立后台监听。报告启动错误并保留日志路径。监听状态以外的显式询问使用 `notify send` 和稳定的通知键，不手动重复发送监听已负责的事件。答复、批准和验收在 Multica 完成。
+
+同一任务和目标不要同时启用另一条 POPO 桥接通知。这个通知器只负责出站，群里回复不会自动写回 Multica；已有协调流程可在获得用户答复和权限后调用正式答复接口。
+
+## 状态与恢复
+
+默认记录位于用户配置目录的 `multica/notifications/<配置路径哈希>/`；`--state-dir` 可指定其他持久目录。记录包含路由、消息正文和回执，不包含 Multica 凭证。重启时保留这些文件，删除或换目录可能造成重复发送。配置在启动时读取；修改路由前先停止返回的 PID，再启动新监听。
+
+同一服务器、工作区、来源、配置和目标只允许一个本机监听持有锁。用相同参数重启会接续检查点。明确拒绝或发送前检查失败时，修复原因后重跑原命令。Multica 只读轮询会重试网络、HTTP 429 和 5xx 故障；认证、权限或响应契约错误会停止并记入日志。
+
+如果 POPO 可能已发送但回执丢失，记录保持 `unknown`，发送中崩溃也按此处理，不自动重发。按错误中的路径检查投递记录，去配置的 POPO 目标确认原消息后，录入实际消息 ID：
+
+```bash
+multica notify confirm-delivery <记录中的key> --message-id <核验过的POPO消息ID> --config /etc/multica/notify.json --state-dir /var/lib/multica-notify
+```
+
+该命令只更新本地回执，不发送消息，也不执行答复、批准或验收。重新运行监听会按已有回执清除待发检查点。无法确认送达时保留未知记录，由操作者决定是否用新键重发；新键可能造成重复消息。

@@ -1,0 +1,116 @@
+---
+title: Work partner notifications
+description: Send POPO notices as a connected work partner and follow Multica tasks after its conversation ends.
+---
+
+`multica notify` runs in the same environment as the POPO work partner and its logged-in POPO CLI. Multica, the work partner and the notification process can all run on a server. Its generic `send` command calls `popo-cli popo use_robot_send_msg` with an exact work partner name. A separate `watch` process reads Multica states and uses the same sender for questions and delivery notices.
+
+## Configure the work partner
+
+Install a Multica CLI containing `notify` and a logged-in POPO CLI supporting `use_robot_send_msg`, `userinfo_search` and `team_info_query`. The configured partner and mentioned people must already be in the destination group.
+
+For server deployment, put the routing in an external JSON file such as `/etc/multica/notify.json`. The repository's AGENTS.md remains a coding-instructions file; do not put deployment destinations or accounts there. Replace the example values with your deployment's work partner, group and accounts:
+
+```json
+{
+  "version": 1,
+  "defaultTarget": "project",
+  "appUrl": "https://your-multica-app.example",
+  "targets": {
+    "project": {
+      "robotName": "DeepSeek Harness",
+      "receiver": "1234567",
+      "atUids": ["person@corp.netease.com"]
+    },
+    "owner": {
+      "robotName": "DeepSeek Harness",
+      "receiver": "person@corp.netease.com"
+    }
+  }
+}
+```
+
+`receiver` is a numeric group ID or a POPO account. `atUids` contains real POPO accounts and is supported only for groups. Before sending a mention, the CLI resolves the exact account's display name and checks group membership. It sends both the visible `@display name` and protocol-level `atUids`. It does not invite people or choose another sending identity.
+
+Select the JSON file with `--config /etc/multica/notify.json` or `MULTICA_NOTIFY_CONFIG=/etc/multica/notify.json`. For DSH or OpenCode configuration owned by the work partner, the same JSON may instead live in exactly one `multica-notify` fence in **that coordinator's own** AGENTS.md; select it with `--agents-file /srv/workpartner/AGENTS.md`. The two file flags are mutually exclusive. An explicit flag overrides the environment, and an invalid selected file fails without falling back to repository instructions. Only when neither a file flag nor the environment is supplied does the CLI search for the nearest AGENTS.md. Configuration files are never merged.
+
+Use `--target owner` to choose another configured destination. Validate routing without contacting POPO:
+
+```bash
+multica notify config --config /etc/multica/notify.json
+```
+
+The app URL is the browser-facing base URL, which may differ from the API server. Watch resolution is `--app-url`, then `MULTICA_APP_URL`, then `appUrl` in the selected configuration. Credentials belong in the process environment, never the routing JSON or AGENTS.md.
+
+## Send a question or any other notice
+
+```bash
+multica notify send --config /etc/multica/notify.json --event question --title "Release window" --message-file question.txt --url https://your-multica-app.example/team/issues/MUL-123 --idempotency-key MUL-123-question-1
+```
+
+`event` is a caller-defined string. Completion, questions, build failures and other callers share the same `Notification` and `Sender` interface; no task ID or Multica credential is required for a standalone send. The body supports `--message`, `--message-file` or `--message-stdin`. On Windows, prefer an existing UTF-8 file. File/stdin content is preserved, and the POPO invocation always uses UTF-8 temporary files and argument vectors.
+
+`--dry-run` prints the target and notification without network calls or delivery writes; it does not verify POPO login, mention names or group membership. Notifications exceeding the CLI's 3000-character budget are rejected. Send a summary and link for longer content.
+
+The result contains the confirmed POPO `messageId`, work partner name, receiver and mention accounts. Repeating the same idempotency key and request replays that receipt; changing the body or target under an existing key fails. If the key is omitted, it is derived from the target and content. Use a new explicit key for an intentional repeat.
+
+## Follow a Multica task
+
+Provide `MULTICA_SERVER_URL`, `MULTICA_WORKSPACE_ID` and `MULTICA_TOKEN` as explicit member credentials in the notification process's environment. The watcher never loads profile credentials and rejects execution task tokens, which expire when their Run ends. Supply `MULTICA_APP_URL` if appUrl is absent from the selected configuration. Run in the foreground under the server's process manager:
+
+```bash
+multica notify watch --requirement <requirement-id> --config /etc/multica/notify.json --state-dir /var/lib/multica-notify
+multica notify watch --issue MUL-123 --config /etc/multica/notify.json --state-dir /var/lib/multica-notify
+```
+
+Choose one command per task. Watch a Requirement through its Requirement ID, including after it creates an Issue. A Requirement-owned Issue is rejected by `--issue` to prevent a second notification stream.
+
+| Observed state | Notification |
+| --- | --- |
+| `awaiting_approval` | Candidate ready; approve in Multica |
+| `blocked` | Requirement's current question and Multica link, or a general blocker notice for a standalone Issue |
+| `in_review` | Delivery ready for human review in Multica |
+| `done` | Task completed |
+| `cancelled` | Stop watching without an extra notice |
+
+The default poll interval is 10 seconds. The current actionable state is notified on first registration. A new question or approval candidate gets another notice; ordinary title/revision changes do not. An observed rework cycle can produce a new review notice. A completed Run alone never means the Requirement is reviewed or accepted.
+
+Foreground mode keeps the notification process under its supervisor, independently of DSH conversation lifetime. The server needs the POPO CLI authenticated under the same OS account and configuration used by the service. If Multica runs in a container, the notifier can run alongside the work partner on the server host using a reachable API URL; placing them on the same physical server alone does not share a POPO login between containers.
+
+For a coordinator-started detached watcher, add `--background`. Startup validates Multica access and returns a PID, checkpoint and log path after the child acquires its watch lock. Windows uses a hidden detached process and requires permission to break away from the caller's Job Object. A detached process alone does not restart after a host reboot; a server deployment should use its process manager or scheduling with `--once` and the same durable state directory.
+
+## Server service example
+
+The repository includes `examples/workpartner-notifications/notify.example.json`, `notify.env.example` and a Linux systemd template `multica-notify@.service`. Copy and edit the JSON and environment file outside the checkout. Configure the template's `User` to the work partner's existing logged-in OS account and adjust both executable paths to the server installation. The environment file contains the member token and should be readable only by the service manager.
+
+```bash
+sudo install -d /etc/multica
+sudo install -m 0644 examples/workpartner-notifications/notify.example.json /etc/multica/notify.json
+sudo install -m 0600 examples/workpartner-notifications/notify.env.example /etc/multica/notify.env
+# Edit the deployed files and service User/executable paths before enabling.
+sudo install -m 0644 examples/workpartner-notifications/multica-notify@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now multica-notify@<requirement-id>.service
+```
+
+Each instance watches one Requirement. systemd retains the state directory and restarts a failed process; a normal `done` or `cancelled` exit does not restart it. Unknown delivery records still prevent a resend after a service restart. Run the command in the foreground for other supervisors, including Windows service hosts; do not use `--background` inside a supervised service. The supplied template uses deployment-owned JSON. To use the work partner's own AGENTS.md instead, add its explicit `--agents-file` to the service command.
+
+Add this instruction to the coordinator's own AGENTS.md, without changing Multica's repository instructions:
+
+> After creating or recovering a Multica Requirement, ensure one notification watch is registered using the host's deployed configuration. Reuse its supervisor-managed watch when present; otherwise start a detached watch before ending the turn. Report startup errors and retain the returned log path. For an explicit question outside the watched lifecycle, use `notify send` with a stable notification key. Do not manually duplicate a watcher's event. Humans answer, approve and accept in Multica.
+
+Do not also enable another POPO notification bridge for the same task and destination. Replies in the POPO group are not automatically ingested by this outbound notifier. Existing authorized coordination can still forward an answer through the proper Multica reply API.
+
+## State and recovery
+
+Delivery receipts and watch checkpoints live under the user's configuration directory in `multica/notifications/<config-path-hash>/`. `--state-dir` selects a durable directory explicitly. These records contain routing and message content, not Multica credentials. Keep them across restarts; deleting or changing the state directory can resend notices. Target/config snapshots are loaded at startup; stop the returned PID before changing a route and starting its replacement.
+
+Only one watcher per server, workspace, source, config and target can hold its local lock. Re-running with the same config resumes its checkpoint. After a confirmed POPO rejection or preflight failure, fix the cause and re-run the same command. Multica read-only polls retry network outages, HTTP 429 and 5xx; authentication, access and contract errors stop with an error in the log.
+
+If POPO might have accepted a message but the response was lost, the delivery is `unknown`. A crash during the send has the same treatment. It is not automatically resent. Inspect the delivery record named in the error, verify the message in the configured POPO destination, then record its actual message ID:
+
+```bash
+multica notify confirm-delivery <key-from-record> --message-id <verified-popo-message-id> --config /etc/multica/notify.json --state-dir /var/lib/multica-notify
+```
+
+This command updates only the local receipt. It does not send, answer, approve or accept anything. Re-run the watch to clear its pending checkpoint using that receipt. If delivery cannot be confirmed, keep the unknown record and make an explicit resend decision; a new key may cause a duplicate.

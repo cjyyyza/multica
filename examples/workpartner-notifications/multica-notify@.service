@@ -1,0 +1,18 @@
+[Unit]
+Description=Multica work partner notifications for requirement %i
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=multica
+EnvironmentFile=/etc/multica/notify.env
+StateDirectory=multica-notify
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/multica-notify
+ExecStart=/usr/local/bin/multica notify watch --requirement %i --state-dir /var/lib/multica-notify --popo-cli /usr/local/bin/popo-cli
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

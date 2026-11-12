@@ -11,6 +11,8 @@ POPO 通过 Windows 上的 DJ01Bot TypeScript 桥接程序接入 Multica，复�
 
 ## 开始之前
 
+通过 POPO **连接智能体** 接入 DSH、OpenCode 等工作伙伴时，可使用[工作伙伴通知](/workpartner-notifications)：在部署 JSON 或协调智能体自己的 AGENTS.md 配置目标，调用 `use_robot_send_msg` 主动通知。它独立运行于本页介绍的 DJ01Bot 通道之外。
+
 - 工作区 owner 或 admin 在 Multica 创建一次性配对码。
 - Windows 上已安装 DJ01Bot TypeScript 版本和 Node.js 22.5 或更新版本。在 DJ01Bot 根目录执行 `npm --prefix ts ci` 和 `npm --prefix ts run build`。
 - 自托管需设置 `MULTICA_POPO_ENABLED=true`。
