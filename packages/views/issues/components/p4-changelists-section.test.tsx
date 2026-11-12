@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { createQueryClient } from "@multica/core/query-client";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { P4Changelist, P4ChangelistStatus, ProjectResource } from "@multica/core/types";
 import enCommon from "../../locales/en/common.json";
@@ -13,6 +14,8 @@ const apiMock = vi.hoisted(() => ({
   linkIssueP4Changelist: vi.fn(),
   unlinkIssueP4Changelist: vi.fn(),
   listProjectResources: vi.fn(),
+  requestIssueP4Content: vi.fn(),
+  getIssueP4Content: vi.fn(),
 }));
 vi.mock("@multica/core/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/api")>()),
@@ -67,7 +70,7 @@ function depot(port: string, path = "//depot/game"): ProjectResource {
 }
 
 function renderSection(projectId: string | null = "project-1") {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const qc = createQueryClient();
   return render(
     <QueryClientProvider client={qc}>
       <I18nProvider resources={TEST_RESOURCES} locale="en">
@@ -84,6 +87,78 @@ describe("P4ChangelistsSection", () => {
     apiMock.unlinkIssueP4Changelist.mockReset().mockResolvedValue(undefined);
     apiMock.listProjectResources.mockReset().mockResolvedValue({ resources: [depot("perforce.example.com:1666")] });
     copyText.mockReset().mockResolvedValue(true);
+    apiMock.requestIssueP4Content.mockReset().mockImplementation((_issue, _cl, file) => Promise.resolve({
+      id: "content-1", status: "completed", result: {
+        source: "shelf", files: [
+          { depot_path: "//depot/game/A.cpp", action: "edit", type: "text", revision: 2 },
+          { depot_path: "//depot/game/Map.uasset", action: "add", type: "binary+l", revision: 1 },
+        ], file, diff: file.endsWith("A.cpp") ? "@@ -1 +1 @@\n-old\n+new\n" : "", binary: file.endsWith(".uasset"), truncated: false, unavailable: "",
+      },
+    }));
+    apiMock.getIssueP4Content.mockReset();
+  });
+
+  it("loads files on demand, displays a text diff and switches to a binary file", async () => {
+    apiMock.listIssueP4Changelists.mockResolvedValue({ changelists: [changelist()] });
+    renderSection();
+    const opener = await screen.findByRole("button", { name: "CL 795095" });
+    expect(apiMock.requestIssueP4Content).not.toHaveBeenCalled();
+    fireEvent.click(opener);
+    expect(await screen.findByRole("dialog", { name: "CL 795095" })).toBeInTheDocument();
+    expect(await screen.findByText("+new")).toBeInTheDocument();
+    expect(screen.getByText("-old")).toBeInTheDocument();
+    expect(screen.getByText("Shelved changes")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Map.uasset/ }));
+    expect(await screen.findByText("Binary file. Text diff is not available.")).toBeInTheDocument();
+    expect(screen.queryByText("+new")).not.toBeInTheDocument();
+  });
+
+  it("opens from the file count and lets a failed read be retried", async () => {
+    apiMock.listIssueP4Changelists.mockResolvedValue({ changelists: [changelist()] });
+    apiMock.requestIssueP4Content.mockRejectedValueOnce(new Error("daemon offline"));
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "2 files" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("updated daemon");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("+new")).toBeInTheDocument();
+  });
+
+  it.each(["refresh", "reopen"] as const)("reloads cached files on %s with the production QueryClient", async (action) => {
+    let version = 1;
+    apiMock.listIssueP4Changelists.mockResolvedValue({ changelists: [changelist()] });
+    apiMock.requestIssueP4Content.mockImplementation((_issue, _cl, file) => Promise.resolve({
+      id: "content-1", status: "completed", result: {
+        source: "shelf",
+        files: (version === 1 ? ["A.cpp", "B.cpp"] : ["A.cpp", "B.cpp", "C.cpp"]).map((name) => ({
+          depot_path: `//depot/game/${name}`, action: "edit", type: "text", revision: version,
+        })),
+        file, diff: file ? `@@ -0,0 +1 @@\n+${file.split("/").pop()}-v${version}\n` : "",
+        binary: false, truncated: false, unavailable: "",
+      },
+    }));
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "CL 795095" }));
+    expect(await screen.findByText("+A.cpp-v1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /B\.cpp/ }));
+    expect(await screen.findByText("+B.cpp-v1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /A\.cpp/ }));
+    expect(await screen.findByText("+A.cpp-v1")).toBeInTheDocument();
+
+    version = 2;
+    if (action === "refresh") {
+      const refresh = screen.getByRole("button", { name: "Refresh changelist" });
+      await waitFor(() => expect(refresh).toBeEnabled());
+      fireEvent.click(refresh);
+    } else {
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "CL 795095" }));
+    }
+
+    expect(await screen.findByRole("button", { name: /C\.cpp/ })).toBeInTheDocument();
+    expect(await screen.findByText("+A.cpp-v2")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /B\.cpp/ }));
+    expect(await screen.findByText("+B.cpp-v2")).toBeInTheDocument();
   });
 
   it("stays hidden for an issue that is neither on a Perforce project nor carries changelists", async () => {

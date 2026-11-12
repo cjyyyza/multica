@@ -30,6 +30,7 @@ import type {
   ProjectResource,
 } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
+import { Dialog, DialogTrigger } from "@multica/ui/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -60,6 +61,7 @@ import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
 import { p4DepotLabel } from "../../common/p4-depot";
+import { P4ChangelistContentDialog } from "./p4-changelist-content-dialog";
 
 type IssuesT = ReturnType<typeof useT<"issues">>["t"];
 
@@ -254,6 +256,7 @@ export function P4ChangelistsSection({
 
 function ChangelistCard({ issueId, changelist }: { issueId: string; changelist: P4Changelist }) {
   const { t } = useT("issues");
+  const [contentOpen, setContentOpen] = useState(false);
   const cfg = STATUS_ICON[changelist.status];
   const StatusIcon = cfg.icon;
   const renumbered =
@@ -266,56 +269,61 @@ function ChangelistCard({ issueId, changelist }: { issueId: string; changelist: 
   const warnings = changelistWarnings(changelist, t);
 
   return (
-    <div data-testid="p4-changelist-card" className="rounded-md border border-border px-2 py-1.5">
-      <div className="flex items-center gap-1.5">
-        <StatusIcon className={cn("size-3.5 shrink-0", cfg.className)} />
-        <span className="truncate text-caption font-medium tabular-nums" title={renumbered}>
-          {t(($) => $.p4.changelist, { number: changelist.number })}
-        </span>
-        <span className="shrink-0 text-micro text-muted-foreground">
-          {statusLabel(changelist.status, t)}
-        </span>
-        <CopyNumberButton number={changelist.number} />
-        <ChangelistMenu issueId={issueId} changelist={changelist} />
-      </div>
-      <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-micro text-muted-foreground tabular-nums">
-        <span>{t(($) => $.p4.files_count, { count: changelist.files_count })}</span>
-        {changelist.swarm_review_number ? (
-          <>
-            <span aria-hidden="true" className="text-faint-foreground">
-              ·
-            </span>
-            {changelist.swarm_review_url ? (
-              <a
-                href={changelist.swarm_review_url}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="underline decoration-border underline-offset-2 hover:text-foreground hover:decoration-foreground"
-              >
-                {t(($) => $.p4.swarm_review, { number: changelist.swarm_review_number })}
-              </a>
-            ) : (
-              <span>{t(($) => $.p4.swarm_review, { number: changelist.swarm_review_number })}</span>
-            )}
-            {changelist.swarm_review_state ? (
-              <span>{swarmStateLabel(changelist.swarm_review_state, t)}</span>
-            ) : null}
-          </>
+    <Dialog open={contentOpen} onOpenChange={setContentOpen}>
+      <div data-testid="p4-changelist-card" className="rounded-md border border-border px-2 py-1.5">
+        <div className="flex items-center gap-1.5">
+          <StatusIcon className={cn("size-3.5 shrink-0", cfg.className)} />
+          <DialogTrigger render={<button type="button" className="truncate rounded-xs text-caption font-medium tabular-nums outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" title={renumbered} />}>
+            {t(($) => $.p4.changelist, { number: changelist.number })}
+          </DialogTrigger>
+          <span className="shrink-0 text-micro text-muted-foreground">
+            {statusLabel(changelist.status, t)}
+          </span>
+          <CopyNumberButton number={changelist.number} />
+          <ChangelistMenu issueId={issueId} changelist={changelist} />
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-micro text-muted-foreground tabular-nums">
+          <DialogTrigger render={<button type="button" className="flex items-center gap-0.5 rounded-xs outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring" />}>
+            {t(($) => $.p4.files_count, { count: changelist.files_count })}<ChevronRight className="size-3" />
+          </DialogTrigger>
+          {changelist.swarm_review_number ? (
+            <>
+              <span aria-hidden="true" className="text-faint-foreground">
+                ·
+              </span>
+              {changelist.swarm_review_url ? (
+                <a
+                  href={changelist.swarm_review_url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="underline decoration-border underline-offset-2 hover:text-foreground hover:decoration-foreground"
+                >
+                  {t(($) => $.p4.swarm_review, { number: changelist.swarm_review_number })}
+                </a>
+              ) : (
+                <span>{t(($) => $.p4.swarm_review, { number: changelist.swarm_review_number })}</span>
+              )}
+              {changelist.swarm_review_state ? (
+                <span>{swarmStateLabel(changelist.swarm_review_state, t)}</span>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+        {warnings.length > 0 ? (
+          <ul className="mt-1.5 rounded-md bg-muted/70 px-2 py-1 text-micro">
+            {warnings.map((warning) => (
+              <li key={warning.key} className="flex items-center gap-1.5 py-px">
+                <TriangleAlert className="size-3 shrink-0 text-amber-600 dark:text-amber-400" />
+                <span className="truncate" title={warning.files.join("\n") || undefined}>
+                  {warning.label}
+                </span>
+              </li>
+            ))}
+          </ul>
         ) : null}
       </div>
-      {warnings.length > 0 ? (
-        <ul className="mt-1.5 rounded-md bg-muted/70 px-2 py-1 text-micro">
-          {warnings.map((warning) => (
-            <li key={warning.key} className="flex items-center gap-1.5 py-px">
-              <TriangleAlert className="size-3 shrink-0 text-amber-600 dark:text-amber-400" />
-              <span className="truncate" title={warning.files.join("\n") || undefined}>
-                {warning.label}
-              </span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
+      {contentOpen ? <P4ChangelistContentDialog issueId={issueId} changelist={changelist} /> : null}
+    </Dialog>
   );
 }
 

@@ -4666,6 +4666,11 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp.PendingUpdate != nil {
 		go d.handleUpdate(ctx, runtimeID, resp.PendingUpdate)
 	}
+	if resp.PendingP4Content != nil {
+		if rt := d.findRuntime(runtimeID); rt != nil {
+			go d.handleP4Content(ctx, *rt, resp.PendingP4Content.ID)
+		}
+	}
 	if resp.PendingModelList != nil {
 		if rt := d.findRuntime(runtimeID); rt != nil {
 			go d.handleModelList(ctx, *rt, resp.PendingModelList.ID)

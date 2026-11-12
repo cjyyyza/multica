@@ -91,7 +91,11 @@ multica p4 swarm link --port perforce.example.com:1666 --depot //depot/project -
 
 ## 任务上的 changelist
 
-任务详情的 Perforce changelist 区域支持按编号手动关联和取消关联。Agent 也可以在任务中显式关联原生 CL：
+任务详情的 Perforce changelist 区域支持按编号手动关联和取消关联。
+
+点击 CL 编号或文件数，可查看文件列表和文本差异。有搁置版本时显示该版本，提交后显示已提交版本，未搁置时读取本地工作副本。本地工作文件仅机器所有者可见。二进制文件仅显示文件信息；较大的差异会标明截断。读取需要已更新且在线的守护进程，并能访问项目配置的 Perforce 服务器。
+
+Agent 也可以在任务中显式关联原生 CL：
 
 ```bash
 multica p4 changelist link --changelist 12345

@@ -219,6 +219,7 @@ import type {
   IssueP4ChangelistsResponse,
   LinkIssueP4ChangelistRequest,
   P4Changelist,
+  P4ContentRequest,
   ListGitHubInstallationsResponse,
   ListGitHubRepositoriesResponse,
   GitHubConnectResponse,
@@ -522,6 +523,8 @@ import {
   EMPTY_P4_CHANGELIST,
   IssueP4ChangelistsResponseSchema,
   P4ChangelistSchema,
+  P4ContentRequestSchema,
+  EMPTY_P4_CONTENT_REQUEST,
   ResourceLabelsResponseSchema,
   EMPTY_LABEL,
   EMPTY_LIST_LABELS_RESPONSE,
@@ -5290,6 +5293,26 @@ export class ApiClient {
   }
 
   // Perforce changelists linked to an issue
+  async requestIssueP4Content(issueId: string, changelistId: string, file: string, signal?: AbortSignal): Promise<P4ContentRequest> {
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${encodeURIComponent(issueId)}/p4-changelists/${encodeURIComponent(changelistId)}/content`,
+      { method: "POST", body: JSON.stringify({ file }), signal },
+    );
+    return parseWithFallback(raw, P4ContentRequestSchema, EMPTY_P4_CONTENT_REQUEST, {
+      endpoint: "POST /api/issues/:id/p4-changelists/:clId/content",
+    });
+  }
+
+  async getIssueP4Content(issueId: string, changelistId: string, requestId: string, signal?: AbortSignal): Promise<P4ContentRequest> {
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${encodeURIComponent(issueId)}/p4-changelists/${encodeURIComponent(changelistId)}/content/${encodeURIComponent(requestId)}`,
+      { signal },
+    );
+    return parseWithFallback(raw, P4ContentRequestSchema, EMPTY_P4_CONTENT_REQUEST, {
+      endpoint: "GET /api/issues/:id/p4-changelists/:clId/content/:requestId",
+    });
+  }
+
   async listIssueP4Changelists(issueId: string): Promise<IssueP4ChangelistsResponse> {
     const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/p4-changelists`);
     return parseWithFallback(

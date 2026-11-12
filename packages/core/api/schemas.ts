@@ -64,6 +64,7 @@ import type {
   IssuePullRequestsResponse,
   P4Changelist,
   IssueP4ChangelistsResponse,
+  P4ContentRequest,
   InboxItem,
   InboxWorkspaceUnread,
   IssueUnread,
@@ -514,6 +515,34 @@ export const P4ChangelistSchema = z.object({
 export const IssueP4ChangelistsResponseSchema = z.object({
   changelists: z.array(P4ChangelistSchema).optional().default([]).catch([]),
 }).loose();
+
+export const P4ChangelistFileSchema = z.object({
+  depot_path: z.string().min(1),
+  action: z.string().optional().default("").catch(""),
+  type: z.string().optional().default("").catch(""),
+  revision: z.number().int().nonnegative().optional().default(0).catch(0),
+}).loose();
+
+export const P4ChangelistContentSchema = z.object({
+  source: z.enum(["shelf", "submitted", "workspace", "unknown"]).optional().default("unknown").catch("unknown"),
+  files: z.array(P4ChangelistFileSchema).optional().default([]).catch([]),
+  file: z.string().optional().default("").catch(""),
+  diff: z.string().optional().default("").catch(""),
+  binary: z.boolean().optional().default(false).catch(false),
+  truncated: z.boolean().optional().default(false).catch(false),
+  unavailable: z.string().optional().default("").catch(""),
+}).loose();
+
+export const P4ContentRequestSchema = z.object({
+  id: z.string(),
+  status: z.enum(["pending", "running", "completed", "failed"]).catch("failed"),
+  result: P4ChangelistContentSchema.nullable().optional().default(null).catch(null),
+  error: z.string().optional().default("").catch(""),
+}).loose();
+
+export const EMPTY_P4_CONTENT_REQUEST: P4ContentRequest = {
+  id: "", status: "failed", result: null, error: "Could not read changelist content",
+};
 
 export const EMPTY_P4_CHANGELIST: P4Changelist = {
   id: "",

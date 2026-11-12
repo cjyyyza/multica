@@ -391,4 +391,7 @@ export type {
   P4ChangelistWarning,
   IssueP4ChangelistsResponse,
   LinkIssueP4ChangelistRequest,
+  P4ChangelistFile,
+  P4ChangelistContent,
+  P4ContentRequest,
 } from "./p4";

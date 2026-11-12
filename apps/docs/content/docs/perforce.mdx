@@ -91,7 +91,11 @@ In a bound workspace, Swarm commands may omit `--port`, `--depot`, and `--stream
 
 ## Changelists on an issue
 
-The issue's Perforce changelist section supports manual linking and unlinking by number. An agent can explicitly associate a native CL without leaving the task:
+The issue's Perforce changelist section supports manual linking and unlinking by number.
+
+Select a CL number or file count to browse its files and text diffs. The viewer uses the shelved snapshot when one exists, the submitted revision after submission, and the local working copy for unshelved changes. Local working files are visible only to the machine owner. Binary files are listed without a text diff; large diffs show a truncation notice. Reading requires an updated, online daemon with access to the configured Perforce server.
+
+An agent can explicitly associate a native CL without leaving the task:
 
 ```bash
 multica p4 changelist link --changelist 12345

@@ -1626,6 +1626,9 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if ack.PendingModelList != nil {
 		resp["pending_model_list"] = ack.PendingModelList
 	}
+	if ack.PendingP4Content != nil {
+		resp["pending_p4_content"] = ack.PendingP4Content
+	}
 	if ack.PendingLocalSkills != nil {
 		resp["pending_local_skills"] = ack.PendingLocalSkills
 	}
@@ -1812,6 +1815,16 @@ func (h *Handler) processHeartbeat(ctx context.Context, runtimeID string, suppor
 		RuntimeID:          runtimeID,
 		Status:             "ok",
 		ServerCapabilities: []string{protocol.DaemonCapabilityRPCV1},
+	}
+	if h.P4ContentStore != nil {
+		probeCtx, cancel := context.WithTimeout(ctx, heartbeatHasPendingTimeout)
+		pending, err := h.P4ContentStore.HasPending(probeCtx, runtimeID)
+		cancel()
+		if err == nil && pending {
+			if req, err := h.P4ContentStore.PopPending(ctx, runtimeID); err == nil && req != nil {
+				ack.PendingP4Content = &protocol.DaemonHeartbeatPendingP4Content{ID: req.ID}
+			}
+		}
 	}
 
 	probeUpdateCtx, cancelProbeUpdate := context.WithTimeout(ctx, heartbeatHasPendingTimeout)

@@ -213,6 +213,7 @@ func daemonCommonCapabilities() []string {
 		protocol.DaemonCapabilityPlanModeV1,
 		protocol.DaemonCapabilityWorkflowStatusRulesV1,
 		protocol.DaemonCapabilityCLICommentSteerV1,
+		protocol.DaemonCapabilityP4ContentV1,
 	}
 }
 

@@ -517,6 +517,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	if rdb != nil {
 		h.UpdateStore = handler.NewRedisUpdateStore(rdb)
 		h.ModelListStore = handler.NewRedisModelListStore(rdb)
+		h.P4ContentStore = handler.NewP4ContentStore(rdb)
 		h.ModelCatalogCache = handler.NewRedisModelCatalogCache(rdb)
 		h.LocalSkillListStore = handler.NewRedisLocalSkillListStore(rdb)
 		h.LocalSkillImportStore = handler.NewRedisLocalSkillImportStore(rdb)
@@ -1741,6 +1742,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Get("/p4/changelists/open", h.ListOpenP4ChangelistsForDaemon)
 		r.Post("/p4/changelists/{changelistId}/claim", h.ClaimP4ChangelistPoll)
 		r.Post("/p4/changelists/status", h.UpdateP4ChangelistStatuses)
+		r.Get("/runtimes/{runtimeId}/p4-content/{requestId}", h.GetDaemonP4ContentContext)
+		r.Post("/runtimes/{runtimeId}/p4-content/{requestId}/result", h.ReportP4ContentResult)
 
 		r.Post("/workspaces/{workspaceId}/issues/gc-check", h.BatchIssueGCCheck)
 		r.Get("/issues/{issueId}/gc-check", h.GetIssueGCCheck)
@@ -2299,6 +2302,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/pull-requests", h.ListPullRequestsForIssue)
 					r.Post("/swarm-reviews", h.UpsertSwarmReviewForIssue)
 					r.Get("/p4-changelists", h.ListP4ChangelistsForIssue)
+					r.Post("/p4-changelists/{changelistId}/content", h.RequestIssueP4Content)
+					r.Get("/p4-changelists/{changelistId}/content/{requestId}", h.GetIssueP4Content)
 					r.Post("/p4-changelists", h.LinkIssueP4Changelist)
 					r.Delete("/p4-changelists/{changelistId}", h.UnlinkIssueP4Changelist)
 					r.Post("/pull-requests", h.LinkIssuePullRequest)

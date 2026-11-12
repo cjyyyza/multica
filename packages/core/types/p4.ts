@@ -48,3 +48,27 @@ export interface LinkIssueP4ChangelistRequest {
   /** P4PORT; optional when the issue's project has exactly one depot. */
   port?: string;
 }
+
+export interface P4ChangelistFile {
+  depot_path: string;
+  action: string;
+  type: string;
+  revision: number;
+}
+
+export interface P4ChangelistContent {
+  source: "shelf" | "submitted" | "workspace" | "unknown";
+  files: P4ChangelistFile[];
+  file: string;
+  diff: string;
+  binary: boolean;
+  truncated: boolean;
+  unavailable: string;
+}
+
+export interface P4ContentRequest {
+  id: string;
+  status: "pending" | "running" | "completed" | "failed";
+  result: P4ChangelistContent | null;
+  error: string;
+}
