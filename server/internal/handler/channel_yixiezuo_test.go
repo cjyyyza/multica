@@ -175,7 +175,8 @@ func TestPopoYixiezuoImportKeepsP4ProjectAndNativeTaskControls(t *testing.T) {
 		t.Fatalf("native task comment did not return to the originating chat: %s", replies)
 	}
 	// Assignment is a separate, explicit user action through the native API.
-	dbfx.Exec(t, `UPDATE agent SET runtime_id=$1 WHERE id=$2`, testRuntimeID, e.agentID)
+	runtimeID := dbfx.Runtime(t, "UE integration runtime", testutil.Cols{"daemon_id": "ue-integration"})
+	dbfx.Exec(t, `UPDATE agent SET runtime_id=$1 WHERE id=$2`, runtimeID, e.agentID)
 	testutil.Call(t, testHandler.UpdateIssue, withURLParam(newRequest("PUT", "/api/issues/"+uuidToString(issue.ID), map[string]any{"assignee_type": "agent", "assignee_id": e.agentID}), "id", uuidToString(issue.ID))).Want(200)
 	var claim struct {
 		Task *struct {
@@ -184,8 +185,8 @@ func TestPopoYixiezuoImportKeepsP4ProjectAndNativeTaskControls(t *testing.T) {
 			P4Depots []P4DepotData `json:"p4_depots"`
 		} `json:"task"`
 	}
-	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+testRuntimeID+"/claim", nil, testWorkspaceID, "ue-integration")
-	testutil.Call(t, testHandler.ClaimTaskByRuntime, withURLParam(req, "runtimeId", testRuntimeID)).Want(200).JSON(&claim)
+	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, "ue-integration")
+	testutil.Call(t, testHandler.ClaimTaskByRuntime, withURLParam(req, "runtimeId", runtimeID)).Want(200).JSON(&claim)
 	if claim.Task == nil || claim.Task.IssueID != uuidToString(issue.ID) || len(claim.Task.P4Depots) != 1 || claim.Task.P4Depots[0].Depot != "//depot/UE" || claim.Task.P4Depots[0].Changelist != "1234" {
 		t.Fatalf("P4 project did not reach claimed run: %+v", claim.Task)
 	}

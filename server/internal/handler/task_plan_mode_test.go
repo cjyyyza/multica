@@ -346,7 +346,7 @@ func TestExecuteClaimAndTaskTokenBehaviorUnchanged(t *testing.T) {
 	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Execute regression agent")
 	dbfx.Exec(t, `UPDATE agent SET mcp_config = '{"mcpServers":{"private":{"url":"https://private.example"}}}' WHERE id = $1`, agentID)
 	taskID := seedQueuedIssueTask(t, ctx, agentID, runtimeID, issueID)
-	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, "execute-regression")
+	req := newRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil)
 	req = withURLParam(req, "runtimeId", runtimeID)
 	claimed, _ := claimPlanResponse(t, req)
 	if claimed.ID != taskID || claimed.Mode != taskpolicy.ModeExecute || claimed.RequirementID != "" || claimed.AuthToken == "" {

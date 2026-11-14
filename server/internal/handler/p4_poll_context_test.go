@@ -14,7 +14,7 @@ func TestP4PollListPreservesReportedConnectionContext(t *testing.T) {
 	}
 	projectID := p4ConfiguredProject(t, "poll connection context", p4TestPort)
 	issueID := dbfx.Issue(t, "poll connection context", testutil.Cols{"project_id": projectID})
-	taskID := seedP4Task(t, issueID, "poll connection context")
+	taskID := seedP4Task(t, issueID, "poll connection context", "context-daemon")
 	var saved P4ChangelistResponse
 	testutil.Call(t, testHandler.ReportTaskP4Changelist, p4DaemonRequest(
 		http.MethodPost, "/api/daemon/tasks/"+taskID+"/p4/changelists",

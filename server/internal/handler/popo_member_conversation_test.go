@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/popo"
@@ -118,11 +119,16 @@ func TestPopoConcurrentMembersKeepIndependentSelections(t *testing.T) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			entry.env.inboundChat(t, entry.id+"-mode", "/mode "+entry.mode, group, "group", true, nil)
-			entry.env.inboundChat(t, entry.id+"-message", entry.message, group, "group", true, nil)
+			entry.env.postInboundChat(t, entry.id+"-mode", "/mode "+entry.mode, group, "group", true, nil)
+			entry.env.postInboundChat(t, entry.id+"-message", entry.message, group, "group", true, nil)
 		}()
 	}
 	workers.Wait()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if !testHandler.ChannelRouter.Drain(ctx) {
+		t.Fatal("POPO replies did not finish before the deadline")
+	}
 	if got := popoConversationForTest(t, alice, group); got.Mode != "requirement" || got.DraftOperationID == "" {
 		t.Fatalf("Alice concurrent selection=%+v", got)
 	}

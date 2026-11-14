@@ -18,7 +18,7 @@ test("fork integrations survive the upstream settings reorganization", async ({ 
 
     // Existing links must still reach the retained workspace integrations.
     await page.goto(`/${workspace.slug}/settings?tab=integrations&integration=popo`, { waitUntil: "domcontentloaded" });
-    await expect(page.getByRole("heading", { name: "POPO", exact: true })).toBeVisible();
+    await expect(page.locator('[aria-current="page"]').filter({ hasText: "POPO" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Messaging", exact: true }).last()).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("popo-settings.png"), fullPage: true });
 

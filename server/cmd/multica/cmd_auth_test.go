@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -24,11 +25,25 @@ func TestMain(m *testing.M) {
 		"MULTICA_WORKSPACE_ID",
 		"MULTICA_SERVER_URL",
 		"MULTICA_TASK_CONFIG_ROOT",
+		"MULTICA_TASK_WORKSPACES_ROOT",
+		"MULTICA_AGENT_NAME",
+		devEnvHomeEnv,
+		devEnvNameEnv,
 	} {
 		os.Unsetenv(key)
 	}
-	os.Exit(testenv.RunIsolated(m.Run))
+	testLaunchDir, _ = os.Getwd()
+	os.Exit(testenv.RunIsolated(func() int {
+		if err := os.Chdir(os.Getenv("HOME")); err != nil {
+			fmt.Fprintln(os.Stderr, "move CLI tests into isolated home:", err)
+			return 1
+		}
+		defer os.Chdir(testLaunchDir)
+		return m.Run()
+	}))
 }
+
+var testLaunchDir string
 
 // testCmd returns a minimal cobra.Command with the --profile persistent flag
 // registered, matching the rootCmd setup used in production.

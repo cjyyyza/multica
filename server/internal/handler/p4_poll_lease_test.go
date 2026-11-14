@@ -17,10 +17,11 @@ func p4PollLeaseFixture(t *testing.T, owner string) P4ChangelistResponse {
 	t.Helper()
 	project := p4ConfiguredProject(t, "poll lease", p4TestPort)
 	issue := dbfx.Issue(t, "poll lease", testutil.Cols{"project_id": project})
-	task := seedP4Task(t, issue, "poll lease")
+	task := seedP4Task(t, issue, "poll lease", owner)
 	var row P4ChangelistResponse
 	number := 892000 + int(p4LeaseTestNumber.Add(1))
 	testutil.Call(t, testHandler.ReportTaskP4Changelist, p4DaemonRequest(http.MethodPost, "/", reportBody(number, number, nil), testWorkspaceID, owner, "taskId", task)).Want(http.StatusOK).JSON(&row)
+	dbfx.Exec(t, "UPDATE agent_runtime SET last_seen_at = now() - interval '10 minutes' WHERE id = (SELECT runtime_id FROM agent_task_queue WHERE id = $1)", task)
 	return row
 }
 
@@ -74,7 +75,9 @@ func TestP4PollLeaseDoesNotStealAnOnlineOwner(t *testing.T) {
 	}
 	row := p4PollLeaseFixture(t, "online-owner")
 	dbfx.Exec(t, "UPDATE p4_changelist SET updated_at = now() - interval '10 minutes' WHERE id = $1", row.ID)
-	runtime := dbfx.Runtime(t, "P4 online owner", testutil.Cols{"daemon_id": "online-owner"})
+	var runtime string
+	dbfx.QueryRow(t, "SELECT runtime_id FROM agent_task_queue WHERE id = $1", *row.TaskID).Scan(&runtime)
+	dbfx.Exec(t, "UPDATE agent_runtime SET last_seen_at = now() WHERE id = $1", runtime)
 	claimP4PollLease(t, row, "new-owner", 0, http.StatusConflict)
 	dbfx.Exec(t, "UPDATE agent_runtime SET last_seen_at = now() - interval '10 minutes' WHERE id = $1", runtime)
 	claimP4PollLease(t, row, "new-owner", 0, http.StatusOK)
@@ -122,9 +125,13 @@ func TestP4LegacyTaskReportCannotOverwriteLeasedGeneration(t *testing.T) {
 		t.Fatal("task report did not retain its task")
 	}
 	for _, owner := range []string{"owner", "legacy-owner"} {
+		want := http.StatusConflict
+		if owner != "owner" {
+			want = http.StatusNotFound
+		}
 		testutil.Call(t, testHandler.ReportTaskP4Changelist, p4DaemonRequest(http.MethodPost, "/",
 			reportBody(int(row.Number), int(row.OriginalNumber), map[string]any{"status": "shelved", "description": "legacy overwrite"}),
-			testWorkspaceID, owner, "taskId", *row.TaskID)).Want(http.StatusConflict)
+			testWorkspaceID, owner, "taskId", *row.TaskID)).Want(want)
 	}
 	var owner, status, description string
 	var actualGeneration int64

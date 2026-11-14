@@ -29,7 +29,7 @@ func TestP4ChangelistManualAndTaskIdentityConverge(t *testing.T) {
 		t.Run(fmt.Sprintf("manual_first_%t", manualFirst), func(t *testing.T) {
 			projectID := p4ConfiguredProject(t, "identity project", p4TestPort)
 			issueID := dbfx.Issue(t, "identity issue", testutil.Cols{"project_id": projectID})
-			taskID := seedP4Task(t, issueID, "identity")
+			taskID := seedP4Task(t, issueID, "identity", "identity-daemon")
 			number := 890100
 			if manualFirst {
 				number++
@@ -79,7 +79,7 @@ func TestP4ChangelistPollMergesPortAliasesAndRenumberedManualLink(t *testing.T) 
 		t.Skip("database not available")
 	}
 	issueID := dbfx.Issue(t, "canonical issue")
-	taskID := seedP4Task(t, issueID, "canonical")
+	taskID := seedP4Task(t, issueID, "canonical", "canonical-daemon")
 	var canonical, manual P4ChangelistResponse
 	testutil.Call(t, testHandler.ReportTaskP4Changelist, p4DaemonRequest(http.MethodPost,
 		"/api/daemon/tasks/"+taskID+"/p4/changelists", reportBody(890301, 890300, map[string]any{"status": "submitted"}),
@@ -113,7 +113,7 @@ func TestP4ChangelistConcurrentManualAndTaskReport(t *testing.T) {
 		t.Skip("database not available")
 	}
 	issueID := dbfx.Issue(t, "concurrent link")
-	taskID := seedP4Task(t, issueID, "concurrent link")
+	taskID := seedP4Task(t, issueID, "concurrent link", "concurrent-daemon")
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for _, manual := range []bool{true, false} {

@@ -144,7 +144,8 @@
     "agent_error": "AI 代理執行出錯",
     "codex_semantic_inactivity": "Codex 長時間沒有語義進展",
     "manual": "使用者取消",
-    "user_cancelled": "使用者取消"
+    "user_cancelled": "使用者取消",
+    "plan_mode_unavailable": "目前執行環境不支援規劃模式。規劃不會進入專案綁定的本機資料夾。請使用內建 Claude 或 DSH 執行環境，以及未綁定本機資料夾的專案。"
   },
   "timeline": {
     "steps_count_other": "{{count}} 個步驟",

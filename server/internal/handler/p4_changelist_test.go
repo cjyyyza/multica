@@ -22,15 +22,16 @@ type p4ChangelistsEnvelope struct {
 // seedP4Task builds the running, issue-backed task the report route needs:
 // requireDaemonTaskAccessWithWorkspace resolves the workspace through the
 // issue, so a task with no issue 404s before the body is read.
-func seedP4Task(t *testing.T, issueID, label string) string {
+func seedP4Task(t *testing.T, issueID, label, daemonID string) string {
 	t.Helper()
-	agentID := dbfx.Agent(t, label+" agent", handlerTestRuntimeID(t), testutil.Cols{
+	runtimeID := dbfx.Runtime(t, label+" runtime", testutil.Cols{"daemon_id": daemonID})
+	agentID := dbfx.Agent(t, label+" agent", runtimeID, testutil.Cols{
 		"instructions": "",
 		"custom_env":   testutil.Raw("'{}'::jsonb"),
 		"custom_args":  testutil.Raw("'[]'::jsonb"),
 	})
 	return dbfx.Task(t, agentID, testutil.Cols{
-		"runtime_id": handlerTestRuntimeID(t),
+		"runtime_id": runtimeID,
 		"issue_id":   issueID,
 		"status":     "running",
 		"started_at": testutil.Raw("now()"),
@@ -45,7 +46,8 @@ func p4DaemonRequest(method, path string, body any, workspaceID, daemonID string
 	if len(params) > 0 {
 		req = testutil.WithURLParams(req, params...)
 	}
-	return req.WithContext(middleware.WithDaemonContext(req.Context(), workspaceID, daemonID))
+	ctx := middleware.WithDaemonContext(req.Context(), workspaceID, daemonID)
+	return req.WithContext(middleware.WithDaemonTokenOwnerID(ctx, testUserID))
 }
 
 func p4UserRequest(method, path string, body any, issueID string, params ...string) *http.Request {
@@ -96,7 +98,7 @@ func TestReportTaskP4Changelist_UpsertsIdempotentlyAndFollowsRenumber(t *testing
 		t.Skip("database not available")
 	}
 	issueID := dbfx.Issue(t, "p4 report fixture")
-	taskID := seedP4Task(t, issueID, "p4-report")
+	taskID := seedP4Task(t, issueID, "p4-report", "p4-daemon-a")
 	path := "/api/daemon/tasks/" + taskID + "/p4/changelists"
 
 	var first P4ChangelistResponse
@@ -169,7 +171,7 @@ func TestReportTaskP4Changelist_AttachesSwarmReviewAndKeepsItOffThePullRequestLi
 		t.Skip("database not available")
 	}
 	issueID := dbfx.Issue(t, "p4 swarm fixture")
-	taskID := seedP4Task(t, issueID, "p4-swarm")
+	taskID := seedP4Task(t, issueID, "p4-swarm", "p4-daemon-swarm")
 	dbfx.Cleanup(t, `DELETE FROM swarm_review WHERE workspace_id = $1 AND review_number = 4242`, testWorkspaceID)
 
 	var cl P4ChangelistResponse
@@ -230,7 +232,7 @@ func TestReportTaskP4Changelist_RejectsForeignTokenAndUnusableBodies(t *testing.
 		t.Skip("database not available")
 	}
 	issueID := dbfx.Issue(t, "p4 report rejection fixture")
-	taskID := seedP4Task(t, issueID, "p4-reject")
+	taskID := seedP4Task(t, issueID, "p4-reject", "p4-daemon-a")
 	path := "/api/daemon/tasks/" + taskID + "/p4/changelists"
 
 	t.Run("daemon token for another workspace", func(t *testing.T) {
@@ -254,14 +256,16 @@ func TestReportTaskP4Changelist_RejectsForeignTokenAndUnusableBodies(t *testing.
 
 	t.Run("task without an issue", func(t *testing.T) {
 		// A chat task resolves a workspace but has no issue to link to.
-		agentID := dbfx.Agent(t, "p4 chat agent", handlerTestRuntimeID(t), testutil.Cols{
+		var runtimeID string
+		dbfx.QueryRow(t, "SELECT runtime_id FROM agent_task_queue WHERE id = $1", taskID).Scan(&runtimeID)
+		agentID := dbfx.Agent(t, "p4 chat agent", runtimeID, testutil.Cols{
 			"instructions": "",
 			"custom_env":   testutil.Raw("'{}'::jsonb"),
 			"custom_args":  testutil.Raw("'[]'::jsonb"),
 		})
 		sessionID := dbfx.ChatSession(t, agentID)
 		chatTaskID := dbfx.Task(t, agentID, testutil.Cols{
-			"runtime_id":      handlerTestRuntimeID(t),
+			"runtime_id":      runtimeID,
 			"chat_session_id": sessionID,
 			"status":          "running",
 			"started_at":      testutil.Raw("now()"),

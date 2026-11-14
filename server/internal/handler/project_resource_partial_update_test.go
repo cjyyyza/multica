@@ -212,6 +212,7 @@ func TestUpdateProjectResourceConcurrentLabelMirrorVsExecutionMode(t *testing.T)
 		"project_id":    projectID,
 		"workspace_id":  testWorkspaceID,
 		"resource_type": "local_directory",
+		"created_by": testUserID,
 		"resource_ref":  `{"local_path":"/repo","daemon_id":"daemon-1","execution_mode":"worktree"}`,
 		"label":         "Old label",
 		"position":      1,

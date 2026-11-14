@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"github.com/multica-ai/multica/server/internal/projectaccess"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -70,7 +71,7 @@ func TestRequirementIssueProjectionAcrossSurfaces(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rows := testHandler.searchIndexIssues(context.Background(), row.WorkspaceID, []db.Issue{row})
+		rows := testHandler.searchIndexIssues(context.Background(), row.WorkspaceID, projectaccess.Hidden{}, []db.Issue{row})
 		var issues []IssueResponse
 		for _, row := range rows {
 			issues = append(issues, row.IssueResponse)

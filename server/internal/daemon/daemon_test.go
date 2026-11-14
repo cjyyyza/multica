@@ -820,6 +820,9 @@ func TestProviderNeedsInlineSystemPrompt(t *testing.T) {
 		{provider: "qwen", want: false},
 		{provider: "codex", want: false},
 		{provider: "claude", want: false},
+		// Droid uses the task AGENTS.md; TestDroidRealAgentsMDCanary verifies
+		// native discovery independently of the optional adapter SystemPrompt.
+		{provider: "droid", want: false},
 	}
 
 	for _, tc := range cases {
@@ -3946,7 +3949,7 @@ func TestShouldRetryWithFreshSession_CompatPathIsBackendScoped(t *testing.T) {
 	// the compat path exists to catch.
 	result := agent.Result{Status: "failed", Error: "exit status 1"}
 
-	undetectable := []string{"antigravity", "codearts", "copilot", "cursor", "deveco", "opencode"}
+	undetectable := []string{"antigravity", "codearts", "copilot", "cursor", "deveco", "droid", "opencode"}
 	for _, provider := range undetectable {
 		t.Run(provider+" retries", func(t *testing.T) {
 			t.Parallel()
@@ -4969,7 +4972,7 @@ func TestEnsureRepoReadyCachedRepoStillRefreshesSettings(t *testing.T) {
 		t.Fatalf("precondition: expected co-author hook enabled before checkout")
 	}
 
-	if err := d.ensureRepoReady(context.Background(), "ws-1", sourceRepo); err != nil {
+	if _, err := d.ensureRepoReady(context.Background(), "ws-1", sourceRepo); err != nil {
 		t.Fatalf("ensureRepoReady: %v", err)
 	}
 	if got := refreshCalls.Load(); got != 1 {
@@ -5003,7 +5006,7 @@ func TestEnsureRepoReadyTrimsURL(t *testing.T) {
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "v1", []RepoData{{URL: sourceRepo}}, nil)
 
 	// URL with trailing whitespace should still resolve to the cached repo.
-	if err := d.ensureRepoReady(context.Background(), "ws-1", "  "+sourceRepo+"  "); err != nil {
+	if _, err := d.ensureRepoReady(context.Background(), "ws-1", "  "+sourceRepo+"  "); err != nil {
 		t.Fatalf("ensureRepoReady with padded URL: %v", err)
 	}
 	// Even on cache hit we refresh settings once so toggle flips feel live.
@@ -5031,7 +5034,7 @@ func TestEnsureRepoReadyRefreshesOnMiss(t *testing.T) {
 	})
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
 
-	if err := d.ensureRepoReady(context.Background(), "ws-1", sourceRepo); err != nil {
+	if _, err := d.ensureRepoReady(context.Background(), "ws-1", sourceRepo); err != nil {
 		t.Fatalf("ensureRepoReady: %v", err)
 	}
 	if got := refreshCalls.Load(); got != 1 {
@@ -5080,11 +5083,11 @@ func TestRegisterTaskReposAllowsProjectOnlyURL(t *testing.T) {
 		t.Fatalf("expected repo to be cached after registerTaskRepos, but Lookup returned empty")
 	}
 
-	if !d.workspaceRepoAllowed("ws-1", sourceRepo) {
-		t.Fatal("expected project repo to pass workspaceRepoAllowed")
+	if d.resolveWorkspaceRepoURL("ws-1", sourceRepo) != sourceRepo {
+		t.Fatal("expected project repo to resolve to its registered URL")
 	}
 
-	if err := d.ensureRepoReady(context.Background(), "ws-1", sourceRepo); err != nil {
+	if _, err := d.ensureRepoReady(context.Background(), "ws-1", sourceRepo); err != nil {
 		t.Fatalf("ensureRepoReady: %v", err)
 	}
 	// ensureRepoReady refreshes settings on every call (RFC MUL-2414 §4.8; PR
@@ -5124,7 +5127,7 @@ func TestRegisterTaskReposSurvivesWorkspaceRefresh(t *testing.T) {
 		t.Fatalf("refreshWorkspaceRepos: %v", err)
 	}
 
-	if !d.workspaceRepoAllowed("ws-1", sourceRepo) {
+	if d.resolveWorkspaceRepoURL("ws-1", sourceRepo) != sourceRepo {
 		t.Fatal("project repo URL was wiped by workspace refresh")
 	}
 }
@@ -5174,7 +5177,7 @@ func TestEnsureRepoReadyReturnsNotConfigured(t *testing.T) {
 	})
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
 
-	err := d.ensureRepoReady(context.Background(), "ws-1", "git@example.com:team/api.git")
+	_, err := d.ensureRepoReady(context.Background(), "ws-1", "git@example.com:team/api.git")
 	if !errors.Is(err, ErrRepoNotConfigured) {
 		t.Fatalf("expected ErrRepoNotConfigured, got %v", err)
 	}
@@ -5193,7 +5196,7 @@ func TestEnsureRepoReadyReportsSyncFailure(t *testing.T) {
 	})
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
 
-	err := d.ensureRepoReady(context.Background(), "ws-1", missingRepo)
+	_, err := d.ensureRepoReady(context.Background(), "ws-1", missingRepo)
 	if err == nil || !strings.Contains(err.Error(), "repo is configured but not synced: git clone --bare:") {
 		t.Fatalf("expected sync failure error with git's output, got %v", err)
 	}
@@ -5252,7 +5255,7 @@ func TestEnsureRepoReadyKeepsSyncFailureDespiteConcurrentSuccess(t *testing.T) {
 	d.repoCache = cache
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
 
-	err := d.ensureRepoReady(context.Background(), "ws-1", repoURL)
+	_, err := d.ensureRepoReady(context.Background(), "ws-1", repoURL)
 	if !cache.raced {
 		t.Fatal("test did not exercise the concurrent sync")
 	}
@@ -5317,7 +5320,8 @@ func TestEnsureRepoReadyConcurrentMissRefreshesOnce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			waitCtx := &repoRefreshWaitContext{Context: ctx, waiting: waiting}
-			errCh <- d.ensureRepoReady(waitCtx, "ws-1", sourceRepo)
+			_, err := d.ensureRepoReady(waitCtx, "ws-1", sourceRepo)
+			errCh <- err
 		}()
 	}
 	for range concurrency {

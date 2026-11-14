@@ -31,6 +31,7 @@ import { ChatSessionHeader } from "./components/chat-session-header";
 import { EmptyState } from "./components/chat-empty-state";
 import { NewChatButton } from "./components/new-chat-button";
 import { useChatController } from "./components/use-chat-controller";
+import { useChatAnnotations } from "./components/use-chat-annotations";
 import { OfflineBanner } from "./components/offline-banner";
 import { NoAgentBanner } from "./components/no-agent-banner";
 import { ArchivedAgentBanner } from "./components/archived-agent-banner";
@@ -43,6 +44,7 @@ import {
   useRequirementOpenIntent,
   useRequirementSurface,
 } from "../requirements";
+import { ChatAppRequests } from "../common/app-requests";
 import { useRegisterCommandBarContext } from "../search/register-context";
 
 /**
@@ -95,6 +97,11 @@ function ChatPageContent({ requirementFlowEnabled }: { requirementFlowEnabled: b
   // Toast when an accepted refresh later fails in the daemon (async half).
   useQuickActionsFailureToast(c.activeSessionId ?? null);
   const regenerateQuickActions = useRegenerateChatQuickActions();
+  const annotations = useChatAnnotations({
+    sessionId: c.activeSessionId,
+    agentName: c.activeAgent?.name,
+    enabled: !c.isSessionArchived && !c.isAgentArchived && !c.isAgentAccessRevoked && c.isAgentRuntimeBound && !c.noAgent,
+  });
   const urlSession = searchParams.get("session") || null;
   const urlRequirement = urlSession ? null : searchParams.get("requirement") || null;
   const urlAgent = urlRequirement ? null : searchParams.get("agent") || null;
@@ -424,13 +431,13 @@ function ChatPageContent({ requirementFlowEnabled }: { requirementFlowEnabled: b
               : undefined
           }
           quickActionsPendingMessageId={quickActionsPending?.message_id ?? null}
+          annotations={annotations}
         />
       ) : (
         <EmptyState
           agent={c.activeAgent}
           hasSessions={c.sessions.length > 0}
           onPickPrompt={c.sendConversationStarter}
-          customizeHref={c.customizeConversationStartersHref}
         />
       )}
 
@@ -448,6 +455,10 @@ function ChatPageContent({ requirementFlowEnabled }: { requirementFlowEnabled: b
       ) : (
         <OfflineBanner agentName={c.activeAgent?.name} availability={c.availability} />
       )}
+
+      <div className="px-4">
+        <ChatAppRequests sessionId={c.activeSessionId} />
+      </div>
 
       <ChatQueue
         tasks={queuedTasks}
@@ -492,6 +503,7 @@ function ChatPageContent({ requirementFlowEnabled }: { requirementFlowEnabled: b
         onProjectChange={changeProjectContext}
         isProjectUpdating={c.isProjectUpdating}
         focusRequest={c.focusInputRequest}
+        annotations={annotations}
       />
     </div>
   );

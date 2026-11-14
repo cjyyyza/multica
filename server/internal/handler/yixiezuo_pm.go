@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/projectaccess"
 	"io"
 	"net/http"
 	"net/url"
@@ -131,7 +132,7 @@ func (h *Handler) SyncYixiezuoPMIssue(w http.ResponseWriter, r *http.Request) {
 		}
 		if out.Result.State == "created" || out.Result.State == "updated" {
 			resp := issueToResponse(out.Issue, h.getIssuePrefix(r.Context(), a.workspace))
-			h.fillStatusCategory(r.Context(), a.workspace, &resp)
+			h.fillStatusCategory(r.Context(), a.workspace, projectaccess.Hidden{}, &resp)
 			event := protocol.EventIssueUpdated
 			if out.Result.State == "created" {
 				event = protocol.EventIssueCreated

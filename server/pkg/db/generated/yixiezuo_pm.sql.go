@@ -76,7 +76,7 @@ func (q *Queries) CreateYixiezuoPMNotification(ctx context.Context, arg CreateYi
 }
 
 const findYixiezuoPMMarkerIssues = `-- name: FindYixiezuoPMMarkerIssues :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, requester_user_id FROM issue
 WHERE workspace_id = $1
   AND description ~ $2::text
 ORDER BY id
@@ -128,6 +128,7 @@ func (q *Queries) FindYixiezuoPMMarkerIssues(ctx context.Context, arg FindYixiez
 			&i.LastActivityAt,
 			&i.TriageState,
 			&i.DuplicateOfIssueID,
+			&i.RequesterUserID,
 		); err != nil {
 			return nil, err
 		}
@@ -140,7 +141,7 @@ func (q *Queries) FindYixiezuoPMMarkerIssues(ctx context.Context, arg FindYixiez
 }
 
 const findYixiezuoPMTitleIssues = `-- name: FindYixiezuoPMTitleIssues :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, requester_user_id FROM issue
 WHERE workspace_id = $1 AND project_id = $2
   AND lower(btrim(regexp_replace(title, '[[:space:]]+', ' ', 'g'))) = $3::text
 ORDER BY id
@@ -193,6 +194,7 @@ func (q *Queries) FindYixiezuoPMTitleIssues(ctx context.Context, arg FindYixiezu
 			&i.LastActivityAt,
 			&i.TriageState,
 			&i.DuplicateOfIssueID,
+			&i.RequesterUserID,
 		); err != nil {
 			return nil, err
 		}
@@ -234,7 +236,7 @@ func (q *Queries) GetYixiezuoPMNotification(ctx context.Context, arg GetYixiezuo
 }
 
 const listYixiezuoPMReconcileIssues = `-- name: ListYixiezuoPMReconcileIssues :many
-SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id, COALESCE(link.source_url, '')::text AS source_url
+SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id, i.requester_user_id, COALESCE(link.source_url, '')::text AS source_url
 FROM issue i
 LEFT JOIN yixiezuo_import link ON link.issue_id = i.id AND link.workspace_id = i.workspace_id
 WHERE i.workspace_id = $1 AND i.project_id = $2
@@ -285,6 +287,7 @@ type ListYixiezuoPMReconcileIssuesRow struct {
 	LastActivityAt     pgtype.Timestamptz `json:"last_activity_at"`
 	TriageState        pgtype.Text        `json:"triage_state"`
 	DuplicateOfIssueID pgtype.UUID        `json:"duplicate_of_issue_id"`
+	RequesterUserID    pgtype.UUID        `json:"requester_user_id"`
 	SourceUrl          string             `json:"source_url"`
 }
 
@@ -335,6 +338,7 @@ func (q *Queries) ListYixiezuoPMReconcileIssues(ctx context.Context, arg ListYix
 			&i.LastActivityAt,
 			&i.TriageState,
 			&i.DuplicateOfIssueID,
+			&i.RequesterUserID,
 			&i.SourceUrl,
 		); err != nil {
 			return nil, err
@@ -348,7 +352,7 @@ func (q *Queries) ListYixiezuoPMReconcileIssues(ctx context.Context, arg ListYix
 }
 
 const listYixiezuoPMTriageIssues = `-- name: ListYixiezuoPMTriageIssues :many
-SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id FROM issue i
+SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id, i.requester_user_id FROM issue i
 WHERE i.workspace_id = $1 AND i.project_id = $2
   AND i.assignee_id IS NULL
   AND (i.triage_state IS NOT NULL OR i.status = ANY($3::text[]) OR i.description LIKE '%待分诊%')
@@ -418,6 +422,7 @@ func (q *Queries) ListYixiezuoPMTriageIssues(ctx context.Context, arg ListYixiez
 			&i.LastActivityAt,
 			&i.TriageState,
 			&i.DuplicateOfIssueID,
+			&i.RequesterUserID,
 		); err != nil {
 			return nil, err
 		}

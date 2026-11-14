@@ -140,6 +140,8 @@ test("external candidate, human approval, squad dispatch and human acceptance", 
       state: "done", ...receipts.rows[0],
     }, null, 2));
   } finally {
+    // Leave the workspace before deletion can trigger a realtime redirect.
+    if (!page.isClosed()) await page.goto("about:blank");
     if (personalTokenID) {
       await fetch(`${apiBase}/api/tokens/${personalTokenID}`, { method: "DELETE", headers: { Authorization: `Bearer ${api.getToken()}` } });
     }

@@ -219,7 +219,7 @@ func TestApproveRequirementCreatesBoundIssueTaskAndSourceLinks(t *testing.T) {
 	dbfx.Exec(t, `UPDATE agent_task_queue SET status = 'queued', started_at = NULL, completed_at = NULL WHERE id = $1`, planTaskID)
 	var runtimeID string
 	dbfx.QueryRow(t, `SELECT runtime_id::text FROM agent WHERE id = $1`, f.AgentID).Scan(&runtimeID)
-	claimRequest := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, "requirement-approve-old-plan")
+	claimRequest := newRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil)
 	claimRequest = withURLParam(claimRequest, "runtimeId", runtimeID)
 	claimed, _ := claimPlanResponse(t, claimRequest)
 	if claimed.ID != "" {

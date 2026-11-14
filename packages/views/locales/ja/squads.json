@@ -27,13 +27,10 @@
     "success": "スカッドをアーカイブしました"
   },
   "name_editor": {
-    "title": "スクワッド名を変更",
     "placeholder": "スクワッド名",
-    "required": "名前を入力してください",
+    "save_failed": "保存できませんでした",
     "cancel": "キャンセル",
-    "save": "保存",
-    "saved": "保存しました",
-    "save_failed": "保存できませんでした"
+    "save": "保存"
   },
   "add_member_dialog": {
     "title": "メンバーを追加",
@@ -53,12 +50,9 @@
     "empty": "役割を追加…",
     "placeholder": "役割（例：レビュアー）"
   },
-  "description_dialog": {
-    "title": "説明を編集",
-    "placeholder_empty": "説明を追加",
-    "cancel": "キャンセル",
-    "responsibility_placeholder": "このスクワッドの担当は何ですか？",
-    "save": "保存"
+  "description_editor": {
+    "empty": "説明を追加",
+    "placeholder": "このスクワッドの担当は何ですか？"
   },
   "members_tab": {
     "section_title": "メンバー",
@@ -103,13 +97,6 @@
     "visibility": "公開範囲",
     "visibility_workspace": "ワークスペース"
   },
-  "max_concurrent_tasks_dialog": {
-    "title": "最大同時タスク数を設定",
-    "placeholder": "無制限",
-    "hint": "スクワッドが同時に進行するイシュー数と、全エージェントが同時に実行するタスク数を制限します（1〜50）。空欄なら無制限です。",
-    "invalid": "1〜50 の整数を入力してください。",
-    "unlimited": "無制限"
-  },
   "toasts": {
     "member_added": "メンバーを追加しました",
     "member_add_failed": "メンバーを追加できませんでした",
@@ -121,6 +108,7 @@
     "leader_update_failed": "リーダーを更新できませんでした",
     "archive_failed": "スクワッドをアーカイブできませんでした",
     "instructions_saved": "指示を保存しました",
+    "update_failed": "保存できませんでした",
     "max_concurrent_tasks_saved": "同時実行の上限を保存しました"
   },
   "profile_card": {
@@ -171,5 +159,12 @@
       "role_testing": "テスト",
       "role_product": "プロダクト"
     }
+  },
+  "max_concurrent_tasks_dialog": {
+    "title": "最大同時タスク数を設定",
+    "placeholder": "無制限",
+    "hint": "スクワッドが同時に進行するイシュー数と、全エージェントが同時に実行するタスク数を制限します（1〜50）。空欄なら無制限です。",
+    "invalid": "1〜50 の整数を入力してください。",
+    "unlimited": "無制限"
   }
 }

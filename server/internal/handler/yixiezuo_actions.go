@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/projectaccess"
 	"net/http"
 	"strings"
 
@@ -241,7 +242,7 @@ func (h *Handler) importYixiezuo(ctx context.Context, ws, actor, previewID, proj
 	opts.ActorID, opts.Platform = uuidToString(actor), "yixiezuo"
 	opts.BroadcastPayload = func(issue db.Issue, _ []db.Attachment, _ []db.IssueLabel) map[string]any {
 		resp := issueToResponse(issue, h.getIssuePrefix(ctx, ws))
-		h.fillStatusCategory(ctx, ws, &resp)
+		h.fillStatusCategory(ctx, ws, projectaccess.Hidden{}, &resp)
 		return map[string]any{"issue": resp}
 	}
 	res, err := h.IssueService.Create(ctx, service.IssueCreateParams{WorkspaceID: ws, Title: snapshot.Title, Description: pgtype.Text{String: snapshot.Markdown(), Valid: true}, Status: "todo", Priority: yixiezuo.MapIncomingPriority(snapshot.Priority, "medium"), CreatorType: "member", CreatorID: actor, ProjectID: project, AllowDuplicate: true, Yixiezuo: &snapshot}, opts)
@@ -465,7 +466,7 @@ func bindPublishEvidenceAttachments(ctx context.Context, q *db.Queries, ws, acto
 	}); err != nil {
 		return err
 	}
-	missing, err := lockCommentAttachments(ctx, q, ws, issueID, attachmentIDs)
+	missing, err := lockCommentAttachments(ctx, q, ws, issueID, attachmentIDs, nil)
 	if err != nil {
 		return err
 	}
@@ -484,7 +485,7 @@ func bindPublishEvidenceAttachments(ctx context.Context, q *db.Queries, ws, acto
 			return err
 		}
 	}
-	if err = q.LinkAttachmentsToComment(ctx, db.LinkAttachmentsToCommentParams{CommentID: commentID, IssueID: issueID, Column3: attachmentIDs}); err != nil {
+	if err = q.LinkAttachmentsToComment(ctx, db.LinkAttachmentsToCommentParams{CommentID: commentID, IssueID: issueID, WorkspaceID: ws, AttachmentIds: attachmentIDs}); err != nil {
 		return err
 	}
 	linked, err := q.ListAttachmentsByComment(ctx, db.ListAttachmentsByCommentParams{CommentID: commentID, WorkspaceID: ws})
