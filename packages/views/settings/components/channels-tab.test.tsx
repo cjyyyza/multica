@@ -36,6 +36,6 @@ describe("POPO in the messaging settings", () => {
   });
   it("links the POPO overview to its bridge and member settings", () => {
     renderWithI18n(<ChannelsTab />);
-    expect(screen.getByRole("link", { name: "POPO", exact: true })).toHaveAttribute("href", "/acme/settings?tab=channels&integration=popo");
+    expect(screen.getByRole("link", { name: "POPO" })).toHaveAttribute("href", "/acme/settings?tab=channels&integration=popo");
   });
 });

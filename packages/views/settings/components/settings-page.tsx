@@ -12,6 +12,7 @@ import {
   ListPlus,
   Lock,
   MessagesSquare,
+  Mic,
   Palette,
   Plug,
   Search,
@@ -52,6 +53,8 @@ import { WorkflowsTab } from "../../workflows/workflows-tab";
 import { PropertiesTab } from "./properties-tab";
 import { QuickActionsTab } from "./quick-actions-tab";
 import { KeyboardShortcutsTab } from "./keyboard-shortcuts-tab";
+import { localVoiceAPI } from "../../platform/local-voice";
+import { VoiceInputTab } from "./voice-input-tab";
 import { PluginsTab } from "./plugins-tab";
 import { McpTab } from "./mcp-tab";
 import { BillingTab } from "./billing-tab";
@@ -138,6 +141,7 @@ export function SettingsPage({ extraDeviceTabs = [] }: SettingsPageProps = {}) {
     false,
   );
   const appsAvailable = useComposioAvailable();
+  const voiceInputAvailable = localVoiceAPI() !== undefined;
   const entry = (
     value: string,
     label: string,
@@ -179,6 +183,9 @@ export function SettingsPage({ extraDeviceTabs = [] }: SettingsPageProps = {}) {
               Keyboard,
               <KeyboardShortcutsTab />,
             ),
+            ...(voiceInputAvailable
+              ? [entry("voice-input", t(($) => $.page.tabs.voice_input), Mic, <VoiceInputTab />)]
+              : []),
             entry("tokens", t(($) => $.page.tabs.tokens), KeyRound, <TokensTab />),
           ],
         },

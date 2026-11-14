@@ -330,6 +330,17 @@ describe("agent messaging channels", () => {
     expect(screen.getByText("Connected")).toBeInTheDocument();
   });
 
+  it.each([
+    ["user-1", true],
+    ["user-2", false],
+  ])("keeps POPO management scoped to the agent owner (%s)", async (ownerId, permitted) => {
+    state.role = "member";
+    vi.mocked(api.listPopoInstallations).mockResolvedValue(listing([active]) as never);
+    show(<AgentChannelsSection agent={{ ...agent, owner_id: ownerId }} />);
+    await screen.findByText("POPO");
+    expect(screen.queryByRole("button", { name: "Manage POPO" }) !== null).toBe(permitted);
+  });
+
   it("does not display revoked connections or another agent's connection", async () => {
     vi.mocked(api.listTelegramInstallations).mockResolvedValue(
       listing([

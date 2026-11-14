@@ -460,7 +460,7 @@ export function ChatThreadList({
                 {titleText}
               </span>
             )}
-            {session.requirement_id && <span className="shrink-0 rounded border border-border px-1 text-micro text-muted-foreground">{tRequirement(($) => $.card.title)}</span>}
+            {session.requirement_id && <span className="shrink-0 rounded-sm border border-border px-1 text-micro text-muted-foreground">{tRequirement(($) => $.card.title)}</span>}
             <span className="ml-auto shrink-0 text-micro text-muted-foreground">{timeText}</span>
           </div>
 
