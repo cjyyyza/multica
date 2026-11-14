@@ -27,13 +27,10 @@
     "success": "已归档小队"
   },
   "name_editor": {
-    "title": "重命名小队",
     "placeholder": "小队名称",
-    "required": "名称不能为空",
+    "save_failed": "保存失败",
     "cancel": "取消",
-    "save": "保存",
-    "saved": "已保存",
-    "save_failed": "保存失败"
+    "save": "保存"
   },
   "add_member_dialog": {
     "title": "添加成员",
@@ -53,12 +50,9 @@
     "empty": "添加角色…",
     "placeholder": "角色（例如：审查者）"
   },
-  "description_dialog": {
-    "title": "编辑描述",
-    "placeholder_empty": "添加描述",
-    "cancel": "取消",
-    "responsibility_placeholder": "这个小队负责什么？",
-    "save": "保存"
+  "description_editor": {
+    "empty": "添加描述",
+    "placeholder": "这个小队负责什么？"
   },
   "members_tab": {
     "section_title": "成员",
@@ -103,13 +97,6 @@
     "visibility": "可见范围",
     "visibility_workspace": "工作区"
   },
-  "max_concurrent_tasks_dialog": {
-    "title": "设置最大并发任务数",
-    "placeholder": "不限制",
-    "hint": "限制小队同时推进的在途任务与并发运行数量（1–50）。留空表示不限制。",
-    "invalid": "请输入 1 到 50 之间的整数。",
-    "unlimited": "不限制"
-  },
   "toasts": {
     "member_added": "已添加成员",
     "member_add_failed": "添加成员失败",
@@ -121,6 +108,7 @@
     "leader_update_failed": "更新队长失败",
     "archive_failed": "归档小队失败",
     "instructions_saved": "指引已保存",
+    "update_failed": "保存失败",
     "max_concurrent_tasks_saved": "并发上限已保存"
   },
   "profile_card": {
@@ -171,5 +159,12 @@
       "role_testing": "测试",
       "role_product": "产品"
     }
+  },
+  "max_concurrent_tasks_dialog": {
+    "title": "设置最大并发任务数",
+    "placeholder": "不限制",
+    "hint": "限制小队同时推进的在途任务与并发运行数量（1–50）。留空表示不限制。",
+    "invalid": "请输入 1 到 50 之间的整数。",
+    "unlimited": "不限制"
   }
 }

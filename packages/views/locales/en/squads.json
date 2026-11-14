@@ -27,13 +27,10 @@
     "success": "Squad archived"
   },
   "name_editor": {
-    "title": "Rename squad",
     "placeholder": "Squad name",
-    "required": "Name is required",
+    "save_failed": "Failed to save",
     "cancel": "Cancel",
-    "save": "Save",
-    "saved": "Saved",
-    "save_failed": "Failed to save"
+    "save": "Save"
   },
   "add_member_dialog": {
     "title": "Add Member",
@@ -53,12 +50,9 @@
     "empty": "Add role…",
     "placeholder": "Role (e.g. Reviewer)"
   },
-  "description_dialog": {
-    "title": "Edit description",
-    "placeholder_empty": "Add a description",
-    "cancel": "Cancel",
-    "responsibility_placeholder": "What is this squad responsible for?",
-    "save": "Save"
+  "description_editor": {
+    "empty": "Add a description",
+    "placeholder": "What is this squad responsible for?"
   },
   "members_tab": {
     "section_title": "Members",
@@ -103,13 +97,6 @@
     "visibility": "Visibility",
     "visibility_workspace": "Workspace"
   },
-  "max_concurrent_tasks_dialog": {
-    "title": "Set max concurrent tasks",
-    "placeholder": "Unlimited",
-    "hint": "Limits how many issues the squad works in flight and how many tasks run at once across its agents (1-50). Leave empty for no limit.",
-    "invalid": "Enter a whole number between 1 and 50.",
-    "unlimited": "Unlimited"
-  },
   "toasts": {
     "member_added": "Member added",
     "member_add_failed": "Failed to add member",
@@ -121,6 +108,7 @@
     "leader_update_failed": "Failed to update leader",
     "archive_failed": "Failed to archive squad",
     "instructions_saved": "Instructions saved",
+    "update_failed": "Failed to save",
     "max_concurrent_tasks_saved": "Concurrency limit saved"
   },
   "profile_card": {
@@ -173,5 +161,12 @@
       "role_testing": "Testing",
       "role_product": "Product"
     }
+  },
+  "max_concurrent_tasks_dialog": {
+    "title": "Set max concurrent tasks",
+    "placeholder": "Unlimited",
+    "hint": "Limits how many issues the squad works in flight and how many tasks run at once across its agents (1-50). Leave empty for no limit.",
+    "invalid": "Enter a whole number between 1 and 50.",
+    "unlimited": "Unlimited"
   }
 }

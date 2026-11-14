@@ -167,6 +167,7 @@ var (
 		"mcode":         "mcode",
 		"muse":          "muse",
 		"zeroclaw":      "zeroclaw",
+		"museapp":       "museapp",
 		"zcode":         "zcode",
 		"multica_agent": "multica_agent",
 		"openclaw":      "openclaw",
@@ -176,6 +177,8 @@ var (
 		"qoder":         "qoder",
 		"qoderclicn":    "qoderclicn",
 		"qwen":          "qwen",
+		"droid":         "droid",
+		"amp":           "amp",
 		"traecli":       "traecli",
 		"other":         "other",
 	}

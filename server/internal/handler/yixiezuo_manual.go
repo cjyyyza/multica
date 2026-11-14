@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/featureflags"
 	"github.com/multica-ai/multica/server/internal/integrations/yixiezuo"
+	"github.com/multica-ai/multica/server/internal/projectaccess"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -310,7 +311,7 @@ func (h *Handler) CompleteYixiezuoOperation(w http.ResponseWriter, r *http.Reque
 	}
 	if refreshed != nil {
 		resp := issueToResponse(*refreshed, h.getIssuePrefix(r.Context(), ws))
-		h.fillStatusCategory(r.Context(), ws, &resp)
+		h.fillStatusCategory(r.Context(), ws, projectaccess.Hidden{}, &resp)
 		// Publish the full owner first so the auxiliary revision cannot mask
 		// the new dates or metadata as an equal-revision duplicate.
 		h.publish(protocol.EventIssueUpdated, uuidToString(ws), "member", uuidToString(member.UserID), map[string]any{"issue": resp})
@@ -354,7 +355,7 @@ func (h *Handler) ImportYixiezuoIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := issueToResponse(issue, h.getIssuePrefix(r.Context(), ws))
-	h.fillStatusCategory(r.Context(), ws, &resp)
+	h.fillStatusCategory(r.Context(), ws, projectaccess.Hidden{}, &resp)
 	writeJSON(w, http.StatusOK, map[string]any{"issue": resp, "existing": existing})
 }
 func (h *Handler) GetYixiezuoImport(w http.ResponseWriter, r *http.Request) {

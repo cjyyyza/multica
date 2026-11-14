@@ -108,7 +108,11 @@ func (h *Handler) UpsertSwarmReviewForIssue(w http.ResponseWriter, r *http.Reque
 func (h *Handler) linkSwarmReviewByIdentifiers(ctx context.Context, workspaceID, reviewID pgtype.UUID, description string, closeIntent bool, linked map[string]struct{}) {
 	matches := identifierRe.FindAllString(description, 8)
 	for _, match := range matches {
-		issue, ok := h.resolveIssueByIdentifier(ctx, match, uuidToString(workspaceID))
+		issue, ok, err := h.resolveIssueByIdentifier(ctx, match, uuidToString(workspaceID))
+		if err != nil {
+			slog.Warn("resolve Swarm issue identifier", "error", err, "identifier", match)
+			continue
+		}
 		if !ok {
 			continue
 		}

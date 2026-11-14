@@ -901,7 +901,7 @@ func (q *Queries) ListRequirementsForParticipant(ctx context.Context, arg ListRe
 }
 
 const lockIssueForRequirement = `-- name: LockIssueForRequirement :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, requester_user_id FROM issue
 WHERE id = $1 AND workspace_id = $2
 FOR UPDATE
 `
@@ -945,6 +945,7 @@ func (q *Queries) LockIssueForRequirement(ctx context.Context, arg LockIssueForR
 		&i.LastActivityAt,
 		&i.TriageState,
 		&i.DuplicateOfIssueID,
+		&i.RequesterUserID,
 	)
 	return i, err
 }

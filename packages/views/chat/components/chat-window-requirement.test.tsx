@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
+import { setCurrentWorkspace } from "@multica/core/platform";
 import { chatKeys } from "@multica/core/chat/queries";
 import {
   RequirementDetailSchema,
@@ -11,6 +12,7 @@ import {
 } from "@multica/core/requirements";
 import type { Agent, ChatSession } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
+import { NavigationProvider, type NavigationAdapter } from "../../navigation";
 import { ChatWindow } from "./chat-window";
 
 const chatState = {
@@ -221,16 +223,20 @@ function renderWindow(options: RenderOptions = {}) {
     listPendingChatTasks: vi.fn().mockResolvedValue({ tasks: [] }),
   } as unknown as ApiClient);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const navigation: NavigationAdapter = { push: vi.fn(), replace: vi.fn(), back: vi.fn(), pathname: "/acme/issues", searchParams: new URLSearchParams(), hash: "", getShareableUrl: (path) => path };
   const view = renderWithI18n(
-    <QueryClientProvider client={qc}><ChatWindow /></QueryClientProvider>,
+    <QueryClientProvider client={qc}><NavigationProvider value={navigation}><ChatWindow /></NavigationProvider></QueryClientProvider>,
   );
   return { qc, listChatSessions, view };
 }
 
 beforeEach(() => {
+  setCurrentWorkspace("acme", "ws-1");
   vi.clearAllMocks();
   chatState.activeSessionId = "chat-1";
 });
+
+afterEach(() => setCurrentWorkspace(null, null));
 
 describe("ChatWindow Requirement surface", () => {
   it("issues no Requirement request for an ordinary Chat on a current server", async () => {

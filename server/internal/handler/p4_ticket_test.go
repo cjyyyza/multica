@@ -229,7 +229,7 @@ func TestClaimTaskSendsP4TicketOnlyWithDepots(t *testing.T) {
 		t.Skip("database not available")
 	}
 
-	runtimeID := dbfx.Runtime(t, "p4-ticket-claim")
+	runtimeID := dbfx.Runtime(t, "p4-ticket-claim", testutil.Cols{"daemon_id": "p4-ticket-claim"})
 	agentID := dbfx.Agent(t, "P4 ticket claim", runtimeID)
 
 	claim := func(t *testing.T, label string) string {

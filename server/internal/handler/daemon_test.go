@@ -2353,11 +2353,8 @@ func TestClaimTask_CodeResourceFallbackMatrix(t *testing.T) {
 		{"port": "perforce.example.com:1666", "depot": "//depot/workspace"},
 	})
 
-	var agentID, runtimeID string
-	dbfx.QueryRow(t,
-		`SELECT id, runtime_id FROM agent WHERE workspace_id = $1 LIMIT 1`,
-		testWorkspaceID,
-	).Scan(&agentID, &runtimeID)
+	runtimeID := dbfx.Runtime(t, "Fallback matrix runtime", testutil.Cols{"daemon_id": "test-claim-fallback-matrix"})
+	agentID := dbfx.Agent(t, "Fallback matrix agent", runtimeID)
 
 	gitResource := testutil.Cols{
 		"resource_type": "github_repo",

@@ -109,6 +109,17 @@ func (e popoP2Env) inbound(t *testing.T, eventID, text string, quote map[string]
 
 func (e popoP2Env) inboundChat(t *testing.T, eventID, text, chatID, chatType string, addressed bool, quote map[string]string) map[string]any {
 	t.Helper()
+	accepted := e.postInboundChat(t, eventID, text, chatID, chatType, addressed, quote)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if testHandler.ChannelRouter != nil {
+		_ = testHandler.ChannelRouter.Drain(ctx)
+	}
+	return accepted
+}
+
+func (e popoP2Env) postInboundChat(t *testing.T, eventID, text, chatID, chatType string, addressed bool, quote map[string]string) map[string]any {
+	t.Helper()
 	body := map[string]any{
 		"protocol_version": 1,
 		"event_id":         eventID,
@@ -123,11 +134,6 @@ func (e popoP2Env) inboundChat(t *testing.T, eventID, text, chatID, chatType str
 		body["quote"] = quote
 	}
 	accepted := testutil.Call(t, testHandler.IngestPopoBridgeInbound, popoBearer(testutil.JSONRequest(http.MethodPost, "/api/popo/bridge/inbound", body), e.token)).Want(http.StatusOK).Map()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if testHandler.ChannelRouter != nil {
-		_ = testHandler.ChannelRouter.Drain(ctx)
-	}
 	return accepted
 }
 

@@ -68,7 +68,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 import { ProjectResourcesSection } from "./project-resources-section";
 
 function submitDepot() {
-  fireEvent.click(screen.getByRole("button", { name: /add resource/i }));
+  fireEvent.click(screen.getByRole("button", { name: /attach a perforce depot/i }));
   fireEvent.change(screen.getByLabelText("perforce.example.com:1666"), {
     target: { value: "p4:1666" },
   });
@@ -300,12 +300,12 @@ describe("ProjectResourcesSection — Perforce asks for a local directory first"
       { id: "p4-1", resource_type: "perforce_depot", resource_ref: { port: "p4:1666", depot: "//depot/game" } },
     ];
     renderWithI18n(<ProjectResourcesSection projectId="p1" />);
-    fireEvent.click(screen.getByRole("button", { name: "Change how runs use this folder" }));
+    fireEvent.click(screen.getByRole("button", { name: "Parallel" }));
 
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).queryByText("Run in parallel, isolated")).toBeNull();
     expect(h.updateMock).not.toHaveBeenCalled();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    fireEvent.click(within(dialog).getByRole("radio", { name: /edit directly/i }));
 
     await waitFor(() => expect(h.updateMock).toHaveBeenCalledWith({
       resourceId: "dir-1",

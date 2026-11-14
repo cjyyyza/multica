@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/multica-ai/multica/server/internal/projectaccess"
 	"log/slog"
 	"net/http"
 
@@ -221,7 +222,7 @@ func (h *Handler) writeRequirementResult(w http.ResponseWriter, r *http.Request,
 	}
 	for _, update := range result.IssueUpdates {
 		response := issueToResponse(update.Issue, h.getIssuePrefix(r.Context(), update.Issue.WorkspaceID))
-		h.fillStatusCategory(r.Context(), update.Issue.WorkspaceID, &response)
+		h.fillStatusCategory(r.Context(), update.Issue.WorkspaceID, projectaccess.Hidden{}, &response)
 		h.publish(protocol.EventIssueUpdated, result.WorkspaceID, result.ActorType, result.ActorID, map[string]any{
 			"issue": response, "status_changed": update.PreviousStatus != update.Issue.Status, "prev_status": update.PreviousStatus,
 		})

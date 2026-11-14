@@ -8,6 +8,7 @@ import {
 } from "./tab-store-storage";
 import { createSafeId } from "@multica/core/utils";
 import { workspaceSlugForPath } from "@multica/core/paths";
+import { isIssueUuid } from "@multica/core/issues/canonical-id";
 
 // Tab sessions hold serializable URLs, identity, virtual history, and view
 // mementos. The coordinator projects the active session onto the single router;
@@ -136,6 +137,14 @@ export interface WorkspaceTabGroup {
    * far away from it.
    */
   recentTabIds: string[];
+  /**
+   * Issue UUID → identifier (`MUL-123`), learned when a tab resolves its issue
+   * or rewrites its UUID URL to the identifier URL. In-app links still carry the
+   * UUID, so without this an open of an issue that already has a tab would
+   * miss it and add a second one. Bounded, and persisted so that dedupe
+   * still works after a restart.
+   */
+  issueAliases?: Record<string, string>;
 }
 
 interface TabStore {
@@ -164,6 +173,16 @@ interface TabStore {
    * Deliberately NOT persisted.
    */
   mountGeneration: number;
+  /**
+   * Bumped when a background open (Cmd/middle-click) lands on a tab that
+   * already shows the resource. The open must not move the user, so instead
+   * of activating that tab the tab bar flashes it. Not persisted; the tab
+   * bar clears it once the flash has played, so a later remount or effect
+   * re-run cannot replay it.
+   */
+  tabAttention: { tabId: string; sequence: number } | null;
+  /** Drop the attention signal, unless a newer one has replaced it. */
+  clearTabAttention: (sequence: number) => void;
 
   /**
    * Switch to a workspace.
@@ -200,6 +219,8 @@ interface TabStore {
   closeTab: (tabId: string) => void;
   /** Close every other unpinned tab in the target tab's workspace. */
   closeOtherTabs: (tabId: string) => void;
+  /** Close the unpinned tabs after the target tab in its workspace. */
+  closeTabsToRight: (tabId: string) => void;
   /**
    * Activate a tab. Finds it across all workspaces. Sets both the owning
    * workspace as active and that group's activeTabId; needed for any code
@@ -208,6 +229,8 @@ interface TabStore {
   setActiveTab: (tabId: string) => void;
   /** Patch display metadata of a tab (title-sync). Finds across groups. */
   updateTab: (tabId: string, patch: Partial<Pick<TabSession, "title">>) => void;
+  /** Record a resolved tab's issue identity, including restored background tabs. */
+  rememberIssueIdentity: (tabId: string, uuid: string, identifier: string) => void;
   /**
    * In-tab navigation: update the active session's url/resourceKey and its
    * virtual history. The Coordinator reconciles the router afterwards.
@@ -378,6 +401,93 @@ function inboxSelectionKeyForUrl(url: string): string | null {
   if (!selectedKey) return null;
 
   return `${pathname}?issue=${encodeURIComponent(selectedKey)}`;
+}
+
+/** Historical aliases are bounded; identities of open tabs are never evicted. */
+const MAX_ISSUE_ALIASES = 200;
+
+/** The `{segment}` of a `/{ws}/issues/{segment}[/...]` URL, else null. */
+function issueRouteSegment(url: string): string | null {
+  const segments = splitTabUrl(url).pathname.split("/");
+  return segments[2] === "issues" && segments[3] ? segments[3] : null;
+}
+
+/**
+ * `key` with a learned issue UUID written as the issue's identifier, so
+ * `/ws/issues/{uuid}` and `/ws/issues/MUL-123` dedupe to the same tab.
+ */
+function canonicalResourceKey(
+  key: string,
+  aliases: Record<string, string> | undefined,
+): string {
+  const segment = issueRouteSegment(key);
+  if (!segment || !aliases || !isIssueUuid(segment)) return key;
+  const identifier = aliases[segment];
+  if (!identifier) return key;
+  const { pathname, suffix } = splitTabUrl(key);
+  const segments = pathname.split("/");
+  segments[3] = identifier;
+  return `${segments.join("/")}${suffix}`;
+}
+
+/** The tab in `group` showing the resource `url` opens, if any. */
+function findTabForUrl(
+  group: WorkspaceTabGroup,
+  url: string,
+): TabSession | undefined {
+  const aliases = group.issueAliases;
+  const key = canonicalResourceKey(resourceKeyForUrl(url), aliases);
+  return group.tabs.find(
+    (t) => canonicalResourceKey(t.resourceKey, aliases) === key,
+  );
+}
+
+function limitIssueAliases(
+  entries: [string, string][],
+  tabs: TabSession[],
+): Record<string, string> {
+  const openIssues = new Set(tabs.map((tab) => issueRouteSegment(tab.url)));
+  let toDrop = Math.max(0, entries.length - MAX_ISSUE_ALIASES);
+  return Object.fromEntries(entries.filter(([uuid, identifier]) => {
+    if (toDrop > 0 && !openIssues.has(uuid) && !openIssues.has(identifier)) {
+      toDrop--;
+      return false;
+    }
+    return true;
+  }));
+}
+
+/** Resolved tab data and canonical URL replacements both identify an issue. */
+function withIssueAlias(
+  group: WorkspaceTabGroup,
+  uuid: string | null,
+  identifier: string | null,
+): WorkspaceTabGroup {
+  if (!uuid || !identifier) return group;
+  if (!isIssueUuid(uuid) || isIssueUuid(identifier)) return group;
+  if (group.issueAliases?.[uuid] === identifier) return group;
+  const entries = Object.entries(group.issueAliases ?? {}).filter(
+    ([key]) => key !== uuid,
+  );
+  entries.push([uuid, identifier]);
+  return {
+    ...group,
+    issueAliases: limitIssueAliases(entries, group.tabs),
+  };
+}
+
+/** Persisted aliases are untrusted: keep UUID → identifier string pairs only. */
+function normalizeIssueAliases(value: unknown, tabs: TabSession[]): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const entries = Object.entries(value).filter(
+    (entry): entry is [string, string] =>
+      isIssueUuid(entry[0]) &&
+      typeof entry[1] === "string" &&
+      entry[1] !== "" &&
+      !entry[1].includes("/") &&
+      !isIssueUuid(entry[1]),
+  );
+  return limitIssueAliases(entries, tabs);
 }
 
 /**
@@ -596,7 +706,13 @@ function withSessionNavigation(
   const nextTabs = [...group.tabs];
   nextTabs[index] = next;
   return withBrowsingNavigation(
-    { ...group, tabs: nextTabs },
+    replace
+      ? withIssueAlias(
+          { ...group, tabs: nextTabs },
+          issueRouteSegment(current.url),
+          issueRouteSegment(nextUrl),
+        )
+      : { ...group, tabs: nextTabs },
     slug,
     current,
     nextUrl,
@@ -709,6 +825,7 @@ function reconcileGroup(
     browsingHistory: prev?.browsingHistory ?? [],
     browsingHistoryTitles: prev?.browsingHistoryTitles ?? {},
     recentTabIds,
+    issueAliases: prev?.issueAliases ?? {},
   };
 }
 
@@ -744,12 +861,13 @@ function findTabLocation(
 function buildCloseOtherTabsResult(
   byWorkspace: Record<string, WorkspaceTabGroup>,
   tabId: string,
+  scope: "others" | "right" = "others",
 ): Record<string, WorkspaceTabGroup> | null {
   const hit = findTabLocation(byWorkspace, tabId);
   if (!hit) return null;
-  const { slug, group } = hit;
+  const { slug, group, index } = hit;
   const closingTabs = group.tabs.filter(
-    (tab) => !tab.pinned && tab.id !== tabId,
+    (tab, i) => !tab.pinned && tab.id !== tabId && (scope === "others" || i > index),
   );
   if (closingTabs.length === 0) return null;
 
@@ -778,6 +896,7 @@ export const useTabStore = create<TabStore>()(
       activeWorkspaceSlug: null,
       byWorkspace: {},
       mountGeneration: 0,
+      tabAttention: null,
 
       switchWorkspace(slug, openPath) {
         // Defensive no-op if slug is empty/invalid — callers like the
@@ -825,12 +944,8 @@ export const useTabStore = create<TabStore>()(
         if (desiredPath) {
           const clean = sanitizeTabPath(desiredPath);
           if (clean) {
-            const key = resourceKeyForUrl(clean);
-            const matchIndex = existing.tabs.findIndex(
-              (t) => t.resourceKey === key,
-            );
-            if (matchIndex >= 0) {
-              const match = existing.tabs[matchIndex];
+            const match = findTabForUrl(existing, clean);
+            if (match) {
               const nextGroup = withBrowsingVisit(
                 reconcileGroup(existing, existing.tabs, match.id),
                 slug,
@@ -883,13 +998,21 @@ export const useTabStore = create<TabStore>()(
         const group = byWorkspace[activeWorkspaceSlug];
         if (!group) return "";
 
-        // Dedup by resourceKey: the existing tab keeps its view-state URL.
-        const key = resourceKeyForUrl(clean);
-        const existingIndex = group.tabs.findIndex(
-          (t) => t.resourceKey === key,
-        );
-        if (existingIndex >= 0) {
-          const existing = group.tabs[existingIndex];
+        // Dedup by resourceKey: the existing tab keeps its own url (its
+        // filters/anchor are its view state); we only focus it.
+        const existing = findTabForUrl(group, clean);
+        if (existing && opts?.activate !== true) {
+          // A background open keeps the user where they are: point at the
+          // tab already showing the resource instead of switching to it.
+          set({
+            tabAttention: {
+              tabId: existing.id,
+              sequence: (get().tabAttention?.sequence ?? 0) + 1,
+            },
+          });
+          return existing.id;
+        }
+        if (existing) {
           const historyBase = withActiveSessionVisit(
             group,
             activeWorkspaceSlug,
@@ -1028,6 +1151,13 @@ export const useTabStore = create<TabStore>()(
         set({ byWorkspace: next });
       },
 
+      closeTabsToRight(tabId) {
+        const { byWorkspace } = get();
+        const next = buildCloseOtherTabsResult(byWorkspace, tabId, "right");
+        if (!next) return;
+        set({ byWorkspace: next });
+      },
+
       setActiveTab(tabId) {
         const { byWorkspace, activeWorkspaceSlug } = get();
         const hit = findTabLocation(byWorkspace, tabId);
@@ -1065,6 +1195,24 @@ export const useTabStore = create<TabStore>()(
             [slug]: nextGroup,
           },
         });
+      },
+
+      rememberIssueIdentity(tabId, uuid, identifier) {
+        const { byWorkspace } = get();
+        const hit = findTabLocation(byWorkspace, tabId);
+        if (!hit) return;
+        const { slug, group, index } = hit;
+        const segment = issueRouteSegment(group.tabs[index].url)?.toLowerCase();
+        // A resolving tab may already have navigated away from this issue.
+        if (segment !== uuid.toLowerCase() && segment !== identifier.toLowerCase()) return;
+        const nextGroup = withIssueAlias(group, uuid, identifier);
+        if (nextGroup === group) return;
+        set({ byWorkspace: { ...byWorkspace, [slug]: nextGroup } });
+      },
+
+      clearTabAttention(sequence) {
+        if (get().tabAttention?.sequence !== sequence) return;
+        set({ tabAttention: null });
       },
 
       navigateActiveSession(url, opts) {
@@ -1320,7 +1468,12 @@ export const useTabStore = create<TabStore>()(
       },
 
       reset() {
-        set({ activeWorkspaceSlug: null, byWorkspace: {}, mountGeneration: 0 });
+        set({
+          activeWorkspaceSlug: null,
+          byWorkspace: {},
+          mountGeneration: 0,
+          tabAttention: null,
+        });
       },
     }),
     {
@@ -1384,6 +1537,7 @@ function partializeTabs(state: PersistedTabState) {
           recentTabIds: group.recentTabIds,
           browsingHistory: group.browsingHistory,
           browsingHistoryTitles: group.browsingHistoryTitles,
+          issueAliases: group.issueAliases,
           tabs: group.tabs.map((t) => ({
             id: t.id,
             url: t.url,
@@ -1517,6 +1671,7 @@ export function mergePersistedTabs<T extends PersistedTabState>(
           browsingHistory,
           tabs,
         ),
+        issueAliases: normalizeIssueAliases(pGroup.issueAliases, tabs),
       },
       tabs,
       activeTabId,
@@ -1673,6 +1828,7 @@ interface V4Persisted {
 interface V5PersistedGroup extends V4PersistedGroup {
   browsingHistory: string[];
   browsingHistoryTitles?: Record<string, string>;
+  issueAliases?: unknown;
 }
 
 interface V5Persisted {

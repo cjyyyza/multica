@@ -6,9 +6,10 @@ import { platformTestOptions } from "../../scripts/vitest-platform.mjs";
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: {
-      "@": resolve(__dirname, "src/renderer/src"),
-    },
+    alias: [
+      { find: "@", replacement: resolve(__dirname, "src/renderer/src") },
+      { find: /^electron$/, replacement: resolve(__dirname, "test/electron-guard.ts") },
+    ],
   },
   test: {
     ...platformTestOptions,

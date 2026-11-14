@@ -67,13 +67,17 @@ func TestPMRoutesUseTaskIdentityAndKeepManualSourceWritesHumanOnly(t *testing.T)
 		r := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
 		r.Header.Set("Authorization", "Bearer "+token)
 		r.Header.Set("Content-Type", "application/json")
-		// The middleware must overwrite these spoofed actor values.
+		// The middleware must overwrite these spoofed actor values while
+		// enforcing the task token's workspace selection.
 		r.Header.Set("X-Actor-Source", "member")
 		r.Header.Set("X-Agent-ID", triager)
-		r.Header.Set("X-Workspace-ID", "00000000-0000-4000-8000-000000000099")
+		r.Header.Set("X-Workspace-ID", testWorkspaceID)
 		return r
 	}
 	base := "/api/workspaces/" + testWorkspaceID + "/yixiezuo"
+	spoofed := request(base+"/pm/issues", yixiezuo.PMSourceRequest{Scope: scope, Issue: item})
+	spoofed.Header.Set("X-Workspace-ID", "00000000-0000-4000-8000-000000000099")
+	testutil.Call(t, testServer.Config.Handler.ServeHTTP, spoofed).Want(http.StatusForbidden)
 	var synced yixiezuo.PMResult
 	testutil.Call(t, testServer.Config.Handler.ServeHTTP, request(base+"/pm/issues", yixiezuo.PMSourceRequest{Scope: scope, Issue: item})).Want(http.StatusOK).JSON(&synced)
 	if synced.State != "created" {

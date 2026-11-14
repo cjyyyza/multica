@@ -30,6 +30,7 @@ func (s *notifyTestSender) Send(_ context.Context, target notify.Target, notific
 
 func notifyCLISetup(t *testing.T) (string, string) {
 	t.Helper()
+	t.Setenv("MULTICA_APP_URL", "")
 	workdir := t.TempDir()
 	t.Chdir(workdir)
 	agentsFile := filepath.Join(workdir, "AGENTS.md")
