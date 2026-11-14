@@ -1,6 +1,6 @@
 import "./env";
 
-import { createHash, randomBytes, randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { TestApiClient } from "./fixtures";
@@ -17,6 +17,7 @@ async function apiRequest({
   method = "GET",
   body,
   idempotencyKey,
+  capabilities,
 }: {
   path: string;
   token: string;
@@ -24,11 +25,13 @@ async function apiRequest({
   method?: string;
   body?: unknown;
   idempotencyKey?: string;
+  capabilities?: string;
 }): Promise<ApiResult> {
   const response = await fetch(`${API_BASE}${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${token}`,
+      ...(capabilities ? { "X-Client-Capabilities": capabilities } : {}),
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       ...(workspaceId ? { "X-Workspace-ID": workspaceId } : {}),
       ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
@@ -90,28 +93,21 @@ function sourceFixture(externalId: string) {
   return { source, snapshot: { ...snapshot, digest }, digest };
 }
 
-async function mintTaskToken(
-  db: pg.Client,
-  { taskId, agentId, workspaceId, userId }: { taskId: string; agentId: string; workspaceId: string; userId: string },
-) {
-  const token = `mat_${randomBytes(32).toString("hex")}`;
-  await db.query(
-    `INSERT INTO task_token (token_hash, task_id, agent_id, workspace_id, user_id, expires_at)
-     VALUES ($1, $2, $3, $4, $5, now() + interval '1 hour')`,
-    [sha256(token), taskId, agentId, workspaceId, userId],
-  );
-  return token;
-}
-
-async function markTaskRunning(db: pg.Client, taskId: string) {
-  const result = await db.query(
-    `UPDATE agent_task_queue
-     SET status = 'running', dispatched_at = COALESCE(dispatched_at, now()),
-         started_at = COALESCE(started_at, now()), completed_at = NULL
-     WHERE id = $1 AND status IN ('queued', 'deferred', 'dispatched')`,
-    [taskId],
-  );
-  expect(result.rowCount).toBe(1);
+async function startTask(api: TestApiClient, workspaceId: string, runtimeId: string, taskId: string) {
+  // Claim through the API so comment-delivery receipts match a real daemon.
+  const { task } = expectApi(await apiRequest({
+    path: `/api/daemon/runtimes/${runtimeId}/tasks/claim`,
+    token: api.getToken()!, workspaceId, method: "POST", body: {},
+    capabilities: "plan-mode-v1",
+  }), 200);
+  expect(task?.id).toBe(taskId);
+  expect(task.auth_token).toMatch(/^mat_/);
+  expectApi(await apiRequest({
+    path: `/api/daemon/tasks/${taskId}/start`,
+    token: api.getToken()!, workspaceId, method: "POST",
+    body: { runtime_id: runtimeId, dispatched_at: task.dispatched_at },
+  }), 200);
+  return task.auth_token as string;
 }
 
 async function completeTask(api: TestApiClient, workspaceId: string, taskId: string) {
@@ -198,7 +194,7 @@ test(`first Requirement intake, deep link, execution and human review (${viewpor
       `INSERT INTO agent_runtime (
          workspace_id, name, runtime_mode, provider, status, device_info,
          metadata, owner_id, last_seen_at
-       ) VALUES ($1, $2, 'cloud', 'claude', 'online', 'E2E fixture', '{}'::jsonb, $3, now())
+       ) VALUES ($1, $2, 'cloud', 'claude', 'online', 'E2E fixture', '{"capabilities":["plan-mode-v1"]}'::jsonb, $3, now())
        RETURNING id::text`,
       [workspace.id, `Requirement runtime ${runId}`, userId],
     );
@@ -340,8 +336,7 @@ test(`first Requirement intake, deep link, execution and human review (${viewpor
     await expectEntityCounts(db, requirementId, { chats: 1, issues: 0, approvals: 0, planTasks: 1, executeTasks: 0 });
     await screenshot(page, testInfo, "01-deep-link-open");
 
-    await markTaskRunning(db, planTaskId);
-    const planToken = await mintTaskToken(db, { taskId: planTaskId, agentId, workspaceId: workspace.id, userId });
+    const planToken = await startTask(api, workspace.id, runtime.rows[0]!.id, planTaskId);
     const candidate = {
       goal: `Ship requirement ${externalId}`,
       nonGoals: ["No real POPO or PMMCP side effects"],
@@ -447,8 +442,7 @@ test(`first Requirement intake, deep link, execution and human review (${viewpor
     expect(chatMessagesAfter.rows[0]!.count).toBe(chatMessagesBefore.rows[0]!.count);
     await screenshot(page, testInfo, "03-approved-read-only");
 
-    await markTaskRunning(db, initialTaskId);
-    const initialExecuteToken = await mintTaskToken(db, { taskId: initialTaskId, agentId, workspaceId: workspace.id, userId });
+    const initialExecuteToken = await startTask(api, workspace.id, runtime.rows[0]!.id, initialTaskId);
     const beforeFirstReview = await getRequirement(api, workspace.id, requirementId);
     const directReview = expectApi(await apiRequest({
       path: `/api/issues/${issueId}`,
@@ -500,7 +494,7 @@ test(`first Requirement intake, deep link, execution and human review (${viewpor
     expect(persistedApproval.rows).toEqual([{ initial_task_id: initialTaskId }]);
     await screenshot(page, testInfo, "05-rejected-new-execution");
 
-    await markTaskRunning(db, retryTaskId);
+    await startTask(api, workspace.id, runtime.rows[0]!.id, retryTaskId);
     await completeTask(api, workspace.id, retryTaskId);
     const inSecondReview = await getRequirement(api, workspace.id, requirementId);
     expect(inSecondReview).toMatchObject({ state: "in_review", issueId });

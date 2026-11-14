@@ -13,7 +13,8 @@ import (
 
 // TestOpencodeV2ExecuteExitIsTerminal drives the real Execute path against a
 // fake 2.x CLI: the stream half (processEvents) waives the missing final
-// step_finish, and the process half must still decide the outcome.
+// step_finish, and the process half must confirm the native result before
+// accepting a clean exit as successful.
 func TestOpencodeV2ExecuteExitIsTerminal(t *testing.T) {
 	t.Parallel()
 
@@ -36,8 +37,12 @@ func TestOpencodeV2ExecuteExitIsTerminal(t *testing.T) {
 			t.Parallel()
 
 			var script strings.Builder
-			script.WriteString("#!/bin/sh\ncat > /dev/null\n")
+			script.WriteString("#!/bin/sh\n")
+			exported := strings.Replace(nativeOpenCodeExport, "ses_current", "ses_v2", 1)
+			script.WriteString("if [ \"$1\" = session ] && [ \"$2\" = export ]; then\nprintf '%s\\n' '" + exported + "'\nexit 0\nfi\n")
+			script.WriteString("cat > /dev/null\n")
 			for _, l := range tc.lines {
+				l = strings.Replace(l, `"part":{`, `"part":{"messageID":"current",`, 1)
 				script.WriteString("printf '%s\\n' '" + l + "'\n")
 			}
 			script.WriteString("exit " + string(rune('0'+tc.exitCode)) + "\n")
