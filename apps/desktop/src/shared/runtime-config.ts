@@ -15,9 +15,9 @@ export type RuntimeConfigResult =
 
 export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = Object.freeze({
   schemaVersion: 1,
-  apiUrl: "http://10.219.109.119:8080",
-  wsUrl: "ws://10.219.109.119:8080/ws",
-  appUrl: "http://10.219.109.119:3000",
+  apiUrl: "http://10.240.176.201:8080",
+  wsUrl: "ws://10.240.176.201:8080/ws",
+  appUrl: "http://10.240.176.201:3000",
 });
 
 const LOCAL_DEV_RUNTIME_CONFIG: RuntimeConfig = Object.freeze({
