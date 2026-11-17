@@ -1,6 +1,6 @@
 ---
 name: multica-platform
-description: "Use for Multica platform actions beyond the runtime brief: issue and PR contracts, sub-issues, views, charts, comment files, mentions, agents, squads, autopilots, projects, runtimes, local environments, skill import and read-only 易协作 PM cycles. Not for product code."
+description: "Use for Multica actions the runtime brief does not fully cover: issue and PR contracts, sub-issues, batch changes, views, charts, comment files, mentions, agents, squads, autopilots, projects, runtimes, local environments, skill import, themes, 易协作 PM. Not for product code."
 user-invocable: false
 allowed-tools: Bash(multica *), Bash(git *), Bash(gh *)
 ---
@@ -20,6 +20,7 @@ Read the invariants below, then open the reference(s) your task actually needs
 | Open | When the task is about |
 |---|---|
 | `references/issues.md` | Issues: PR linking, reading a linked PR's state, saved views (reading, creating, changing), custom properties, status side effects, who else is running, wakeups (events, conditions, timers, check-ins), charts vs attached files in a comment |
+| `references/batch-changes.md` | Changing many issues at once (`issue batch update`, `issue delete <id>... --dry-run`): label and property operations, per-issue results, dry runs |
 | `references/sub-issues.md` | Sub-issues: whether to split an issue at all, `todo` vs `backlog` children, serial chains, stages and the parent wakeups they drive |
 | `references/mentions.md` | Writing a `mention://` link: which types enqueue a run, which are inert, why one silently did nothing; steering another agent's running turn (`comment add --steer`) |
 | `references/agents.md` | Creating, copying or debugging an agent definition: fields, secrets, MCP config, skill binding |
@@ -29,6 +30,7 @@ Read the invariants below, then open the reference(s) your task actually needs
 | `references/runtimes.md` | Runtimes, daemons, `repo checkout`, Perforce in the person's existing workspace, `p4 edit` / `status` / Swarm, and the task CLI boundary |
 | `references/environments.md` | Local environments in the issue sidebar: writing `.multica/environments.toml`, `multica env start` / `stop` / `list`, detected servers |
 | `references/skill-import.md` | Importing a skill into this workspace from a URL or a local archive |
+| `references/themes.md` | Building or changing a Multica app theme: the format, the checker, delivering to Desktop's themes folder or as a `.zip` |
 | `references/yixiezuo-pm.md` | A configured PM cycle: read-only 易协作 sync, closure reconciliation, and deduplicated triage notification |
 
 Open what the task needs. A single-domain task usually needs one; a task that

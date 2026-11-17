@@ -1059,6 +1059,7 @@ type claimProjectContext struct {
 	ProjectID   string
 	Title       string
 	Description string
+	Archived    bool
 	Resources   []ProjectResourceData
 	Repos       []RepoData
 	P4Depots    []P4DepotData
@@ -1071,6 +1072,7 @@ func (c claimProjectContext) applyTo(resp *AgentTaskResponse) {
 	resp.ProjectID = c.ProjectID
 	resp.ProjectTitle = c.Title
 	resp.ProjectDescription = c.Description
+	resp.ProjectArchived = c.Archived
 	if len(c.Resources) > 0 {
 		resp.ProjectResources = c.Resources
 	}
@@ -1120,6 +1122,7 @@ func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, wor
 			out.ProjectID = uuidToString(project.ID)
 			out.Title = project.Title
 			out.Description = project.Description.String
+			out.Archived = project.ArchivedAt.Valid
 
 			rows, resErr := h.Queries.ListProjectResourcesInWorkspace(ctx, db.ListProjectResourcesInWorkspaceParams{
 				ProjectID:   project.ID,

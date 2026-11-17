@@ -1,14 +1,15 @@
 import { createRef } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { EditorView } from "@tiptap/pm/view";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_VOICE_SETTINGS,
   cancelVoice,
   connectVoiceRuntime,
   getVoiceState,
   stopVoice,
   useVoiceModelsStore,
+  useVoiceSettingsStore,
 } from "@multica/core/voice";
 import type { ReplyAnnotation } from "@multica/core/drafts/reply-annotation";
 import { renderWithI18n } from "../../test/i18n";
@@ -29,9 +30,6 @@ const annotation: ReplyAnnotation = {
 };
 
 beforeAll(() => {
-  // jsdom has no layout, so ProseMirror's post-dispatch scroll walks
-  // coordsAtPos into getClientRects() on nodes jsdom does not implement.
-  (EditorView.prototype as unknown as { scrollToSelection: () => void }).scrollToSelection = () => {};
   connectVoiceRuntime(() => ({
     record: () => ({
       start: () => Promise.resolve(),
@@ -50,10 +48,12 @@ beforeEach(() => {
     models: [{ id: "m", name: "M", author: "A", licenseUrl: "https://example.com", languages: ["zh"],
       languageHint: true, sizeBytes: 1, status: "ready", receivedBytes: 1 }],
   }));
+  act(() => useVoiceSettingsStore.getState().update({ enabled: true }));
 });
 
 afterEach(() => {
   act(() => cancelVoice());
+  act(() => useVoiceSettingsStore.getState().update(DEFAULT_VOICE_SETTINGS));
   cleanup();
 });
 

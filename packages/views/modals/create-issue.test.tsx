@@ -836,10 +836,10 @@ describe("CreateIssueModal", () => {
     }));
   });
 
-  it("uses the same compact attachment control as agent mode", () => {
+  it("uses the same attachment control as agent mode, sized to match the mic", () => {
     renderModal(<CreateIssueModal onClose={vi.fn()} />);
 
-    expect(screen.getByRole("button", { name: "Upload file" })).toHaveAttribute("data-size", "sm");
+    expect(screen.getByRole("button", { name: "Upload file" })).not.toHaveAttribute("data-size");
   });
 
   it("shows success feedback with a direct path to the new issue", async () => {
@@ -1709,6 +1709,17 @@ describe("CreateIssueModal", () => {
       expect.objectContaining({ projectId: "proj-1" }),
     );
     expect(mockSetAgent).toHaveBeenCalledWith({ prompt: "Refactor auth" });
+  });
+
+  it("opens without a project when asked for none, over an unfinished draft's project", async () => {
+    const user = userEvent.setup();
+    const firstOpen = renderModal(<CreateIssueModal onClose={vi.fn()} />);
+    await user.click(screen.getByTestId("project-picker"));
+    firstOpen.unmount();
+
+    renderModal(<CreateIssueModal onClose={vi.fn()} data={{ project_id: null }} />);
+
+    expect(screen.getByTestId("project-picker")).toHaveAttribute("data-project-id", "none");
   });
 
   it("restores an unfinished project selection after manual create remounts", async () => {

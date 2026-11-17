@@ -1512,7 +1512,6 @@ export function ManualCreatePanel({
               <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-2.5 border-t px-4 py-3 shrink-0 sm:flex sm:flex-wrap">
                 <div className="flex min-h-7 items-center gap-2 sm:mr-auto">
                   <FileUploadButton
-                    size="sm"
                     multiple
                     onSelect={(file) => descEditorRef.current?.uploadFile(file)}
                   />
@@ -1570,7 +1569,7 @@ export function manualDialogContentClass(isExpanded: boolean) {
     // `max-w-[calc(100%-2rem)]`, leaving the card edge to edge on a phone
     // (MUL-6236). `!h-96` stays a hard height; it already fits the shortest
     // phone we support.
-    "!w-full !max-w-[calc(100vw-1.5rem)]",
+    "!w-full !max-w-[calc(100%-1.5rem)]",
     isExpanded
       ? "!h-5/6 !-translate-y-1/2 sm:!max-w-4xl"
       : "!h-96 !-translate-y-1/2 sm:!max-w-2xl",
