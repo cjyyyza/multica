@@ -98,6 +98,14 @@ SMTP takes priority over Resend whenever `SMTP_HOST` is non-empty.
 | `SMTP_TLS_INSECURE` | `false` | Skips certificate verification; trusted internal networks only |
 | `SMTP_EHLO_NAME` | hostname | EHLO/FQDN required by strict relays |
 
+### POPO CLI verification codes
+
+Setting `MULTICA_POPO_CLI` selects direct `message_send_p2p` delivery instead of SMTP, Resend, or stdout. No robot bridge is used. Failed or uncertain delivery does not fall back to email. See [Sign-in and signup](/auth-setup#popo-cli-verification-codes).
+
+| Variable | Default | Description |
+|---|---|---|
+| `MULTICA_POPO_CLI` | empty | CLI command on `PATH`, or an absolute `bin/popo.js` path; the API host needs Node.js and an authenticated CLI profile |
+
 ### Google OAuth
 
 | Variable | Default | Description |

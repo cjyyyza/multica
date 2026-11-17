@@ -218,6 +218,10 @@ type RuntimeRecoveryNotifier interface {
 	NotifyRuntimeRecovered(ctx context.Context, workspaceID string)
 }
 
+type PopoVerificationCodeSender interface {
+	SendVerificationCode(ctx context.Context, email, code string) error
+}
+
 type Handler struct {
 	Queries                *db.Queries
 	ReadSelector           *dbreader.Selector
@@ -417,6 +421,7 @@ type Handler struct {
 	// PopoBridge owns pairing, Windows-bridge tokens, inbound persist,
 	// and the send-command queue. Nil unless POPO is configured.
 	PopoBridge            *popo.BridgeService
+	PopoVerificationCodes PopoVerificationCodeSender
 	PopoOutbound          *popo.Outbound
 	PopoRequirementOutbox *popo.RequirementOutboxWorker
 

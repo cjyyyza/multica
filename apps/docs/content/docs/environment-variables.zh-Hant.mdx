@@ -98,6 +98,14 @@ MULTICA_PUBLIC_URL=https://api.multica.example.com
 | `SMTP_TLS_INSECURE` | `false` | 跳過憑證校驗，僅用於可信內網 |
 | `SMTP_EHLO_NAME` | 主機名 | 嚴格 relay 要求的 EHLO/FQDN |
 
+### POPO CLI 驗證碼
+
+設定 `MULTICA_POPO_CLI` 後，驗證碼直接透過 `message_send_p2p` 傳送，不再使用 SMTP、Resend 或標準輸出，也不使用機器人通道。傳送失敗或結果不明確時不會回退到郵件。詳見[登入與註冊](/auth-setup#使用-popo-cli-傳送驗證碼)。
+
+| 變數 | 預設值 | 說明 |
+|---|---|---|
+| `MULTICA_POPO_CLI` | 空 | `PATH` 中的 CLI 命令，或 `bin/popo.js` 的絕對路徑；API 主機需要 Node.js 和已登入的 CLI 設定 |
+
 ### Google OAuth
 
 | 變數 | 預設值 | 說明 |

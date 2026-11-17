@@ -11,6 +11,7 @@ interface ConfigState {
   cdnSigned: boolean;
   allowSignup: boolean;
   googleClientId: string;
+  popoVerificationEnabled: boolean;
   daemonServerUrl: string;
   daemonAppUrl: string;
   daemonConfigStatus: DaemonConfigStatus;
@@ -56,6 +57,7 @@ interface ConfigState {
   setAuthConfig: (config: {
     allowSignup: boolean;
     googleClientId?: string;
+    popoVerificationEnabled?: boolean;
     workspaceCreationDisabled?: boolean;
     vcsIntegrationAvailable?: boolean;
   }) => void;
@@ -80,6 +82,7 @@ export const configStore = createStore<ConfigState>((set) => ({
   cdnSigned: false,
   allowSignup: true,
   googleClientId: "",
+  popoVerificationEnabled: false,
   daemonServerUrl: "",
   daemonAppUrl: "",
   daemonConfigStatus: "loading",
@@ -98,9 +101,10 @@ export const configStore = createStore<ConfigState>((set) => ({
   setAuthConfig: ({
     allowSignup,
     googleClientId = "",
+    popoVerificationEnabled = false,
     workspaceCreationDisabled = false,
     vcsIntegrationAvailable = false,
-  }) => set({ allowSignup, googleClientId, workspaceCreationDisabled, vcsIntegrationAvailable }),
+  }) => set({ allowSignup, googleClientId, popoVerificationEnabled, workspaceCreationDisabled, vcsIntegrationAvailable }),
   setDaemonConfig: ({
     daemonServerUrl = "",
     daemonAppUrl = "",

@@ -1,6 +1,6 @@
 ---
 title: 로그인과 가입
-description: 이메일 인증 코드, Google 로그인, 신규 사용자 가입 범위를 설정합니다.
+description: 이메일 또는 POPO 인증 코드, Google 로그인, 신규 사용자 가입 범위를 설정합니다.
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
@@ -71,9 +71,21 @@ SMTP_EHLO_NAME=mail.example.com
 
 ### 이메일 서비스가 없을 때의 동작
 
-서버는 계속 시작되지만 인증 코드와 초대 링크가 이메일로 전송되지 않고 로그에만 기록됩니다. 이 모드는 로컬 개발에만 적합합니다.
+POPO 인증 코드 전달도 설정하지 않은 경우 서버는 계속 시작되지만 인증 코드와 초대 링크가 이메일로 전송되지 않고 로그에만 기록됩니다. 이 모드는 로컬 개발에만 적합합니다.
 
 시작 로그에는 현재 `Resend API`, `SMTP relay`, `DEV mode` 중 무엇을 사용하는지 표시됩니다.
+
+## POPO CLI 인증 코드 전송
+
+모든 사용자의 POPO 계정이 이메일 주소와 같은 경우 API는 `popo-cli`로 인증 코드를 직접 전송할 수 있습니다. 이 경로는 POPO 로봇 브리지를 사용하지 않으며 브리지 ID나 로봇 ID가 필요하지 않습니다.
+
+```dotenv
+APP_ENV=production
+MULTICA_DEV_VERIFICATION_CODE=
+MULTICA_POPO_CLI=popo-cli
+```
+
+API 호스트에는 Node.js와 인증된 `popo-cli` 프로필이 필요합니다. CLI가 `PATH`에 없으면 `MULTICA_POPO_CLI`에 `bin/popo.js`의 절대 경로를 설정합니다. Multica는 정규화된 로그인 이메일을 `receiver`로 사용하여 `message_send_p2p`를 호출하고 확인된 메시지 수신 확인을 기다립니다. CLI 실패, 거부, 결과 불명확 또는 시간 초과 시 오류를 반환하며 이메일이나 표준 출력으로 대체하지 않습니다. API가 컨테이너에서 실행되는 경우 CLI, Node.js 및 인증된 프로필이 컨테이너 안에 있어야 하며 호스트 로그인 상태는 자동으로 공유되지 않습니다. POPO CLI는 인증 코드만 처리하며 초대 이메일은 처리하지 않습니다. 활성화하면 웹, 데스크톱 및 모바일 로그인 페이지에서 POPO 개인 채팅의 Multica 인증 코드를 확인하도록 안내합니다.
 
 ## 로컬 고정 인증 코드
 

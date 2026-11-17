@@ -1,6 +1,6 @@
 ---
 title: ログインとサインアップ
-description: メール認証コード、Google ログイン、新規登録の範囲を設定します。
+description: メールまたは POPO の認証コード、Google ログイン、新規登録の範囲を設定します。
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
@@ -71,9 +71,21 @@ SMTP_EHLO_NAME=mail.example.com
 
 ### メールサービスがない場合の動作
 
-サーバーは起動しますが、認証コードと招待リンクはログに書き込まれるだけで、メールは送信されません。このモードはローカル開発専用です。
+POPO の認証コード配信も設定していない場合、サーバーは起動しますが、認証コードと招待リンクはログに書き込まれるだけで、メールは送信されません。このモードはローカル開発専用です。
 
 起動ログには、現在使っているのが `Resend API`、`SMTP relay`、`DEV mode` のどれかが表示されます。
+
+## POPO CLI で認証コードを送信
+
+各ユーザーの POPO アカウントがメールアドレスと同じ場合、API は `popo-cli` で認証コードを直接送信できます。この経路では POPO ロボットブリッジを使わず、ブリッジ ID やロボット ID も不要です:
+
+```dotenv
+APP_ENV=production
+MULTICA_DEV_VERIFICATION_CODE=
+MULTICA_POPO_CLI=popo-cli
+```
+
+API ホストには Node.js と認証済みの `popo-cli` プロファイルが必要です。CLI が `PATH` にない場合は、`MULTICA_POPO_CLI` に `bin/popo.js` の絶対パスを設定します。Multica は正規化したログインメールアドレスを `receiver` として `message_send_p2p` を呼び出し、確認済みのメッセージレシートを待ちます。CLI の失敗、拒否、結果不明、タイムアウトではエラーを返し、メールや標準出力にはフォールバックしません。API がコンテナで動く場合は、CLI、Node.js、認証済みプロファイルがコンテナ内に必要です。ホストのログイン状態は自動共有されません。POPO CLI が担当するのは認証コードだけで、招待メールは対象外です。有効にすると、Web、デスクトップ、モバイルのログインページで、POPO の個人チャットに送信した Multica の認証コードを確認するよう案内します。
 
 ## ローカル固定認証コード
 

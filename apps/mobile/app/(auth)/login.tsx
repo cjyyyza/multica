@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { KeyboardAvoidingView, Platform, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
@@ -8,12 +9,17 @@ import { TextField } from "@/components/ui/text-field";
 import { Button } from "@/components/ui/button";
 import { MulticaLogo } from "@/components/brand/multica-logo";
 import { useAuthStore } from "@/data/auth-store";
+import { appConfigOptions } from "@/data/queries/billing";
 import { i18n, useT } from "@/lib/i18n";
 import { mapAuthError } from "@/lib/auth-error";
 
 export default function Login() {
   const { t } = useT("auth");
   const sendCode = useAuthStore((s) => s.sendCode);
+  const { data: popoVerification = false } = useQuery({
+    ...appConfigOptions(),
+    select: (config) => config.popo_verification_enabled === true,
+  });
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +55,7 @@ export default function Login() {
                 {t("login.title")}
               </Text>
               <Text className="text-sm text-muted-foreground text-center">
-                {t("login.subtitle")}
+                {popoVerification ? t("login.popo_subtitle") : t("login.subtitle")}
               </Text>
             </View>
           </View>
@@ -78,7 +84,15 @@ export default function Login() {
             disabled={submitting || !email.trim()}
             onPress={onSubmit}
           >
-            <Text>{submitting ? t("login.sending") : t("login.send_code")}</Text>
+            <Text>
+              {submitting
+                ? popoVerification
+                  ? t("login.popo_sending")
+                  : t("login.sending")
+                : popoVerification
+                  ? t("login.popo_send_code")
+                  : t("login.send_code")}
+            </Text>
           </Button>
         </View>
       </KeyboardAvoidingView>

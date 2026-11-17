@@ -3,6 +3,7 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement, ReactNode } from "react";
 import { I18nProvider } from "@multica/core/i18n/react";
+import { configStore } from "@multica/core/config";
 import enCommon from "../locales/en/common.json";
 import enAuth from "../locales/en/auth.json";
 import enSettings from "../locales/en/settings.json";
@@ -103,6 +104,7 @@ describe("LoginPage", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.clearAllMocks();
     mockAuthState.expired = false;
+    configStore.setState({ popoVerificationEnabled: false });
     // Default: no existing session (getMe rejects when no auth)
     mockApiGetMe.mockRejectedValue(new Error("unauthorized"));
     localStorage.clear();
@@ -145,6 +147,29 @@ describe("LoginPage", () => {
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /continue/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("describes POPO delivery before and after sending when enabled", async () => {
+    configStore.getState().setAuthConfig({
+      allowSignup: true,
+      popoVerificationEnabled: true,
+    });
+    mockSendCode.mockResolvedValueOnce(undefined);
+    renderWithI18n(<LoginPage onSuccess={onSuccess} />);
+
+    expect(
+      screen.getByText(/enter your POPO account \(email\) to get a Multica verification code/i),
+    ).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/email/i), "test@example.com");
+    await user.click(screen.getByRole("button", { name: /send code via POPO/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/check your POPO messages/i)).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(/We sent a Multica verification code to the POPO private chat for test@example.com/i),
     ).toBeInTheDocument();
   });
 

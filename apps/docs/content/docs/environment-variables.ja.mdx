@@ -98,6 +98,14 @@ primary とレプリカの接続上限は独立しています。全 API プロ�
 | `SMTP_TLS_INSECURE` | `false` | 証明書検証をスキップ。信頼できる内部ネットワーク専用 |
 | `SMTP_EHLO_NAME` | ホスト名 | 厳格な relay が要求する EHLO/FQDN |
 
+### POPO CLI 認証コード
+
+`MULTICA_POPO_CLI` を設定すると、SMTP、Resend、標準出力ではなく `message_send_p2p` を直接使用します。ロボットブリッジは不要です。失敗または結果不明の場合にメールへフォールバックしません。詳しくは[ログインと登録](/auth-setup#popo-cli-で認証コードを送信)を参照してください。
+
+| 変数 | デフォルト | 説明 |
+|---|---|---|
+| `MULTICA_POPO_CLI` | 空 | `PATH` 上の CLI コマンド、または `bin/popo.js` の絶対パス。API ホストには Node.js と認証済み CLI プロファイルが必要 |
+
 ### Google OAuth
 
 | 変数 | デフォルト | 説明 |

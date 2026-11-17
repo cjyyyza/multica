@@ -1317,8 +1317,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	}
 
 	// POPO Open / dj01bot. Transport is a workspace-scoped Windows bridge:
-	// the API never opens POPO, popo-cli, or dj01bot. Gated by
-	// MULTICA_POPO_ENABLED=true.
+	// this channel never opens POPO or dj01bot in the API process. Direct
+	// popo-cli verification-code delivery is configured separately below.
 	if strings.TrimSpace(os.Getenv("MULTICA_POPO_ENABLED")) == "true" {
 		popoBridge := popo.NewBridgeService(queries, pool)
 		var popoMedia engine.MediaResolver
@@ -1364,6 +1364,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		slog.Info("popo integration enabled (Windows bridge)")
 	} else {
 		slog.Info("popo integration disabled (MULTICA_POPO_ENABLED is not true)")
+	}
+	h.PopoVerificationCodes = service.NewPopoVerificationCodeServiceFromEnv()
+	if h.PopoVerificationCodes != nil {
+		slog.Info("popo-cli verification-code delivery enabled")
 	}
 
 	// Composio integration (MUL-3720). Gated by COMPOSIO_API_KEY plus the

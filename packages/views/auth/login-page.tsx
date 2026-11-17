@@ -20,6 +20,7 @@ import {
   InputOTPSlot,
 } from "@multica/ui/components/ui/input-otp";
 import { useAuthStore } from "@multica/core/auth";
+import { useConfigStore } from "@multica/core/config";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { api } from "@multica/core/api";
 import type { User } from "@multica/core/types";
@@ -118,6 +119,7 @@ export function LoginPage({
   // because the user asked to leave. Without saying so, landing here reads as
   // the app having lost their work for no reason.
   const sessionExpired = useAuthStore((state) => state.expired);
+  const popoVerification = useConfigStore((state) => state.popoVerificationEnabled);
 
   // Check for existing session when CLI callback is present.
   // Prioritises cookie auth (= current browser session) to avoid authorising
@@ -344,10 +346,12 @@ export function LoginPage({
           <CardHeader className="text-center">
             {logo && <div className="mx-auto mb-4">{logo}</div>}
             <CardTitle className="text-display-sm">
-              {t(($) => $.verify.title)}
+              {popoVerification ? t(($) => $.verify.popo_title) : t(($) => $.verify.title)}
             </CardTitle>
             <CardDescription>
-              {t(($) => $.verify.description, { email })}
+              {popoVerification
+                ? t(($) => $.verify.popo_description, { email })
+                : t(($) => $.verify.description, { email })}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col items-center gap-4">
@@ -416,7 +420,9 @@ export function LoginPage({
             {t(($) => $.signin.title)}
           </CardTitle>
           <CardDescription>
-            {t(($) => $.signin.description)}
+            {popoVerification
+              ? t(($) => $.signin.popo_description)
+              : t(($) => $.signin.description)}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -454,8 +460,12 @@ export function LoginPage({
             disabled={!email || loading}
           >
             {loading
-              ? t(($) => $.signin.sending)
-              : t(($) => $.signin.continue)}
+              ? popoVerification
+                ? t(($) => $.signin.popo_sending)
+                : t(($) => $.signin.sending)
+              : popoVerification
+                ? t(($) => $.signin.popo_continue)
+                : t(($) => $.signin.continue)}
           </Button>
           {(google || onGoogleLogin) && (
             <Button

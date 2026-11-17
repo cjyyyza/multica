@@ -323,3 +323,45 @@ func (p Popo) Send(ctx context.Context, target Target, notification Notification
 	}
 	return Receipt{MessageID: result.MsgID, RobotName: target.RobotName, Receiver: target.Receiver, AtUIDs: target.AtUIDs}, nil
 }
+
+func (p Popo) SendP2P(ctx context.Context, receiver, message string) (Receipt, error) {
+	var receipt Receipt
+	if !accountPattern.MatchString(receiver) {
+		return receipt, errors.New("receiver must be a POPO account")
+	}
+	text, err := (Notification{Message: message}).Text()
+	if err != nil {
+		return receipt, err
+	}
+	dir, err := os.MkdirTemp("", "multica-popo-p2p-*")
+	if err != nil {
+		return receipt, err
+	}
+	defer os.RemoveAll(dir)
+	messagePath := filepath.Join(dir, "message.txt")
+	if err := os.WriteFile(messagePath, []byte(text), 0600); err != nil {
+		return receipt, err
+	}
+	raw, err := p.call(ctx, "message_send_p2p", "receiver="+receiver, "message=@text:"+messagePath, "source=AGENT")
+	if err != nil {
+		var known *SendError
+		if errors.As(err, &known) {
+			return receipt, err
+		}
+		return receipt, &SendError{Err: err, Unknown: true}
+	}
+	var result struct {
+		Success *bool  `json:"success"`
+		MsgID   string `json:"msgId"`
+	}
+	if json.Unmarshal(raw, &result) != nil || result.Success == nil {
+		return receipt, &SendError{Err: errors.New("POPO returned no confirmed message receipt"), Unknown: true}
+	}
+	if !*result.Success {
+		return receipt, &SendError{Err: errors.New("POPO refused the message")}
+	}
+	if result.MsgID == "" {
+		return receipt, &SendError{Err: errors.New("POPO returned no confirmed message receipt"), Unknown: true}
+	}
+	return Receipt{MessageID: result.MsgID, Receiver: receiver}, nil
+}

@@ -98,6 +98,14 @@ primary와 복제본의 연결 한도는 서로 독립적입니다. 모든 API �
 | `SMTP_TLS_INSECURE` | `false` | 인증서 검증 건너뛰기. 신뢰할 수 있는 내부 네트워크에서만 사용 |
 | `SMTP_EHLO_NAME` | host 이름 | 엄격한 relay에서 요구하는 EHLO/FQDN |
 
+### POPO CLI 인증 코드
+
+`MULTICA_POPO_CLI`를 설정하면 SMTP, Resend 또는 표준 출력 대신 `message_send_p2p`를 직접 사용하며 로봇 브리지가 필요하지 않습니다. 전송 실패 또는 결과 불명확 시 이메일로 대체하지 않습니다. 자세한 내용은 [로그인과 가입](/auth-setup#popo-cli-인증-코드-전송)을 참조하세요.
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `MULTICA_POPO_CLI` | 비어 있음 | `PATH`의 CLI 명령 또는 `bin/popo.js` 절대 경로. API 호스트에는 Node.js와 인증된 CLI 프로필 필요 |
+
 ### Google OAuth
 
 | 변수 | 기본값 | 설명 |

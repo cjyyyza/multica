@@ -136,6 +136,14 @@ afterEach(() => {
 });
 
 describe("AuthInitializer recovery", () => {
+  it("loads the public POPO verification delivery flag", async () => {
+    renderInitializer({ api: makeApiWithConfigResponse({ popo_verification_enabled: true }) });
+
+    await waitFor(() => {
+      expect(configStore.getState().popoVerificationEnabled).toBe(true);
+    });
+  });
+
   it("keeps self-host commands available when an older API omits the target", async () => {
     renderInitializer({ api: makeApiWithConfigResponse({
       daemon_server_url: " https://api.example.com/// ",

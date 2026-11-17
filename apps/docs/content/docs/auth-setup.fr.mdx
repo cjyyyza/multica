@@ -1,6 +1,6 @@
 ---
 title: Connexion et inscription
-description: Configurez les codes de vérification par e-mail, la connexion avec Google et les personnes autorisées à s'inscrire.
+description: Configurez les codes de vérification par e-mail ou POPO, la connexion avec Google et les personnes autorisées à s'inscrire.
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
@@ -71,9 +71,21 @@ SMTP_EHLO_NAME=mail.example.com
 
 ### Comportement sans service d'e-mail
 
-Le serveur démarre quand même, mais les codes de vérification et les liens d'invitation sont uniquement écrits dans le journal ; aucun e-mail n'est envoyé. Ce mode ne convient qu'au développement local.
+Si la remise des codes de vérification par POPO n'est pas configurée non plus, le serveur démarre quand même, mais les codes de vérification et les liens d'invitation sont uniquement écrits dans le journal ; aucun e-mail n'est envoyé. Ce mode ne convient qu'au développement local.
 
 Le journal de démarrage indique si le mode actuel est `Resend API`, `SMTP relay` ou `DEV mode`.
+
+## Codes de vérification par POPO CLI
+
+Lorsque le compte POPO de chaque utilisateur est son adresse e-mail, l'API peut envoyer les codes directement avec `popo-cli`. Ce chemin n'utilise pas le pont robot POPO et ne nécessite aucun ID de pont ou de robot :
+
+```dotenv
+APP_ENV=production
+MULTICA_DEV_VERIFICATION_CODE=
+MULTICA_POPO_CLI=popo-cli
+```
+
+L'hôte de l'API doit disposer de Node.js et d'un profil `popo-cli` authentifié. Si le CLI n'est pas dans `PATH`, définissez `MULTICA_POPO_CLI` sur le chemin absolu de `bin/popo.js`. Multica appelle `message_send_p2p` avec l'adresse normalisée comme `receiver` et attend un accusé de message confirmé. Un échec du CLI, un refus, un résultat incertain ou un dépassement de délai renvoie une erreur, sans repli sur l'e-mail ou la sortie standard. Si l'API s'exécute dans un conteneur, le CLI, Node.js et le profil authentifié doivent être disponibles dans ce conteneur ; la session de l'hôte n'est pas partagée automatiquement. POPO CLI prend en charge uniquement les codes de vérification, pas les e-mails d'invitation. Une fois activé, la page de connexion sur le web, le bureau et le mobile invite les utilisateurs à consulter leur conversation privée POPO pour obtenir un code de vérification Multica.
 
 ## Code de vérification local fixe
 

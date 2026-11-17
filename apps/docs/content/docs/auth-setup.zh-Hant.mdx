@@ -1,6 +1,6 @@
 ---
 title: 登入與註冊
-description: 配置信箱驗證碼、Google 登入和新使用者註冊範圍。
+description: 配置信箱或 POPO 驗證碼、Google 登入和新使用者註冊範圍。
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
@@ -71,9 +71,21 @@ SMTP_EHLO_NAME=mail.example.com
 
 ### 無郵件服務時的行為
 
-伺服器仍可啟動，但驗證碼和邀請連結只會寫入日誌，不會傳送郵件。這種模式只適合本地開發。
+如果也沒有設定 POPO 驗證碼投遞，伺服器仍可啟動，但驗證碼和邀請連結只會寫入日誌，不會傳送郵件。這種模式只適合本地開發。
 
 啟動日誌會說明當前使用的是 `Resend API`、`SMTP relay` 還是 `DEV mode`。
+
+## 使用 POPO CLI 傳送驗證碼
+
+如果每位使用者的 POPO 帳號就是信箱，API 可以直接透過 `popo-cli` 傳送驗證碼。這條鏈路不使用 POPO 機器人通道，也不需要通道 ID 或機器人 ID：
+
+```dotenv
+APP_ENV=production
+MULTICA_DEV_VERIFICATION_CODE=
+MULTICA_POPO_CLI=popo-cli
+```
+
+執行 API 的主機必須安裝 Node.js，並具有已登入的 `popo-cli` 設定。如果 CLI 不在 `PATH` 中，把 `MULTICA_POPO_CLI` 改為 `bin/popo.js` 的絕對路徑。Multica 呼叫 `message_send_p2p`，把規範化後的登入信箱作為 `receiver`，並等待確認的訊息回執。CLI 呼叫失敗、對方拒絕、結果不明確或逾時都會返回錯誤，不會回退到郵件或標準輸出。如果 API 執行於容器中，CLI、Node.js 和已登入設定必須位於容器內；宿主機的登入態不會自動共享。POPO CLI 只接管驗證碼，不接管邀請郵件。啟用後，Web、桌面端和行動端登入頁會引導使用者到 POPO 私聊查看 Multica 驗證碼。
 
 ## 本地固定驗證碼
 

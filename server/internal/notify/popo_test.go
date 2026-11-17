@@ -163,3 +163,73 @@ func TestNotificationValidationDoesNotInvokeCLI(t *testing.T) {
 		}
 	}
 }
+
+func TestPopoSendP2PUsesDirectAccountCommand(t *testing.T) {
+	const receiver = "user@corp.netease.com"
+	var messagePath string
+	popo := Popo{Run: func(_ context.Context, _ string, args []string) ([]byte, error) {
+		if args[0] != "popo" || args[1] != "message_send_p2p" {
+			t.Fatalf("unexpected command: %v", args)
+		}
+		if argValue(args, "receiver") != receiver || argValue(args, "source") != "AGENT" {
+			t.Fatalf("unexpected P2P route: %v", args)
+		}
+		if argValue(args, "robotName") != "" || argValue(args, "msgType") != "" {
+			t.Fatalf("P2P send must not use robot routing or an explicit msgType: %v", args)
+		}
+		messagePath = strings.TrimPrefix(argValue(args, "message"), "@text:")
+		message, err := os.ReadFile(messagePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(message) != "Your Multica verification code is 123456." {
+			t.Fatalf("message = %q", message)
+		}
+		return popoResponse(map[string]any{"success": true, "msgId": "p2p-message-1"}), nil
+	}}
+	receipt, err := popo.SendP2P(context.Background(), receiver, "Your Multica verification code is 123456.")
+	if err != nil || receipt.MessageID != "p2p-message-1" || receipt.Receiver != receiver {
+		t.Fatalf("receipt = %+v, err = %v", receipt, err)
+	}
+	if _, err := os.Stat(messagePath); !os.IsNotExist(err) {
+		t.Fatal("temporary P2P message file remains")
+	}
+}
+
+func TestPopoSendP2PRequiresConfirmedReceipt(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		raw     []byte
+		runErr  error
+		unknown bool
+	}{
+		{name: "response lost", runErr: errors.New("timeout"), unknown: true},
+		{name: "missing message ID", raw: popoResponse(map[string]any{"success": true}), unknown: true},
+		{name: "missing success", raw: popoResponse(map[string]any{"msgId": "p2p-message-1"}), unknown: true},
+		{name: "business refusal", raw: popoResponse(map[string]any{"success": false}), unknown: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			popo := Popo{Run: func(_ context.Context, _ string, args []string) ([]byte, error) {
+				if args[1] != "message_send_p2p" {
+					t.Fatalf("unexpected command: %v", args)
+				}
+				return tc.raw, tc.runErr
+			}}
+			_, err := popo.SendP2P(context.Background(), "user@corp.netease.com", "123456")
+			var sendErr *SendError
+			if !errors.As(err, &sendErr) || sendErr.Unknown != tc.unknown {
+				t.Fatalf("wrong failure classification: %v", err)
+			}
+		})
+	}
+}
+
+func TestPopoSendP2PRejectsInvalidReceiverWithoutCLI(t *testing.T) {
+	popo := Popo{Run: func(context.Context, string, []string) ([]byte, error) {
+		t.Fatal("invalid receiver invoked the CLI")
+		return nil, nil
+	}}
+	if _, err := popo.SendP2P(context.Background(), "8493291", "123456"); err == nil {
+		t.Fatal("group ID accepted as a P2P account")
+	}
+}

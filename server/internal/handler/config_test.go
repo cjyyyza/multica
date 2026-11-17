@@ -63,11 +63,14 @@ func TestGetConfigReportsCdnSignedMode(t *testing.T) {
 func TestGetConfigIncludesRuntimeAuthConfig(t *testing.T) {
 	origStorage := testHandler.Storage
 	origCfg := testHandler.cfg
+	origPopoVerification := testHandler.PopoVerificationCodes
 	testHandler.Storage = &mockStorage{}
 	testHandler.cfg.PublicURL = "https://api.example.com"
+	testHandler.PopoVerificationCodes = &fakePopoVerificationCodeSender{}
 	defer func() {
 		testHandler.Storage = origStorage
 		testHandler.cfg = origCfg
+		testHandler.PopoVerificationCodes = origPopoVerification
 	}()
 
 	t.Setenv("ALLOW_SIGNUP", "false")
@@ -102,6 +105,9 @@ func TestGetConfigIncludesRuntimeAuthConfig(t *testing.T) {
 	}
 	if cfg.GoogleClientID != "google-client-id" {
 		t.Fatalf("google_client_id: want google-client-id, got %q", cfg.GoogleClientID)
+	}
+	if !cfg.PopoVerificationEnabled {
+		t.Fatal("popo_verification_enabled: want true when direct CLI delivery is configured")
 	}
 	if cfg.PosthogKey != "phc_test" {
 		t.Fatalf("posthog_key: want phc_test, got %q", cfg.PosthogKey)

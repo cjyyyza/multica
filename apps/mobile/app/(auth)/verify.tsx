@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { KeyboardAvoidingView, Platform, Pressable, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router, useLocalSearchParams } from "expo-router";
@@ -8,6 +9,7 @@ import { OtpInput, type OtpInputRef } from "@/components/ui/otp-input";
 import { Button } from "@/components/ui/button";
 import { MulticaLogo } from "@/components/brand/multica-logo";
 import { useAuthStore } from "@/data/auth-store";
+import { appConfigOptions } from "@/data/queries/billing";
 import { i18n, useT } from "@/lib/i18n";
 import { mapAuthError } from "@/lib/auth-error";
 
@@ -17,6 +19,10 @@ const RESEND_COOLDOWN_SECONDS = 60;
 export default function Verify() {
   const sendCode = useAuthStore((s) => s.sendCode);
   const verifyCode = useAuthStore((s) => s.verifyCode);
+  const { data: popoVerification = false } = useQuery({
+    ...appConfigOptions(),
+    select: (config) => config.popo_verification_enabled === true,
+  });
   const { email = "" } = useLocalSearchParams<{ email?: string }>();
   const [code, setCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -81,10 +87,12 @@ export default function Verify() {
             <MulticaLogo size={30} />
             <View className="gap-1 items-center">
               <Text className="text-2xl font-semibold text-foreground">
-                {t("verify.enter_title")}
+                {popoVerification ? t("verify.popo_enter_title") : t("verify.enter_title")}
               </Text>
               <Text className="text-sm text-muted-foreground text-center">
-                {t("verify.sent_to", { email })}
+                {popoVerification
+                  ? t("verify.popo_sent_to", { email })
+                  : t("verify.sent_to", { email })}
               </Text>
             </View>
           </View>

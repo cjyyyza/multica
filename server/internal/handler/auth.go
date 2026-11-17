@@ -397,7 +397,12 @@ func (h *Handler) SendCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.EmailService.SendVerificationCode(email, code); err != nil {
+	if h.PopoVerificationCodes != nil {
+		err = h.PopoVerificationCodes.SendVerificationCode(r.Context(), email, code)
+	} else {
+		err = h.EmailService.SendVerificationCode(email, code)
+	}
+	if err != nil {
 		slog.Error("failed to send verification code", "email", email, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to send verification code")
 		return

@@ -1156,6 +1156,20 @@ describe("ApiClient schema fallback", () => {
       expect(config.daemon_setup_target).toBe(target);
     });
 
+    it("parses the POPO delivery flag and defaults it off for older or malformed responses", async () => {
+      stubFetchJson({ popo_verification_enabled: true });
+      let config = await new ApiClient("https://api.example.test").getConfig();
+      expect(config.popo_verification_enabled).toBe(true);
+
+      stubFetchJson({});
+      config = await new ApiClient("https://api.example.test").getConfig();
+      expect(config.popo_verification_enabled).toBe(false);
+
+      stubFetchJson({ popo_verification_enabled: "yes" });
+      config = await new ApiClient("https://api.example.test").getConfig();
+      expect(config.popo_verification_enabled).toBe(false);
+    });
+
     it("drops malformed daemon setup URLs instead of throwing", async () => {
       stubFetchJson({
         cdn_domain: "cdn.example.com",
