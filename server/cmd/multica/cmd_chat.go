@@ -86,7 +86,7 @@ func init() {
 
 	// chat create
 	chatCreateCmd.Flags().String("agent", "", "Agent name or ID (required)")
-	chatCreateCmd.Flags().String("prompt", "", "Opening message (decodes \\n, \\r, \\t, \\\\; use --prompt-file for multi-line bodies or to preserve literal backslashes)")
+	chatCreateCmd.Flags().String("prompt", "", "Opening message (preserves literal text. Use --prompt-stdin or --prompt-file for multi-line input)")
 	chatCreateCmd.Flags().Bool("prompt-stdin", false, "Read the opening message from stdin (preserves multi-line content verbatim)")
 	chatCreateCmd.Flags().String("prompt-file", "", "Read the opening message from a UTF-8 file (preserves multi-line content verbatim). The path must be inside the current working directory unless --allow-external-file is set")
 	chatCreateCmd.Flags().Bool("allow-external-file", false, "Allow --prompt-file to read a path outside the current working directory")

@@ -137,8 +137,8 @@ func TestRunChatCreateSendsAgentPromptAndTitle(t *testing.T) {
 	if _, ok := sessionBody["title"]; ok {
 		t.Errorf("create body must omit title when a prompt is sent, got %v", sessionBody["title"])
 	}
-	if got := messageBody["content"]; got != "check the deploy\nthanks" {
-		t.Errorf("message content = %q, want escaped newline decoded", got)
+	if got := messageBody["content"]; got != `check the deploy\nthanks` {
+		t.Errorf("message content = %q, want literal backslashes", got)
 	}
 	if got := titleBody["title"]; got != "Deploy triage" {
 		t.Errorf("patched title = %v, want Deploy triage", got)
