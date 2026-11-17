@@ -86,16 +86,22 @@ resolves the squad and adds its leader to the set; everything that is not
 A `member` mention therefore does NOT make a person "run". It creates an inbox
 notification. When a daemon-managed agent posts the comment through
 `multica issue comment add` on Windows, the CLI also looks up each explicitly
-mentioned member's email and sends one POPO P2P message containing the comment
-and the current issue link via `popo-cli popo message_send_p2p`. Duplicate
-mentions of the same member produce only one POPO message. Requirement-owned
-issues keep their dedicated POPO notification flow instead. If the server cannot
+mentioned member's email and sends a private message containing the
+comment and the current issue link via `popo-cli popo use_robot_send_msg`.
+The shared notification sender uses the `defaultTarget`'s `robotName` from the
+deployment JSON selected by `MULTICA_NOTIFY_CONFIG`. Set that variable to an
+absolute path in the daemon's environment; it is forwarded to execution tasks.
+Each receiver is the mentioned member's email, regardless of the configured
+group or `atUids`. Duplicate mentions of the same member produce only one POPO
+message. Requirement-owned issues keep their dedicated POPO notification flow
+instead. If the server cannot
 confirm whether the issue is Requirement-owned, generic POPO delivery is skipped.
 
-POPO delivery happens only after the comment succeeds and is best-effort: a CLI
-lookup, rejected acknowledgement, or send failure prints a warning but does not
-turn the successful comment into a failure. A failed or unknown POPO result is
-not retried automatically.
+POPO delivery happens only after the comment succeeds and is best-effort: missing
+configuration, a CLI lookup, rejected acknowledgement, or send failure prints a
+warning but does not turn the successful comment into a failure. There is no
+personal-account fallback. A failed or unknown POPO result is not retried
+automatically.
 Only `agent` and `squad` mentions enqueue work.
 
 ## Preview and per-comment suppression
