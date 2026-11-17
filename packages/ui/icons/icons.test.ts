@@ -8,7 +8,8 @@ import * as icons from "./index";
 
 describe("@multica/ui/icons", () => {
   it.each(Object.entries(OUTPUTS))("%s matches drawings/drawings.mjs", (file, render) => {
-    expect(readFileSync(join(__dirname, file), "utf8"), "run pnpm --filter @multica/ui icons").toBe(render());
+    const generated = readFileSync(join(__dirname, file), "utf8").replaceAll("\r\n", "\n");
+    expect(generated, "run pnpm --filter @multica/ui icons").toBe(render().replaceAll("\r\n", "\n"));
   });
 
   it("exports every drawn name and nothing borrowed from an icon library", () => {

@@ -155,7 +155,12 @@ func stopDaemonAndWait(profile string, port int, health map[string]any, grace, k
 }
 
 func verifyDaemonStopProcess(pid int, profile string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	timeout := 2 * time.Second
+	if runtime.GOOS == "windows" {
+		// PowerShell startup can exceed two seconds under full-suite process load.
+		timeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	var name, command string
 	if runtime.GOOS == "windows" {

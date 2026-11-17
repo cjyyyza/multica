@@ -21,6 +21,20 @@ test("the committed copies match multica-brand.ts", async () => {
   assert.deepEqual(await sync(repo, { check: true }), []);
 });
 
+test("CRLF working-tree copies are not content drift", async (t) => {
+  const root = copyOfRepo(t);
+  for (const [rel] of await targets(repo)) {
+    mkdirSync(dirname(join(root, rel)), { recursive: true });
+    cpSync(join(repo, rel), join(root, rel));
+  }
+  cpSync(join(repo, SOURCE), join(root, SOURCE));
+  const mobile = "apps/mobile/components/brand/multica-logo.tsx";
+  const file = join(root, mobile);
+  const lf = readFileSync(file, "utf8").replaceAll("\r\n", "\n");
+  writeFileSync(file, lf.replaceAll("\n", "\r\n"));
+  assert.deepEqual(await sync(root, { check: true }), []);
+});
+
 for (const { name, from, to, drift, stay } of [
   {
     name: "a wordmark coordinate",

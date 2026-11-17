@@ -251,7 +251,7 @@ func TestRunRuntimeDeleteConflictWithoutMessageKeepsWrapper(t *testing.T) {
 }
 
 func TestRuntimeDeleteDoesNotConfirmIncompleteSnapshot(t *testing.T) {
-	redirectTestHome(t, t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("MULTICA_TOKEN", "test-token")
 	const marker = "fixture-instruction"
 	for _, tc := range []struct {
@@ -285,7 +285,7 @@ func TestRuntimeDeleteDoesNotConfirmIncompleteSnapshot(t *testing.T) {
 }
 
 func TestRuntimeDeleteCascadeRefusalDoesNotExposeInstructions(t *testing.T) {
-	redirectTestHome(t, t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	t.Setenv("MULTICA_TOKEN", "test-token")
 	const marker = "private-instruction-fixture"
 	for _, tc := range []struct{ name, body string }{

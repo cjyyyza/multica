@@ -626,7 +626,7 @@ func TestSetupKeepsProfileOnlyForTheSameBackend(t *testing.T) {
 		{"https://example.invalid:443/team", false},
 	} {
 		t.Run(tc.target, func(t *testing.T) {
-			redirectTestHome(t, t.TempDir())
+			testenv.SetHome(t, t.TempDir())
 			old := cli.CLIConfig{ServerURL: "https://example.invalid/team", Token: "test-only", WorkspaceID: "w", DeviceName: "workstation", PollInterval: "1m"}
 			if err := cli.SaveCLIConfigForProfile(old, "dev"); err != nil {
 				t.Fatal(err)
@@ -652,7 +652,7 @@ func TestSetupKeepsProfileOnlyForTheSameBackend(t *testing.T) {
 }
 
 func TestSetupRejectsProfileChangedDuringConfirmationOrProbe(t *testing.T) {
-	redirectTestHome(t, t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	const profile = "setup-change"
 	old := cli.CLIConfig{ServerURL: "https://a.invalid", AppURL: "https://a.invalid", Token: "old-fixture"}
 	newLogin := cli.CLIConfig{ServerURL: "https://b.invalid", AppURL: "https://b.invalid", Token: "new-fixture", DeviceName: "new-device"}
@@ -686,7 +686,7 @@ func TestSetupRejectsProfileChangedDuringConfirmationOrProbe(t *testing.T) {
 }
 
 func TestSetupDoesNotRewriteAnUnchangedTarget(t *testing.T) {
-	redirectTestHome(t, t.TempDir())
+	testenv.SetHome(t, t.TempDir())
 	cfg := cli.CLIConfig{ServerURL: "https://example.test", AppURL: "https://app.example.test"}
 	if err := cli.SaveCLIConfigForProfile(cfg, "dev"); err != nil {
 		t.Fatal(err)
@@ -722,7 +722,7 @@ func TestSetupUnreadableProfileIsNotOverwritten(t *testing.T) {
 	} {
 		for _, invalid := range []string{"invalid JSON", "permission denied"} {
 			t.Run(setup.name+"/"+invalid, func(t *testing.T) {
-				redirectTestHome(t, t.TempDir())
+				testenv.SetHome(t, t.TempDir())
 				const profile = "unreadable-setup"
 				path, err := cli.CLIConfigPathForProfile(profile)
 				if err != nil {

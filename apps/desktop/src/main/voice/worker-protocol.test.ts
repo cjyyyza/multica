@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { join } from "path";
 import { hotwordList, joinTranscripts, recognizerConfig, splitAtPauses, type LoadSpec } from "./worker-protocol";
 
 const RATE = 16000;
@@ -52,10 +53,10 @@ describe("recognizerConfig", () => {
     const config = recognizerConfig(spec, 4) as { modelConfig: Record<string, unknown> };
     expect(config.modelConfig).toMatchObject({
       qwen3Asr: {
-        convFrontend: "/m/conv_frontend.onnx",
-        encoder: "/m/encoder.int8.onnx",
-        decoder: "/m/decoder.int8.onnx",
-        tokenizer: "/m/tokenizer",
+        convFrontend: join("/m", "conv_frontend.onnx"),
+        encoder: join("/m", "encoder.int8.onnx"),
+        decoder: join("/m", "decoder.int8.onnx"),
+        tokenizer: join("/m", "tokenizer"),
         hotwords: "Multica,Lambda",
       },
       tokens: "",

@@ -40,7 +40,7 @@ describe("readThemeFolder", () => {
     writeFileSync(join(root, "paper", ".git", "HEAD"), "ref");
     writeFileSync(join(root, "paper", "notes.txt"), "not a theme file");
     theme(outside);
-    symlinkSync(outside, join(root, "linked"));
+    symlinkSync(outside, join(root, "linked"), process.platform === "win32" ? "junction" : "dir");
     writeFileSync(join(root, "ink.zip"), "PK");
     writeFileSync(join(root, "README.md"), "ignored");
 
@@ -104,7 +104,7 @@ describe("watchThemeFolder", () => {
 
   it("reports an edit inside a theme, also through a symlink, within a second", async () => {
     theme(outside);
-    symlinkSync(outside, join(root, "linked"));
+    symlinkSync(outside, join(root, "linked"), process.platform === "win32" ? "junction" : "dir");
     const onChange = vi.fn();
     const settled = changed(onChange);
     await new Promise((r) => setTimeout(r, 200));

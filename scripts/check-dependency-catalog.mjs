@@ -38,7 +38,7 @@ export function parseWorkspaceManifest(source) {
   const packages = [];
   const catalog = new Map();
   let section = null;
-  for (const raw of source.split("\n")) {
+  for (const raw of source.replaceAll("\r\n", "\n").split("\n")) {
     const line = raw.replace(/\s+#.*$/, "");
     if (!line.trim() || line.trimStart().startsWith("#")) continue;
     if (!/^\s/.test(line)) {

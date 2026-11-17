@@ -142,6 +142,7 @@ test("compare swaps changed files to BASE without touching the index, then resto
   };
   const git = (...args) => execFileSync("git", args, { cwd: repo, env, encoding: "utf8" }).trim();
   git("init", "-b", "main");
+  git("config", "core.autocrlf", "false");
   writeFileSync(join(repo, "modified.ts"), "base\n");
   writeFileSync(join(repo, "deleted.ts"), "only at base\n");
   writeFileSync(join(repo, "untouched.ts"), "same\n");
@@ -157,6 +158,7 @@ test("compare swaps changed files to BASE without touching the index, then resto
   git("commit", "-m", "head");
   writeFileSync(join(repo, "modified.ts"), "uncommitted change\n");
   chmodSync(join(repo, "modified.ts"), 0o755);
+  const modifiedMode = statSync(join(repo, "modified.ts")).mode;
   writeFileSync(join(repo, "untracked.ts"), "scratch\n");
   writeFileSync(join(repo, "added.ts"), "staged\n");
   git("add", "added.ts");
@@ -188,7 +190,7 @@ test("compare swaps changed files to BASE without touching the index, then resto
 
   restore();
   assert.equal(readFileSync(join(repo, "modified.ts"), "utf8"), "uncommitted change\n");
-  assert.equal(statSync(join(repo, "modified.ts")).mode & 0o777, 0o755);
+  assert.equal(statSync(join(repo, "modified.ts")).mode, modifiedMode);
   assert.equal(readFileSync(join(repo, "added.ts"), "utf8"), "staged\n");
   assert.equal(readFileSync(join(repo, "unindexed.ts"), "utf8"), "local edit\n");
   assert.equal(existsSync(join(repo, "deleted.ts")), false);
@@ -197,13 +199,14 @@ test("compare swaps changed files to BASE without touching the index, then resto
 
   // A symlink or directory in place of a file is refused before anything moves.
   rmSync(join(repo, "unindexed.ts"));
-  symlinkSync("untracked.ts", join(repo, "unindexed.ts"));
+  if (process.platform === "win32") mkdirSync(join(repo, "unindexed.ts"));
+  else symlinkSync("untracked.ts", join(repo, "unindexed.ts"));
   assert.throws(() => swapToBase(repo, base, changedFiles(repo, base), backup), /not a regular file/);
   assert.equal(readFileSync(join(repo, "modified.ts"), "utf8"), "uncommitted change\n");
   assert.equal(readFileSync(join(repo, "untracked.ts"), "utf8"), "scratch\n");
 });
 
-test("a single capture runs --prepare first and stops when it fails", (t) => {
+test("a single capture runs --prepare first and stops when it fails", { skip: process.platform !== "darwin" }, (t) => {
   // REPO_ROOT is the script's parent, so a copy next to a stub dev-env.sh
   // exercises the real entrypoint without a running Desktop.
   const root = mkdtempSync(join(tmpdir(), "desktop-window-entry-"));

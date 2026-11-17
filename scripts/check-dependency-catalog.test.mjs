@@ -35,6 +35,12 @@ onlyBuiltDependencies:
   );
 });
 
+test("parses CRLF workspace manifests", () => {
+  const { packages, catalog } = parseWorkspaceManifest("packages:\r\n  - apps/*\r\n\r\ncatalog:\r\n  react: 19.2.3\r\n");
+  assert.deepEqual(packages, ["apps/*"]);
+  assert.deepEqual([...catalog], [["react", "19.2.3"]]);
+});
+
 test("rejects a dependency shared by two workspaces without catalog:", () => {
   const violations = catalogViolations({
     catalog: new Map(),
@@ -116,7 +122,7 @@ test("still checks when run through a symlinked path", (t) => {
     mkdirSync(join(repo, "packages", name), { recursive: true });
     writeFileSync(join(repo, "packages", name, "package.json"), JSON.stringify({ dependencies: { sonner: "^2.0.7" } }));
   }
-  symlinkSync(repo, join(root, "link"), "dir");
+  symlinkSync(repo, join(root, "link"), process.platform === "win32" ? "junction" : "dir");
 
   const run = (dir) =>
     spawnSync(process.execPath, [join(root, dir, "scripts", "check-dependency-catalog.mjs")], { encoding: "utf8" });

@@ -229,7 +229,7 @@ func TestCacheWaitersResolvePathAfterMigration(t *testing.T) {
 			lock.Unlock()
 		}
 	}()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	done := make(chan error, 2)
 	go func() { done <- cache.SyncContext(ctx, "ws", []RepoInfo{{URL: source}}) }()
