@@ -596,7 +596,7 @@ export function RequirementIntakeDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       {children ?? (showTrigger ? <RequirementIntakeTrigger /> : null)}
-      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[90%] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{t(($) => $.intake.title)}</DialogTitle>
           {sourceMode && <DialogDescription>{t(($) => $.intake.source_hint)}</DialogDescription>}

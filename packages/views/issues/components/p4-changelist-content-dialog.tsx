@@ -24,7 +24,7 @@ export function P4ChangelistContentDialog({ issueId, changelist }: { issueId: st
   });
 
   return (
-    <DialogContent className="flex h-[min(48rem,calc(100dvh-2rem))] w-[calc(100vw_-_2rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-6xl" aria-describedby={undefined}>
+    <DialogContent className="flex h-[min(48rem,calc(100%-2rem))] w-[calc(100%_-_2rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-6xl" aria-describedby={undefined}>
       <DialogHeader className="shrink-0 gap-1 border-b border-border px-4 py-3 pr-12">
         <DialogTitle>{t(($) => $.p4.changelist, { number: changelist.number })}</DialogTitle>
         {listing.data ? (

@@ -108,7 +108,7 @@ export function YixiezuoImportDialog() {
   const [open, setOpen] = useState(false);
   return <Dialog open={open} onOpenChange={setOpen}>
     <DialogTrigger render={<Button variant="outline" size="sm" />}><Download className="size-3.5" />{t(($) => $.yixiezuo.import_action)}</DialogTrigger>
-    <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
+    <DialogContent className="max-h-[90%] overflow-y-auto sm:max-w-2xl">
       <DialogHeader><DialogTitle>{t(($) => $.yixiezuo.import_action)}</DialogTitle></DialogHeader>
       <YixiezuoImportForm key={wsId} onImported={() => setOpen(false)} />
     </DialogContent>

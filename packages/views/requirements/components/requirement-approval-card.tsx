@@ -92,7 +92,7 @@ export function RequirementApprovalAction({
         </Button>
       )}
       <AlertDialog open={!!review} onOpenChange={(open) => { if (!open && !approve.isPending) setReview(null); }}>
-        <AlertDialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
+        <AlertDialogContent className="max-h-[90%] overflow-y-auto sm:max-w-2xl">
           <AlertDialogHeader>
             <AlertDialogTitle>{t(($) => $.approval.confirm_title)}</AlertDialogTitle>
             <AlertDialogDescription>{detail.squadId ? t(($) => $.approval.consequence_squad) : t(($) => $.approval.consequence)}</AlertDialogDescription>

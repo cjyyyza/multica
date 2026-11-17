@@ -232,7 +232,7 @@ export function RequirementReviewCard({
       )}
       {error && <p role="alert" className="text-caption text-destructive">{error.message}</p>}
       <AlertDialog open={!!acceptReview && inReview} onOpenChange={(open) => { if (!open && !accept.isPending) setAcceptReview(null); }}>
-        <AlertDialogContent className="max-h-[90dvh] overflow-y-auto">
+        <AlertDialogContent className="max-h-[90%] overflow-y-auto">
           <AlertDialogHeader>
             <AlertDialogTitle>{native ? t(($) => $.review.native_accept_title) : t(($) => $.review.accept_title)}</AlertDialogTitle>
             <AlertDialogDescription>{native ? t(($) => $.review.native_accept_consequence) : t(($) => $.review.accept_consequence)}</AlertDialogDescription>

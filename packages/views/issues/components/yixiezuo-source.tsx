@@ -90,7 +90,7 @@ export function YixiezuoSource({ issueId, revision }: { issueId: string; revisio
       <Button size="sm" variant="outline" disabled={busy} onClick={() => refresh.mutate()}>{t(($) => $.yixiezuo.refresh)}</Button>
       <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (next) { setReviewedRevision(imported.revision); setSourceDigest(imported.snapshot.digest); setConfirmed(false); setStatusName(""); publish.reset(); if (changelistSummary) setSummary((current) => current.includes(changelistSummary) ? current : current.trim() ? `${changelistSummary}\n\n${current}` : changelistSummary); } }}>
         <DialogTrigger render={<Button size="sm" variant="outline" disabled={!canPublish} />}>{t(($) => $.yixiezuo.publish)}</DialogTrigger>
-        <DialogContent className="max-h-[90dvh] overflow-y-auto">
+        <DialogContent className="max-h-[90%] overflow-y-auto">
           <DialogHeader><DialogTitle>{t(($) => $.yixiezuo.publish)}</DialogTitle></DialogHeader>
           <p className="text-caption text-muted-foreground">{t(($) => $.yixiezuo.publish_consequence)}</p>
           <Label htmlFor={formId}>{t(($) => $.yixiezuo.result_label)}</Label>
