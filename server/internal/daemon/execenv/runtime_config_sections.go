@@ -931,7 +931,7 @@ const platformSkillName = "multica-platform"
 // description, repeated in the brief's recall hint for agents that never read
 // the skill listing. TestPlatformSkillDomainsMatchDescription keeps it equal to
 // the description, so a new reference cannot ship without reaching the brief.
-const platformSkillDomains = "issue and PR contracts, sub-issues, batch changes, saved views, charts and files in comments, mentions, agents, squads, autopilots, projects, runtimes, local environments, skill import, themes"
+const platformSkillDomains = "issue and PR contracts, sub-issues, batch changes, views, charts, comment files, mentions, agents, squads, autopilots, projects, runtimes, local environments, skill import, themes, 易协作 PM"
 
 // subIssueContractsSkill returns how the brief should refer to the skill
 // carrying the sub-issue contracts, and whether any such skill is installed.
