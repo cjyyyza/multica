@@ -38,6 +38,10 @@ func TestPopoVerificationCodeServiceFromEnv(t *testing.T) {
 	if service := NewPopoVerificationCodeServiceFromEnv(); service != nil {
 		t.Fatal("empty CLI path must preserve email delivery")
 	}
+	var sender PopoVerificationCodeSender = NewPopoVerificationCodeServiceFromEnv()
+	if sender != nil {
+		t.Fatal("empty CLI path must stay nil when stored in a sender interface")
+	}
 	t.Setenv("MULTICA_POPO_CLI", "popo-cli")
 	if service := NewPopoVerificationCodeServiceFromEnv(); service == nil {
 		t.Fatal("configured CLI path must enable POPO delivery")

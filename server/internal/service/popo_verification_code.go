@@ -13,11 +13,18 @@ type popoP2PSender interface {
 	SendP2P(ctx context.Context, receiver, message string) (notify.Receipt, error)
 }
 
+type PopoVerificationCodeSender interface {
+	SendVerificationCode(ctx context.Context, email, code string) error
+}
+
 type PopoVerificationCodeService struct {
 	cli popoP2PSender
 }
 
-func NewPopoVerificationCodeServiceFromEnv() *PopoVerificationCodeService {
+// NewPopoVerificationCodeServiceFromEnv returns an interface value so an
+// unconfigured CLI yields nil, not a typed nil pointer that callers assigning
+// it to their own sender interface would read as enabled.
+func NewPopoVerificationCodeServiceFromEnv() PopoVerificationCodeSender {
 	bin := strings.TrimSpace(os.Getenv("MULTICA_POPO_CLI"))
 	if bin == "" {
 		return nil
