@@ -54,6 +54,14 @@ multica notify send --config /etc/multica/notify.json --event question --title "
 
 成功回执包含 POPO `messageId`、工作伙伴名称、接收目标和被 @ 的账号。同一个幂等键和相同请求会回放已有回执；同一键下改正文或目标会报错。省略键时按目标和正文自动生成；确需重复发送时使用新的显式键。
 
+## 评论 @成员 的私信通知
+
+Windows 上，守护进程管理的智能体通过 `multica issue comment add` 发表评论后，也会复用工作伙伴发送器。在守护进程环境中，将 `MULTICA_NOTIFY_CONFIG` 设为部署 JSON 文件的绝对路径。守护进程会把它传给执行任务；需要指定 POPO CLI 可执行文件或已安装的 `bin/popo.js` 时，也会传递 `MULTICA_POPO_CLI`。
+
+发件人取配置中 `defaultTarget` 对应目标的 `robotName`，私信接收人取评论中明确 @ 的成员邮箱，不使用配置里的群号或 `atUids`。同一条评论重复 @ 同一成员只发一次。归属 Requirement 的任务仍使用专用通知流程。
+
+消息包含评论原文和任务链接，沿用 `notify send` 的 3000 字符限制及消息 ID 回执校验。这条自动通知路径只尝试一次，不维护 `notify send` 的投递记录。缺少配置或发送失败时，在评论成功后输出警告，不回退个人账号发送，也不自动重试结果未知的投递。
+
 ## 跟踪 Multica 任务
 
 通知进程的环境需明确提供成员凭证 `MULTICA_SERVER_URL`、`MULTICA_WORKSPACE_ID` 和 `MULTICA_TOKEN`。监听不会读取本机 profile，也不接受随运行结束而过期的任务令牌。若配置中省略 appUrl，需提供 `MULTICA_APP_URL`。服务器上交给进程管理器以前台方式运行：
