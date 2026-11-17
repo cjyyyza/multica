@@ -2,43 +2,37 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
+	"github.com/multica-ai/multica/server/internal/notify"
 	"github.com/multica-ai/multica/server/internal/util"
 )
 
-type popoSendFunc func(ctx context.Context, executable, receiver, message string) error
-
 // maybeNotifyIssueMentionsViaPOPO mirrors explicit member mentions from an
-// agent's successfully posted comment to the local POPO account. The API
-// process never invokes popo-cli; the daemon-managed CLI runs beside the local
-// POPO login. Delivery is best-effort and must never change the comment result.
+// agent's successfully posted comment as the configured work partner. The
+// daemon-managed CLI runs beside the local POPO login. Delivery is best-effort
+// and must never change the comment result.
 func maybeNotifyIssueMentionsViaPOPO(client *cli.APIClient, issueID, content string) {
 	if runtime.GOOS != "windows" || !inDaemonManagedExecutionContext() {
 		return
 	}
-	executable := strings.TrimSpace(os.Getenv("MULTICA_POPO_CLI"))
-	if executable == "" {
-		executable = "popo-cli"
-	}
+	sender := notify.Popo{Bin: strings.TrimSpace(os.Getenv("MULTICA_POPO_CLI"))}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if err := notifyIssueMentionsViaPOPO(ctx, client, issueID, content, executable, sendPOPOMessage); err != nil {
+	if err := notifyIssueMentionsViaPOPO(ctx, client, issueID, content, sender); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: comment was added, but POPO notification failed: %v\n", err)
 	}
 }
 
-func notifyIssueMentionsViaPOPO(ctx context.Context, client *cli.APIClient, issueID, content, executable string, send popoSendFunc) error {
+func notifyIssueMentionsViaPOPO(ctx context.Context, client *cli.APIClient, issueID, content string, sender notify.Sender) error {
 	var recipientIDs []string
 	for _, mention := range util.ParseMentions(content) {
 		if mention.Type == "member" {
@@ -65,6 +59,15 @@ func notifyIssueMentionsViaPOPO(ctx context.Context, client *cli.APIClient, issu
 	}
 	if !issue.RequirementBindingKnown {
 		return errors.New("server did not confirm the issue requirement binding")
+	}
+
+	notificationConfig, _, err := notify.LoadJSONConfig(strings.TrimSpace(os.Getenv("MULTICA_NOTIFY_CONFIG")))
+	if err != nil {
+		return fmt.Errorf("load work partner from MULTICA_NOTIFY_CONFIG: %w", err)
+	}
+	partner, err := notificationConfig.Target("")
+	if err != nil {
+		return fmt.Errorf("select work partner for POPO notification: %w", err)
 	}
 
 	var config struct {
@@ -96,7 +99,7 @@ func notifyIssueMentionsViaPOPO(ctx context.Context, client *cli.APIClient, issu
 		emails[member.UserID] = strings.TrimSpace(member.Email)
 	}
 
-	message := content + "\n\nIssue: " + issueLink
+	notification := notify.Notification{Message: content + "\n\nIssue: " + issueLink}
 	var sendErrors []error
 	for _, recipientID := range recipientIDs {
 		receiver := emails[recipientID]
@@ -104,58 +107,14 @@ func notifyIssueMentionsViaPOPO(ctx context.Context, client *cli.APIClient, issu
 			sendErrors = append(sendErrors, fmt.Errorf("mentioned member %s has no email", recipientID))
 			continue
 		}
-		if err := send(ctx, executable, receiver, message); err != nil {
+		// Only the sender comes from deployment routing; mentions determine the
+		// private recipients, never the configured group or its mention list.
+		target := notify.Target{RobotName: partner.RobotName, Receiver: receiver}
+		if _, err := sender.Send(ctx, target, notification); err != nil {
 			// A timeout or lost response has an unknown remote result. Never
 			// retry automatically and risk a duplicate POPO message.
 			sendErrors = append(sendErrors, fmt.Errorf("send to %s: %w", receiver, err))
 		}
 	}
 	return errors.Join(sendErrors...)
-}
-
-func sendPOPOMessage(ctx context.Context, executable, receiver, message string) error {
-	file, err := os.CreateTemp("", "multica-popo-message-*.txt")
-	if err != nil {
-		return fmt.Errorf("create POPO message file: %w", err)
-	}
-	path := file.Name()
-	defer os.Remove(path)
-	if _, err := file.WriteString(message); err != nil {
-		file.Close()
-		return fmt.Errorf("write POPO message file: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close POPO message file: %w", err)
-	}
-
-	command := exec.CommandContext(ctx, executable,
-		"popo", "message_send_p2p",
-		"receiver="+receiver,
-		"source=AGENT",
-		"message=@text:"+path,
-	)
-	raw, err := command.Output()
-	if err != nil {
-		return fmt.Errorf("popo-cli message_send_p2p: %w", err)
-	}
-	var response struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			Data struct {
-				Data struct {
-					Status int `json:"status"`
-				} `json:"data"`
-			} `json:"data"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(raw, &response); err != nil {
-		return fmt.Errorf("decode popo-cli message_send_p2p response: %w", err)
-	}
-	if !response.OK {
-		return errors.New("popo-cli message_send_p2p returned ok=false")
-	}
-	if response.Data.Data.Data.Status != 1 {
-		return fmt.Errorf("popo-cli message_send_p2p returned status=%d", response.Data.Data.Data.Status)
-	}
-	return nil
 }

@@ -54,6 +54,14 @@ multica notify send --config /etc/multica/notify.json --event question --title "
 
 The result contains the confirmed POPO `messageId`, work partner name, receiver and mention accounts. Repeating the same idempotency key and request replays that receipt; changing the body or target under an existing key fails. If the key is omitted, it is derived from the target and content. Use a new explicit key for an intentional repeat.
 
+## Private notifications for comment mentions
+
+On Windows, comments posted by daemon-managed agents through `multica issue comment add` also use the shared work partner sender. Set `MULTICA_NOTIFY_CONFIG` to an absolute path to the deployment JSON in the daemon's environment. The daemon forwards it to execution tasks, along with `MULTICA_POPO_CLI` when a custom executable or installed `bin/popo.js` is needed.
+
+The sender uses `robotName` from the configured `defaultTarget`; each explicitly mentioned member's email supplies the private receiver. The configured group's `receiver` and `atUids` are not used. Repeated mentions of one member in a comment send only one message. Requirement-owned issues keep their dedicated notification flow.
+
+The message contains the comment and issue link and uses the same 3000-character budget and confirmed message receipt checks as `notify send`. This automatic path attempts delivery once without maintaining the `notify send` delivery store. Missing configuration or a send failure prints a warning after the comment succeeds; it never falls back to personal-account sending or automatically retries an unknown outcome.
+
 ## Follow a Multica task
 
 Provide `MULTICA_SERVER_URL`, `MULTICA_WORKSPACE_ID` and `MULTICA_TOKEN` as explicit member credentials in the notification process's environment. The watcher never loads profile credentials and rejects execution task tokens, which expire when their Run ends. Supply `MULTICA_APP_URL` if appUrl is absent from the selected configuration. Run in the foreground under the server's process manager:

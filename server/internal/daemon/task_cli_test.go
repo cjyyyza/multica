@@ -23,6 +23,11 @@ func TestConfigureTaskCLIEnvironment(t *testing.T) {
 	stubTaskCLI(t, cliPath)
 	inheritedPath := filepath.Join(t.TempDir(), "old-cli")
 	t.Setenv("PATH", inheritedPath)
+	notificationConfig := filepath.Join(t.TempDir(), "notify.json")
+	popoCLI := filepath.Join(t.TempDir(), "popo.js")
+	t.Setenv("MULTICA_NOTIFY_CONFIG", notificationConfig)
+	t.Setenv("MULTICA_POPO_CLI", popoCLI)
+	t.Setenv("MULTICA_TOKEN", "mul_owner_fixture")
 	env := map[string]string{"MULTICA_TOKEN": "mat_fixture"}
 	if err := configureTaskCLIEnvironment(env); err != nil {
 		t.Fatal(err)
@@ -34,16 +39,24 @@ func TestConfigureTaskCLIEnvironment(t *testing.T) {
 	if env["PATH"] != wantPath {
 		t.Fatalf("PATH = %q, want %q", env["PATH"], wantPath)
 	}
+	if env["MULTICA_NOTIFY_CONFIG"] != notificationConfig || env["MULTICA_POPO_CLI"] != popoCLI {
+		t.Fatal("work partner deployment configuration was not forwarded to the task CLI")
+	}
 	layerCustomEnvAndHermesHome(env, map[string]string{
-		"MULTICA_CLI_PATH": "other-cli",
-		"multica_cli_path": "other-cli",
-		"PATH":             "other-path",
+		"MULTICA_CLI_PATH":      "other-cli",
+		"multica_cli_path":      "other-cli",
+		"PATH":                  "other-path",
+		"MULTICA_NOTIFY_CONFIG": "other-config",
+		"MULTICA_POPO_CLI":      "other-popo",
 	}, "", nil)
 	if env["MULTICA_CLI_PATH"] != cliPath || env["PATH"] != wantPath || env["MULTICA_TOKEN"] != "mat_fixture" {
 		t.Fatal("custom environment replaced the daemon CLI or task credential")
 	}
 	if _, ok := env["multica_cli_path"]; ok {
 		t.Fatal("custom environment introduced a case alias for the daemon CLI")
+	}
+	if env["MULTICA_NOTIFY_CONFIG"] != notificationConfig || env["MULTICA_POPO_CLI"] != popoCLI {
+		t.Fatal("custom environment replaced the work partner deployment configuration")
 	}
 }
 

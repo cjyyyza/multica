@@ -13,9 +13,17 @@ import (
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/notify"
 )
 
+type issueMentionTestSender func(context.Context, notify.Target, notify.Notification) (notify.Receipt, error)
+
+func (send issueMentionTestSender) Send(ctx context.Context, target notify.Target, notification notify.Notification) (notify.Receipt, error) {
+	return send(ctx, target, notification)
+}
+
 func TestNotifyIssueMentionsViaPOPO(t *testing.T) {
+	configureIssuePOPONotifications(t)
 	const (
 		issueID = "11111111-1111-4111-8111-111111111111"
 		aliceID = "22222222-2222-4222-8222-222222222222"
@@ -30,41 +38,40 @@ func TestNotifyIssueMentionsViaPOPO(t *testing.T) {
 	client := cli.NewAPIClient(srv.URL, "ws-1", "mat_test-token")
 
 	type call struct {
-		executable string
-		receiver   string
-		message    string
+		target       notify.Target
+		notification notify.Notification
 	}
 	var calls []call
-	err := notifyIssueMentionsViaPOPO(context.Background(), client, issueID, content, "fake-popo-cli",
-		func(_ context.Context, executable, receiver, message string) error {
-			calls = append(calls, call{executable: executable, receiver: receiver, message: message})
-			return nil
-		})
+	sender := issueMentionTestSender(func(_ context.Context, target notify.Target, notification notify.Notification) (notify.Receipt, error) {
+		calls = append(calls, call{target: target, notification: notification})
+		return notify.Receipt{MessageID: "message-" + target.Receiver}, nil
+	})
+	err := notifyIssueMentionsViaPOPO(context.Background(), client, issueID, content, sender)
 	if err != nil {
 		t.Fatalf("notifyIssueMentionsViaPOPO: %v", err)
 	}
 	if len(calls) != 2 {
 		t.Fatalf("POPO send count = %d, want 2 (deduplicated members only): %+v", len(calls), calls)
 	}
-	if calls[0].receiver != "alice@example.com" || calls[1].receiver != "bob@example.com" {
-		t.Fatalf("POPO receivers = %q, %q", calls[0].receiver, calls[1].receiver)
+	if calls[0].target.Receiver != "alice@example.com" || calls[1].target.Receiver != "bob@example.com" {
+		t.Fatalf("POPO receivers = %q, %q", calls[0].target.Receiver, calls[1].target.Receiver)
 	}
 	for _, call := range calls {
-		if call.executable != "fake-popo-cli" {
-			t.Errorf("executable = %q", call.executable)
+		if call.target.RobotName != "Comment work partner" || len(call.target.AtUIDs) != 0 {
+			t.Errorf("private work partner target = %+v", call.target)
 		}
-		if !strings.Contains(call.message, content) {
-			t.Errorf("POPO message does not preserve the comment: %q", call.message)
+		if !strings.Contains(call.notification.Message, content) {
+			t.Errorf("POPO message does not preserve the comment: %q", call.notification.Message)
 		}
-		if !strings.Contains(call.message, "https://app.example/team-a/issues/MUL-42") {
-			t.Errorf("POPO message lost the issue link: %q", call.message)
+		if !strings.Contains(call.notification.Message, "https://app.example/team-a/issues/MUL-42") {
+			t.Errorf("POPO message lost the issue link: %q", call.notification.Message)
 		}
 	}
 }
 
 func TestNotifyIssueMentionsViaPOPOSkipsNonMemberAndRequirementComments(t *testing.T) {
 	t.Run("no member mention does no reads or sends", func(t *testing.T) {
-		err := notifyIssueMentionsViaPOPO(context.Background(), nil, "issue-1", "plain comment", "unused", nil)
+		err := notifyIssueMentionsViaPOPO(context.Background(), nil, "issue-1", "plain comment", nil)
 		if err != nil {
 			t.Fatalf("notifyIssueMentionsViaPOPO: %v", err)
 		}
@@ -85,15 +92,11 @@ func TestNotifyIssueMentionsViaPOPOSkipsNonMemberAndRequirementComments(t *testi
 		}))
 		defer srv.Close()
 		client := cli.NewAPIClient(srv.URL, "ws-1", "mat_test-token")
-		sends := 0
+		sender := &notifyTestSender{}
 		err := notifyIssueMentionsViaPOPO(context.Background(), client, issueID,
-			"[@Alice](mention://member/"+userID+")", "unused",
-			func(context.Context, string, string, string) error {
-				sends++
-				return nil
-			})
-		if err != nil || sends != 0 {
-			t.Fatalf("requirement notification: err=%v sends=%d", err, sends)
+			"[@Alice](mention://member/"+userID+")", sender)
+		if err != nil || sender.calls != 0 {
+			t.Fatalf("requirement notification: err=%v sends=%d", err, sender.calls)
 		}
 	})
 
@@ -114,23 +117,20 @@ func TestNotifyIssueMentionsViaPOPOSkipsNonMemberAndRequirementComments(t *testi
 		}))
 		defer srv.Close()
 		client := cli.NewAPIClient(srv.URL, "ws-1", "mat_test-token")
-		sends := 0
+		sender := &notifyTestSender{}
 		err := notifyIssueMentionsViaPOPO(context.Background(), client, issueID,
-			"[@Alice](mention://member/"+aliceID+")", "unused",
-			func(context.Context, string, string, string) error {
-				sends++
-				return nil
-			})
+			"[@Alice](mention://member/"+aliceID+")", sender)
 		if err == nil || !strings.Contains(err.Error(), "requirement binding") {
 			t.Fatalf("error = %v, want an unknown requirement binding warning", err)
 		}
-		if sends != 0 {
-			t.Fatalf("unknown requirement binding caused %d generic sends", sends)
+		if sender.calls != 0 {
+			t.Fatalf("unknown requirement binding caused %d generic sends", sender.calls)
 		}
 	})
 }
 
 func TestNotifyIssueMentionsViaPOPODoesNotRetryOrBlockOtherRecipients(t *testing.T) {
+	configureIssuePOPONotifications(t)
 	const (
 		issueID = "11111111-1111-4111-8111-111111111111"
 		aliceID = "22222222-2222-4222-8222-222222222222"
@@ -141,14 +141,14 @@ func TestNotifyIssueMentionsViaPOPODoesNotRetryOrBlockOtherRecipients(t *testing
 	client := cli.NewAPIClient(srv.URL, "ws-1", "mat_test-token")
 	content := "[@Alice](mention://member/" + aliceID + ") [@Bob](mention://member/" + bobID + ")"
 	var receivers []string
-	err := notifyIssueMentionsViaPOPO(context.Background(), client, issueID, content, "fake-popo-cli",
-		func(_ context.Context, _ string, receiver, _ string) error {
-			receivers = append(receivers, receiver)
-			if receiver == "alice@example.com" {
-				return errors.New("send failed")
-			}
-			return nil
-		})
+	sender := issueMentionTestSender(func(_ context.Context, target notify.Target, _ notify.Notification) (notify.Receipt, error) {
+		receivers = append(receivers, target.Receiver)
+		if target.Receiver == "alice@example.com" {
+			return notify.Receipt{}, &notify.SendError{Err: errors.New("send failed"), Unknown: true}
+		}
+		return notify.Receipt{MessageID: "message-bob"}, nil
+	})
+	err := notifyIssueMentionsViaPOPO(context.Background(), client, issueID, content, sender)
 	if err == nil || !strings.Contains(err.Error(), "send failed") {
 		t.Fatalf("error = %v, want the confirmed send failure", err)
 	}
@@ -161,6 +161,7 @@ func TestRunIssueCommentAddPOPOFailureDoesNotFailComment(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("the automatic popo-cli bridge runs on Windows")
 	}
+	configureIssuePOPONotifications(t)
 	const (
 		issueID = "11111111-1111-4111-8111-111111111111"
 		aliceID = "22222222-2222-4222-8222-222222222222"
@@ -193,35 +194,34 @@ func TestRunIssueCommentAddPOPOFailureDoesNotFailComment(t *testing.T) {
 	}
 }
 
-func TestSendPOPOMessageValidatesAcknowledgement(t *testing.T) {
-	tests := []struct {
-		name     string
-		response string
-		wantErr  bool
-	}{
-		{name: "accepted", response: `{"ok":true,"data":{"data":{"data":{"status":1}}}}`},
-		{name: "not ok", response: `{"ok":false,"data":{"data":{"data":{"status":1}}}}`, wantErr: true},
-		{name: "rejected status", response: `{"ok":true,"data":{"data":{"data":{"status":0}}}}`, wantErr: true},
-		{name: "malformed", response: `not-json`, wantErr: true},
+func TestNotifyIssueMentionsViaPOPORequiresDeploymentConfig(t *testing.T) {
+	const (
+		issueID = "11111111-1111-4111-8111-111111111111"
+		aliceID = "22222222-2222-4222-8222-222222222222"
+	)
+	notifyCLISetup(t)
+	srv := newIssuePOPONotificationServer(t, issueID, aliceID, "")
+	defer srv.Close()
+	client := cli.NewAPIClient(srv.URL, "ws-1", "mat_test-token")
+	for _, path := range []string{"", filepath.Join(t.TempDir(), "missing.json")} {
+		t.Setenv("MULTICA_NOTIFY_CONFIG", path)
+		sender := &notifyTestSender{}
+		err := notifyIssueMentionsViaPOPO(context.Background(), client, issueID,
+			"[@Alice](mention://member/"+aliceID+")", sender)
+		if err == nil || !strings.Contains(err.Error(), "MULTICA_NOTIFY_CONFIG") || sender.calls != 0 {
+			t.Fatalf("invalid deployment config %q: err=%v sends=%d", path, err, sender.calls)
+		}
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			executable := filepath.Join(dir, "fake-popo-cli")
-			script := "#!/bin/sh\nprintf '%s\\n' '" + tt.response + "'\n"
-			if runtime.GOOS == "windows" {
-				executable += ".cmd"
-				script = "@echo off\r\n@echo " + tt.response + "\r\n"
-			}
-			if err := os.WriteFile(executable, []byte(script), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			err := sendPOPOMessage(context.Background(), executable, "alice@example.com", "hello")
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("sendPOPOMessage error = %v, wantErr=%v", err, tt.wantErr)
-			}
-		})
+}
+
+func configureIssuePOPONotifications(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "notify.json")
+	configuration := `{"version":1,"defaultTarget":"team","targets":{"team":{"robotName":"Comment work partner","receiver":"1234567","atUids":["other@example.com"]}}}`
+	if err := os.WriteFile(path, []byte(configuration), 0600); err != nil {
+		t.Fatal(err)
 	}
+	t.Setenv("MULTICA_NOTIFY_CONFIG", path)
 }
 
 func newIssuePOPONotificationServer(t *testing.T, issueID, aliceID, bobID string) *httptest.Server {
