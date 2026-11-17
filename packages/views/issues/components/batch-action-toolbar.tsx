@@ -293,6 +293,7 @@ export function BatchActionToolbar({
     projectId: sharedProjectId,
     allowedStatuses,
     disabled: loading,
+    canChangeStatus: !lifecycleActionsDisabled,
     canDelete: canDeleteSelection,
     onStatus: (status: string) => handleBatchStatus({ status }),
     onAssignee: handleBatchAssignee,

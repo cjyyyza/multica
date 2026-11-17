@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -349,5 +350,41 @@ func TestBatchUpdateRejectsInvalidLabelAndPropertyOps(t *testing.T) {
 				t.Errorf("rejected request wrote labels: %v", got)
 			}
 		})
+	}
+}
+
+func TestBatchDryRunMatchesRequirementWriteGates(t *testing.T) {
+	enableRequirementFlowForTest(t)
+	if testPool == nil {
+		t.Skip("database not available")
+	}
+	f := newRequirementReviewFixture(t, uniqueChatRequirementExternalID())
+	issueID := uuidToString(f.Issue.ID)
+
+	for _, dryRun := range []bool{true, false} {
+		code, _, raw := batchUpdate(t, map[string]any{
+			"issue_ids": []string{issueID},
+			"updates":   map[string]any{"status": "todo"},
+			"dry_run":   dryRun,
+		})
+		if code != http.StatusConflict || !strings.Contains(raw, "requirement_status_transition_forbidden") {
+			t.Errorf("status update dry_run=%v: got %d %s", dryRun, code, raw)
+		}
+
+		w := httptest.NewRecorder()
+		testHandler.BatchDeleteIssues(w, newRequest("POST", "/api/issues/batch-delete", map[string]any{
+			"issue_ids": []string{issueID}, "dry_run": dryRun,
+		}))
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "requirement_issue_not_cancelled") {
+			t.Errorf("delete dry_run=%v: got %d %s", dryRun, w.Code, w.Body.String())
+		}
+	}
+
+	var status string
+	if err := testPool.QueryRow(context.Background(), `SELECT status FROM issue WHERE id = $1`, issueID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "in_review" {
+		t.Fatalf("rejected batch operations changed status to %q", status)
 	}
 }

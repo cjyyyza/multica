@@ -5270,6 +5270,17 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if req.DryRun {
+			if params.Status.Valid && params.Status.String != prevIssue.Status {
+				_, err := h.Queries.GetRequirementByIssue(r.Context(), db.GetRequirementByIssueParams{WorkspaceID: prevIssue.WorkspaceID, IssueID: prevIssue.ID})
+				if err == nil {
+					writeRequirementChatExecutionError(w, &service.RequirementChatExecutionError{Code: service.RequirementStatusTransitionForbiddenCode, IssueID: issueID})
+					return
+				}
+				if !errors.Is(err, pgx.ErrNoRows) {
+					writeRequirementChatExecutionError(w, err)
+					return
+				}
+			}
 			results = append(results, batchIssueResult{IssueID: issueID, Identifier: identifier, Outcome: batchOutcomeWouldUpdate})
 			continue
 		}
@@ -5387,6 +5398,9 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			if statusChanged || prevIssue.ParentIssueID != issue.ParentIssueID || prevIssue.Stage != issue.Stage {
 				changedParents = append(changedParents, issue.ParentIssueID, prevIssue.ParentIssueID)
 			}
+			if assigneeChanged {
+				freedSquadIssues = append(freedSquadIssues, prevIssue)
+			}
 		}
 		if labelsChanged {
 			if labels, ok := h.listLabelsForIssueSafe(r, issue.ID, issue.WorkspaceID); ok {
@@ -5403,9 +5417,6 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				"properties":     parseIssueProperties(issue.Properties),
 				"issue_revision": issue.Revision,
 			})
-		}
-		if assigneeChanged {
-			freedSquadIssues = append(freedSquadIssues, prevIssue)
 		}
 
 		outcome := batchOutcomeUpdated
@@ -5501,14 +5512,14 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 	if !h.requireIssueDeletion(w, r, wsUUID, issues) {
 		return
 	}
-	if req.DryRun {
-		writeJSON(w, http.StatusOK, map[string]any{"deleted": 0, "results": results, "dry_run": true})
-		return
-	}
 	for _, issue := range issues {
 		if writeRequirementChatExecutionError(w, service.GateRequirementIssueDeletion(r.Context(), h.Queries, issue.WorkspaceID, issue.ID)) {
 			return
 		}
+	}
+	if req.DryRun {
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": 0, "results": results, "dry_run": true})
+		return
 	}
 	for _, issue := range issues {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)

@@ -77,6 +77,7 @@ interface BatchMenuItemsProps {
   projectId: string | null;
   allowedStatuses: ReadonlySet<string> | null;
   disabled: boolean;
+  canChangeStatus?: boolean;
   canDelete: boolean;
   onStatus: (status: string) => void;
   onAssignee: (updates: Partial<UpdateIssueRequest>) => void;
@@ -98,6 +99,7 @@ export function BatchMenuItems({
   projectId,
   allowedStatuses,
   disabled,
+  canChangeStatus = true,
   canDelete,
   onStatus,
   onAssignee,
@@ -171,7 +173,7 @@ export function BatchMenuItems({
             {t(($) => $.batch.selected, { count })}
           </div>
           <P.Separator />
-          <StatusSub P={P} projectId={projectId} allowedStatuses={allowedStatuses} common={common} disabled={disabled} onStatus={onStatus} />
+          <StatusSub P={P} projectId={projectId} allowedStatuses={allowedStatuses} common={common} disabled={disabled || !canChangeStatus} onStatus={onStatus} />
           <P.Sub>
             <P.SubTrigger disabled={disabled}>
               <PriorityIcon priority={common.priority ?? "none"} />

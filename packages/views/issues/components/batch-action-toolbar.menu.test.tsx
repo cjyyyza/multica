@@ -82,4 +82,21 @@ describe("BatchActionToolbar — batch context menu", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Clear selection" }));
     expect(selection.clear).toHaveBeenCalledTimes(1);
   });
+
+  it("disables status changes for a Requirement selection", async () => {
+    const issues = [issue("a"), { ...issue("b"), requirement_id: "req-1" }];
+    renderWithI18n(
+      <IssueContextMenuProvider>
+        {issues.map((row) => (
+          <IssueActionsContextMenu key={row.id} issue={row}>
+            <div>row {row.id}</div>
+          </IssueActionsContextMenu>
+        ))}
+        <BatchActionToolbar issues={issues} />
+      </IssueContextMenuProvider>,
+    );
+
+    fireEvent.contextMenu(screen.getByText("row a"));
+    expect(await screen.findByRole("menuitem", { name: "Status" })).toHaveAttribute("aria-disabled", "true");
+  });
 });
