@@ -25,7 +25,7 @@ func TestRequirementPopoCLISubmissionAndUnknownReceipt(t *testing.T) {
 	if !strings.Contains(recipient, "@") || strings.ContainsAny(recipient, "\r\n&|<>") {
 		t.Fatal("an explicitly selected POPO account is required")
 	}
-	bin := os.Getenv("MULTICA_POPO_CLI")
+	bin := os.Getenv("MULTICA_ACCEPTANCE_POPO_CLI")
 	if bin == "" {
 		bin = "popo-cli"
 	}

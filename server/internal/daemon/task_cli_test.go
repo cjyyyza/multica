@@ -24,7 +24,7 @@ func TestConfigureTaskCLIEnvironment(t *testing.T) {
 	inheritedPath := filepath.Join(t.TempDir(), "old-cli")
 	t.Setenv("PATH", inheritedPath)
 	notificationConfig := filepath.Join(t.TempDir(), "notify.json")
-	popoCLI := filepath.Join(t.TempDir(), "popo.js")
+	popoCLI := "true"
 	t.Setenv("MULTICA_NOTIFY_CONFIG", notificationConfig)
 	t.Setenv("MULTICA_POPO_CLI", popoCLI)
 	t.Setenv("MULTICA_TOKEN", "mul_owner_fixture")

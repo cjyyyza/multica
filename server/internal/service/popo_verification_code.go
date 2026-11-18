@@ -21,15 +21,14 @@ type PopoVerificationCodeService struct {
 	cli popoP2PSender
 }
 
-// NewPopoVerificationCodeServiceFromEnv returns an interface value so an
-// unconfigured CLI yields nil, not a typed nil pointer that callers assigning
+// NewPopoVerificationCodeServiceFromEnv returns an interface value so a
+// disabled service yields nil, not a typed nil pointer that callers assigning
 // it to their own sender interface would read as enabled.
 func NewPopoVerificationCodeServiceFromEnv() PopoVerificationCodeSender {
-	bin := strings.TrimSpace(os.Getenv("MULTICA_POPO_CLI"))
-	if bin == "" {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("MULTICA_POPO_CLI")), "false") {
 		return nil
 	}
-	return &PopoVerificationCodeService{cli: notify.Popo{Bin: bin}}
+	return &PopoVerificationCodeService{cli: notify.Popo{Bin: "popo-cli"}}
 }
 
 func (s *PopoVerificationCodeService) SendVerificationCode(ctx context.Context, email, code string) error {

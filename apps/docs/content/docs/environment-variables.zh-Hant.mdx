@@ -100,11 +100,11 @@ MULTICA_PUBLIC_URL=https://api.multica.example.com
 
 ### POPO CLI 驗證碼
 
-設定 `MULTICA_POPO_CLI` 後，驗證碼直接透過 `message_send_p2p` 傳送，不再使用 SMTP、Resend 或標準輸出，也不使用機器人通道。傳送失敗或結果不明確時不會回退到郵件。詳見[登入與註冊](/auth-setup#使用-popo-cli-傳送驗證碼)。
+`MULTICA_POPO_CLI` 預設為 `true`，透過 `PATH` 中的 `popo-cli` 呼叫 `message_send_p2p` 直接傳送驗證碼，不再使用 SMTP、Resend 或標準輸出，也不使用機器人通道。設為 `false` 可關閉 POPO 傳送。傳送失敗或結果不明確時不會回退到郵件。詳見[登入與註冊](/auth-setup#使用-popo-cli-傳送驗證碼)。
 
 | 變數 | 預設值 | 說明 |
 |---|---|---|
-| `MULTICA_POPO_CLI` | 空 | `PATH` 中的 CLI 命令，或 `bin/popo.js` 的絕對路徑；API 主機需要 Node.js 和已登入的 CLI 設定 |
+| `MULTICA_POPO_CLI` | `true` | POPO 傳送布林開關；使用 `PATH` 中的 `popo-cli`；API 主機需要 Node.js 和已登入的 CLI 設定 |
 
 ### Google OAuth
 

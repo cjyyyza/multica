@@ -10,7 +10,7 @@ Protocol: agent-notes/v1
 
 ## 决策
 
-部署者设置 `MULTICA_POPO_CLI` 后，API 通过现有 `notify.Popo` 执行器直接调用 `message_send_p2p`，以规范化登录邮箱作为 `receiver`，并传入 `source=AGENT`。该路径不使用 dj01bot 机器人通道，不需要桥接 ID、机器人 ID 或工作区安装，也不要求 `MULTICA_POPO_ENABLED`。留空时保留原有 SMTP、Resend 和开发日志行为。
+`MULTICA_POPO_CLI` 启用时，API 通过现有 `notify.Popo` 执行器直接调用 `message_send_p2p`，以规范化登录邮箱作为 `receiver`，并传入 `source=AGENT`。该路径不使用 dj01bot 机器人通道，不需要桥接 ID、机器人 ID 或工作区安装，也不要求 `MULTICA_POPO_ENABLED`。当前默认为启用，设为 `false` 时保留 SMTP、Resend 和开发日志行为；开关语义由 [POPO CLI 布尔开关](2026-11-17-popo-cli-toggle.md) 部分取代，本记录其余投递与回执约束不变。
 
 CLI 在 API 进程所在主机运行，使用其当前登录账号作为发送身份。消息通过权限为 0600 的临时 UTF-8 文本文件传给 CLI，避免命令行转义问题。只有 POPO 返回明确成功和消息 ID 才视为送达；拒绝、调用失败、缺失回执、结果不明和超时均返回发送错误，不回退到邮件或标准输出，也不自动重发。邀请邮件仍使用 EmailService，生产部署文档要求清空固定开发验证码。
 

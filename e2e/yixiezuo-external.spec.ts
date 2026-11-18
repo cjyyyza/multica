@@ -25,11 +25,10 @@ test("explicitly confirmed source comment is published and read back", async ({}
   test.setTimeout(300_000);
   const sourceURL = process.env.MULTICA_ACCEPTANCE_SOURCE_URL;
   const binary = process.env.MULTICA_ACCEPTANCE_CLI;
-  const popoCLI = process.env.MULTICA_POPO_CLI;
+  const popoCLI = process.env.MULTICA_ACCEPTANCE_POPO_CLI || "popo-cli";
   const baseURL = process.env.NEXT_PUBLIC_API_URL;
   expect(sourceURL, "select a writable test issue explicitly").toBeTruthy();
   expect(binary, "build the current CLI before acceptance").toBeTruthy();
-  expect(popoCLI, "select the authenticated POPO CLI explicitly").toBeTruthy();
   expect(baseURL, "select the local acceptance API explicitly").toMatch(/^http:\/\/(localhost|127\.0\.0\.1):\d+$/);
 
   const evidence = process.env.MULTICA_ACCEPTANCE_EVIDENCE_DIR || testInfo.outputPath("external-evidence");

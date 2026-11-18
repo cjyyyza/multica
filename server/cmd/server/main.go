@@ -343,7 +343,7 @@ func main() {
 		slog.Warn("JWT_SECRET is not set — using insecure dev default (allowed only because APP_ENV is not production).")
 	}
 	if os.Getenv("RESEND_API_KEY") == "" && strings.TrimSpace(os.Getenv("SMTP_HOST")) == "" {
-		if strings.TrimSpace(os.Getenv("MULTICA_POPO_CLI")) == "" {
+		if strings.EqualFold(strings.TrimSpace(os.Getenv("MULTICA_POPO_CLI")), "false") {
 			slog.Warn("no email backend configured (RESEND_API_KEY and SMTP_HOST both empty) — verification codes will be printed to the log instead of emailed.")
 		} else {
 			slog.Warn("no email backend configured — invitation emails will be printed to the log; verification codes use popo-cli.")

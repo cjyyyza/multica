@@ -14,7 +14,7 @@ POPO「连接智能体」接入的 DSH 等工作伙伴具有发送身份。协�
 
 通知配置按命名目标保存工作伙伴、接收群或账号、被 @ 的账号及可选网页地址。服务器通过 `--config` 或 `MULTICA_NOTIFY_CONFIG` 指向部署环境的独立 JSON；协调智能体也可在自己的 AGENTS.md 使用单一 `multica-notify` JSON 代码块，由 `--agents-file` 选择。两个文件参数互斥，显式参数优先于环境变量，选定文件失败不回退到仓库指令，不跨项目合并。仅未选择文件且没有配置环境变量时查找最近的 AGENTS.md。凭证不写入路由 JSON、Markdown 或投递记录，仓库根 AGENTS.md 不承载运行时通知配置。
 
-[评论成员提及通知](../../../server/cmd/multica/cmd_issue_popo.go) 也复用 `notify.Popo`：Windows 执行智能体成功发表评论后，以 `MULTICA_NOTIFY_CONFIG` 指定的部署 JSON 中默认目标的 `robotName` 发私信，接收人仍由被提及成员邮箱决定，不继承群号或群 @ 列表。守护进程显式传递部署配置路径和可选 `MULTICA_POPO_CLI`，保持其余 `MULTICA_*` 环境隔离。该自动路径不查找仓库 AGENTS.md，不回退个人账号，不维护通知投递账本或自动重试；配置或发送失败只警告，不改变评论结果，Requirement 所属任务继续排除。
+[评论成员提及通知](../../../server/cmd/multica/cmd_issue_popo.go) 也复用 `notify.Popo`：Windows 执行智能体成功发表评论后，以 `MULTICA_NOTIFY_CONFIG` 指定的部署 JSON 中默认目标的 `robotName` 发私信，接收人仍由被提及成员邮箱决定，不继承群号或群 @ 列表。守护进程显式传递部署配置路径和 `MULTICA_POPO_CLI` 布尔开关，保持其余 `MULTICA_*` 环境隔离；开关默认启用，设为 `false` 时跳过该通知，启用时固定使用 `PATH` 中的 `popo-cli`。该自动路径不查找仓库 AGENTS.md，不回退个人账号，不维护通知投递账本或自动重试；配置或发送失败只警告，不改变评论结果，Requirement 所属任务继续排除。
 
 `notify watch` 是该通用发送入口的一个调用方。它用显式成员凭证读取已有 Requirement 或普通 Issue API，拒绝随 Run 结束而失效的任务凭证。服务器使用默认前台模式交给进程管理器托管，[systemd 模板](../../../examples/workpartner-notifications/multica-notify@.service) 按 Requirement 实例保留状态目录并在异常退出时恢复。协调智能体直接启动时也可使用[现有进程脱离机制](../../../server/cmd/multica/cmd_notify_background.go)，取得监听锁后才返回启动回执；子进程使用已解析的绝对配置路径，不因工作目录或环境变量变化选错配置。通知进程不在 DSH 模型轮次里维持等待，不改服务端数据库或增加公共回调接口。
 

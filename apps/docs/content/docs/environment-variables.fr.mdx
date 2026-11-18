@@ -100,11 +100,11 @@ SMTP est prioritaire sur Resend dès que `SMTP_HOST` n'est pas vide.
 
 ### Codes de vérification POPO CLI
 
-La définition de `MULTICA_POPO_CLI` sélectionne `message_send_p2p` au lieu de SMTP, Resend ou de la sortie standard, sans pont robot. Un échec ou un résultat incertain ne provoque aucun repli sur l'e-mail. Voir [Connexion et inscription](/auth-setup#codes-de-vérification-par-popo-cli).
+`MULTICA_POPO_CLI` vaut `true` par défaut et utilise `popo-cli` depuis `PATH` pour appeler directement `message_send_p2p` au lieu de SMTP, Resend ou de la sortie standard, sans pont robot. Définissez-le sur `false` pour désactiver la remise POPO. Un échec ou un résultat incertain ne provoque aucun repli sur l'e-mail. Voir [Connexion et inscription](/auth-setup#codes-de-vérification-par-popo-cli).
 
 | Variable | Valeur par défaut | Description |
 |---|---|---|
-| `MULTICA_POPO_CLI` | vide | Commande CLI sur `PATH` ou chemin absolu de `bin/popo.js` ; l'hôte de l'API nécessite Node.js et un profil CLI authentifié |
+| `MULTICA_POPO_CLI` | `true` | Commutateur booléen de la remise POPO ; utilise `popo-cli` depuis `PATH` ; l'hôte de l'API nécessite Node.js et un profil CLI authentifié |
 
 ### Google OAuth
 

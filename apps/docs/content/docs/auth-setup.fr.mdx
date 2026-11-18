@@ -71,7 +71,7 @@ SMTP_EHLO_NAME=mail.example.com
 
 ### Comportement sans service d'e-mail
 
-Si la remise des codes de vérification par POPO n'est pas configurée non plus, le serveur démarre quand même, mais les codes de vérification et les liens d'invitation sont uniquement écrits dans le journal ; aucun e-mail n'est envoyé. Ce mode ne convient qu'au développement local.
+Si la remise des codes de vérification par POPO est désactivée avec `MULTICA_POPO_CLI=false` et qu'aucun service d'e-mail n'est configuré, le serveur démarre quand même, mais les codes de vérification et les liens d'invitation sont uniquement écrits dans le journal ; aucun e-mail n'est envoyé. Ce mode ne convient qu'au développement local.
 
 Le journal de démarrage indique si le mode actuel est `Resend API`, `SMTP relay` ou `DEV mode`.
 
@@ -82,10 +82,10 @@ Lorsque le compte POPO de chaque utilisateur est son adresse e-mail, l'API peut 
 ```dotenv
 APP_ENV=production
 MULTICA_DEV_VERIFICATION_CODE=
-MULTICA_POPO_CLI=popo-cli
+MULTICA_POPO_CLI=true
 ```
 
-L'hôte de l'API doit disposer de Node.js et d'un profil `popo-cli` authentifié. Si le CLI n'est pas dans `PATH`, définissez `MULTICA_POPO_CLI` sur le chemin absolu de `bin/popo.js`. Multica appelle `message_send_p2p` avec l'adresse normalisée comme `receiver` et attend un accusé de message confirmé. Un échec du CLI, un refus, un résultat incertain ou un dépassement de délai renvoie une erreur, sans repli sur l'e-mail ou la sortie standard. Si l'API s'exécute dans un conteneur, le CLI, Node.js et le profil authentifié doivent être disponibles dans ce conteneur ; la session de l'hôte n'est pas partagée automatiquement. POPO CLI prend en charge uniquement les codes de vérification, pas les e-mails d'invitation. Une fois activé, la page de connexion sur le web, le bureau et le mobile invite les utilisateurs à consulter leur conversation privée POPO pour obtenir un code de vérification Multica.
+`MULTICA_POPO_CLI` vaut `true` par défaut et utilise `popo-cli` depuis `PATH`. Définissez-le sur `false` pour désactiver la remise POPO et utiliser SMTP, Resend ou le journal de développement. L'hôte de l'API doit disposer de Node.js et d'un profil `popo-cli` authentifié, et le CLI doit être accessible depuis `PATH`. Multica appelle `message_send_p2p` avec l'adresse normalisée comme `receiver` et attend un accusé de message confirmé. Un échec du CLI, un refus, un résultat incertain ou un dépassement de délai renvoie une erreur, sans repli sur l'e-mail ou la sortie standard. Si l'API s'exécute dans un conteneur, le CLI, Node.js et le profil authentifié doivent être disponibles dans ce conteneur ; la session de l'hôte n'est pas partagée automatiquement. POPO CLI prend en charge uniquement les codes de vérification, pas les e-mails d'invitation. Une fois activé, la page de connexion sur le web, le bureau et le mobile invite les utilisateurs à consulter leur conversation privée POPO pour obtenir un code de vérification Multica.
 
 ## Code de vérification local fixe
 

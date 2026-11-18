@@ -21,10 +21,11 @@ import (
 // daemon-managed CLI runs beside the local POPO login. Delivery is best-effort
 // and must never change the comment result.
 func maybeNotifyIssueMentionsViaPOPO(client *cli.APIClient, issueID, content string) {
-	if runtime.GOOS != "windows" || !inDaemonManagedExecutionContext() {
+	if runtime.GOOS != "windows" || !inDaemonManagedExecutionContext() ||
+		strings.EqualFold(strings.TrimSpace(os.Getenv("MULTICA_POPO_CLI")), "false") {
 		return
 	}
-	sender := notify.Popo{Bin: strings.TrimSpace(os.Getenv("MULTICA_POPO_CLI"))}
+	sender := notify.Popo{Bin: "popo-cli"}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	if err := notifyIssueMentionsViaPOPO(ctx, client, issueID, content, sender); err != nil {

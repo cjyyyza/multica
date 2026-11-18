@@ -56,7 +56,7 @@ multica notify send --config /etc/multica/notify.json --event question --title "
 
 ## 评论 @成员 的私信通知
 
-Windows 上，守护进程管理的智能体通过 `multica issue comment add` 发表评论后，也会复用工作伙伴发送器。在守护进程环境中，将 `MULTICA_NOTIFY_CONFIG` 设为部署 JSON 文件的绝对路径。守护进程会把它传给执行任务；需要指定 POPO CLI 可执行文件或已安装的 `bin/popo.js` 时，也会传递 `MULTICA_POPO_CLI`。
+Windows 上，守护进程管理的智能体通过 `multica issue comment add` 发表评论后，也会复用工作伙伴发送器。在守护进程环境中，将 `MULTICA_NOTIFY_CONFIG` 设为部署 JSON 文件的绝对路径。守护进程会把它和 `MULTICA_POPO_CLI` 开关传给执行任务。POPO 投递默认开启，使用 `PATH` 中的 `popo-cli`；将开关设为 `false` 可关闭。
 
 发件人取配置中 `defaultTarget` 对应目标的 `robotName`，私信接收人取评论中明确 @ 的成员邮箱，不使用配置里的群号或 `atUids`。同一条评论重复 @ 同一成员只发一次。归属 Requirement 的任务仍使用专用通知流程。
 

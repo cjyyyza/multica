@@ -71,7 +71,7 @@ SMTP_EHLO_NAME=mail.example.com
 
 ### 無郵件服務時的行為
 
-如果也沒有設定 POPO 驗證碼投遞，伺服器仍可啟動，但驗證碼和邀請連結只會寫入日誌，不會傳送郵件。這種模式只適合本地開發。
+如果透過 `MULTICA_POPO_CLI=false` 關閉 POPO 驗證碼傳送，且沒有設定郵件服務，伺服器仍可啟動，但驗證碼和邀請連結只會寫入日誌，不會傳送郵件。這種模式只適合本地開發。
 
 啟動日誌會說明當前使用的是 `Resend API`、`SMTP relay` 還是 `DEV mode`。
 
@@ -82,10 +82,10 @@ SMTP_EHLO_NAME=mail.example.com
 ```dotenv
 APP_ENV=production
 MULTICA_DEV_VERIFICATION_CODE=
-MULTICA_POPO_CLI=popo-cli
+MULTICA_POPO_CLI=true
 ```
 
-執行 API 的主機必須安裝 Node.js，並具有已登入的 `popo-cli` 設定。如果 CLI 不在 `PATH` 中，把 `MULTICA_POPO_CLI` 改為 `bin/popo.js` 的絕對路徑。Multica 呼叫 `message_send_p2p`，把規範化後的登入信箱作為 `receiver`，並等待確認的訊息回執。CLI 呼叫失敗、對方拒絕、結果不明確或逾時都會返回錯誤，不會回退到郵件或標準輸出。如果 API 執行於容器中，CLI、Node.js 和已登入設定必須位於容器內；宿主機的登入態不會自動共享。POPO CLI 只接管驗證碼，不接管邀請郵件。啟用後，Web、桌面端和行動端登入頁會引導使用者到 POPO 私聊查看 Multica 驗證碼。
+`MULTICA_POPO_CLI` 預設為 `true`，使用 `PATH` 中的 `popo-cli`。設為 `false` 可關閉 POPO 傳送，改用 SMTP、Resend 或開發日誌。執行 API 的主機必須安裝 Node.js，具有已登入的 `popo-cli` 設定，並確保 CLI 可從 `PATH` 呼叫。Multica 呼叫 `message_send_p2p`，把規範化後的登入信箱作為 `receiver`，並等待確認的訊息回執。CLI 呼叫失敗、對方拒絕、結果不明確或逾時都會返回錯誤，不會回退到郵件或標準輸出。如果 API 執行於容器中，CLI、Node.js 和已登入設定必須位於容器內；宿主機的登入態不會自動共享。POPO CLI 只接管驗證碼，不接管邀請郵件。啟用後，Web、桌面端和行動端登入頁會引導使用者到 POPO 私聊查看 Multica 驗證碼。
 
 ## 本地固定驗證碼
 

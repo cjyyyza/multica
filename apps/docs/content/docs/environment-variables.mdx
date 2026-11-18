@@ -100,11 +100,11 @@ SMTP takes priority over Resend whenever `SMTP_HOST` is non-empty.
 
 ### POPO CLI verification codes
 
-Setting `MULTICA_POPO_CLI` selects direct `message_send_p2p` delivery instead of SMTP, Resend, or stdout. No robot bridge is used. Failed or uncertain delivery does not fall back to email. See [Sign-in and signup](/auth-setup#popo-cli-verification-codes).
+`MULTICA_POPO_CLI` defaults to `true` and selects direct `message_send_p2p` delivery through `popo-cli` on `PATH` instead of SMTP, Resend, or stdout. Set it to `false` to disable POPO delivery. No robot bridge is used. Failed or uncertain delivery does not fall back to email. See [Sign-in and signup](/auth-setup#popo-cli-verification-codes).
 
 | Variable | Default | Description |
 |---|---|---|
-| `MULTICA_POPO_CLI` | empty | CLI command on `PATH`, or an absolute `bin/popo.js` path; the API host needs Node.js and an authenticated CLI profile |
+| `MULTICA_POPO_CLI` | `true` | Boolean switch for POPO delivery; uses `popo-cli` on `PATH`; the API host needs Node.js and an authenticated CLI profile |
 
 ### Google OAuth
 

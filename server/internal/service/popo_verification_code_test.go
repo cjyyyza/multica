@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -34,16 +35,45 @@ func TestPopoVerificationCodeService(t *testing.T) {
 }
 
 func TestPopoVerificationCodeServiceFromEnv(t *testing.T) {
-	t.Setenv("MULTICA_POPO_CLI", "")
-	if service := NewPopoVerificationCodeServiceFromEnv(); service != nil {
-		t.Fatal("empty CLI path must preserve email delivery")
+	tests := []struct {
+		name    string
+		value   string
+		unset   bool
+		wantBin string
+	}{
+		{name: "unset defaults to enabled", unset: true, wantBin: "popo-cli"},
+		{name: "empty defaults to enabled", value: "", wantBin: "popo-cli"},
+		{name: "true enables POPO", value: "true", wantBin: "popo-cli"},
+		{name: "false disables POPO", value: "false"},
+		{name: "false is case insensitive", value: " FALSE "},
 	}
-	var sender PopoVerificationCodeSender = NewPopoVerificationCodeServiceFromEnv()
-	if sender != nil {
-		t.Fatal("empty CLI path must stay nil when stored in a sender interface")
-	}
-	t.Setenv("MULTICA_POPO_CLI", "popo-cli")
-	if service := NewPopoVerificationCodeServiceFromEnv(); service == nil {
-		t.Fatal("configured CLI path must enable POPO delivery")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("MULTICA_POPO_CLI", tc.value)
+			if tc.unset {
+				if err := os.Unsetenv("MULTICA_POPO_CLI"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			var sender PopoVerificationCodeSender = NewPopoVerificationCodeServiceFromEnv()
+			if tc.wantBin == "" {
+				if sender != nil {
+					t.Fatal("false must disable POPO and preserve email delivery")
+				}
+				return
+			}
+			service, ok := sender.(*PopoVerificationCodeService)
+			if !ok {
+				t.Fatalf("expected enabled POPO service, got %T", sender)
+			}
+			cli, ok := service.cli.(notify.Popo)
+			if !ok {
+				t.Fatalf("expected POPO CLI sender, got %T", service.cli)
+			}
+			if cli.Bin != tc.wantBin {
+				t.Fatalf("CLI path = %q, want %q", cli.Bin, tc.wantBin)
+			}
+		})
 	}
 }

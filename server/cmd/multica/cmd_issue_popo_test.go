@@ -181,13 +181,50 @@ func TestRunIssueCommentAddPOPOFailureDoesNotFailComment(t *testing.T) {
 	t.Setenv("MULTICA_TOKEN", "mat_test-token")
 	t.Setenv("MULTICA_TASK_ID", "task-1")
 	t.Setenv("MULTICA_AGENT_ID", "agent-1")
-	t.Setenv("MULTICA_POPO_CLI", filepath.Join(t.TempDir(), "missing-popo-cli"))
+	t.Setenv("MULTICA_POPO_CLI", "true")
+	t.Setenv("PATH", t.TempDir())
 
 	cmd := newIssueCommentAddTestCmd()
 	_ = cmd.Flags().Set("content", "[@Alice](mention://member/"+aliceID+") need input")
 	_ = cmd.Flags().Set("output", "table")
 	if err := runIssueCommentAdd(cmd, []string{issueID}); err != nil {
 		t.Fatalf("comment must stay successful when POPO fails: %v", err)
+	}
+	if posts != 1 {
+		t.Fatalf("comment POST count = %d, want 1", posts)
+	}
+}
+
+func TestRunIssueCommentAddPOPODisabledSkipsNotification(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the automatic popo-cli bridge runs on Windows")
+	}
+	const (
+		issueID = "11111111-1111-4111-8111-111111111111"
+		aliceID = "22222222-2222-4222-8222-222222222222"
+	)
+	posts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/issues/"+issueID+"/comments" {
+			posts++
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "comment-1"})
+			return
+		}
+		t.Errorf("unexpected notification request: %s %s", r.Method, r.URL.Path)
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	setCLITestServerEnv(t, srv.URL)
+	t.Setenv("MULTICA_TOKEN", "mat_test-token")
+	t.Setenv("MULTICA_TASK_ID", "task-1")
+	t.Setenv("MULTICA_AGENT_ID", "agent-1")
+	t.Setenv("MULTICA_POPO_CLI", "false")
+
+	cmd := newIssueCommentAddTestCmd()
+	_ = cmd.Flags().Set("content", "[@Alice](mention://member/"+aliceID+") need input")
+	_ = cmd.Flags().Set("output", "table")
+	if err := runIssueCommentAdd(cmd, []string{issueID}); err != nil {
+		t.Fatalf("comment with POPO disabled: %v", err)
 	}
 	if posts != 1 {
 		t.Fatalf("comment POST count = %d, want 1", posts)

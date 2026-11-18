@@ -56,7 +56,7 @@ The result contains the confirmed POPO `messageId`, work partner name, receiver 
 
 ## Private notifications for comment mentions
 
-On Windows, comments posted by daemon-managed agents through `multica issue comment add` also use the shared work partner sender. Set `MULTICA_NOTIFY_CONFIG` to an absolute path to the deployment JSON in the daemon's environment. The daemon forwards it to execution tasks, along with `MULTICA_POPO_CLI` when a custom executable or installed `bin/popo.js` is needed.
+On Windows, comments posted by daemon-managed agents through `multica issue comment add` also use the shared work partner sender. Set `MULTICA_NOTIFY_CONFIG` to an absolute path to the deployment JSON in the daemon's environment. The daemon forwards it to execution tasks, along with the `MULTICA_POPO_CLI` switch. POPO delivery is enabled by default and uses `popo-cli` from `PATH`; set the switch to `false` to disable it.
 
 The sender uses `robotName` from the configured `defaultTarget`; each explicitly mentioned member's email supplies the private receiver. The configured group's `receiver` and `atUids` are not used. Repeated mentions of one member in a comment send only one message. Requirement-owned issues keep their dedicated notification flow.
 
