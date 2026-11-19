@@ -223,9 +223,10 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus, analytics
 }
 
 type RouterOptions struct {
-	HTTPMetrics         *obsmetrics.HTTPMetrics
-	BusinessMetrics     *obsmetrics.BusinessMetrics
-	ChannelLeaseMetrics *obsmetrics.ChannelLeaseMetrics
+	PopoVerificationCodes handler.PopoVerificationCodeSender
+	HTTPMetrics           *obsmetrics.HTTPMetrics
+	BusinessMetrics       *obsmetrics.BusinessMetrics
+	ChannelLeaseMetrics   *obsmetrics.ChannelLeaseMetrics
 	// ChannelLeaseRedis is a dedicated non-blocking Redis client/pool. It is
 	// required only when CHANNEL_WS_LEASE_BACKEND=redis.
 	ChannelLeaseRedis redis.UniversalClient
@@ -1365,7 +1366,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	} else {
 		slog.Info("popo integration disabled (MULTICA_POPO_ENABLED is not true)")
 	}
-	h.PopoVerificationCodes = service.NewPopoVerificationCodeServiceFromEnv()
+	h.PopoVerificationCodes = opts.PopoVerificationCodes
+	if h.PopoVerificationCodes == nil {
+		h.PopoVerificationCodes = service.NewPopoVerificationCodeServiceFromEnv()
+	}
 	if h.PopoVerificationCodes != nil {
 		slog.Info("popo-cli verification-code delivery enabled")
 	}

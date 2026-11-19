@@ -1,5 +1,5 @@
 import { app, ipcMain, BrowserWindow, shell, dialog, type MessageBoxOptions } from "electron";
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import {
   readFile,
   writeFile,
@@ -495,6 +495,29 @@ function bundledCliPath(): string {
     "app.asar",
     "app.asar.unpacked",
   );
+}
+
+export function startLocalDockerPopoVerification(apiUrl: string): void {
+  if (process.platform !== "win32") return;
+  const child = spawn(
+    bundledCliPath(),
+    ["popo", "verification-docker-worker", "--api-url", new URL(apiUrl).origin],
+    {
+      env: desktopSpawnEnv(),
+      stdio: ["pipe", "ignore", "pipe"],
+      windowsHide: true,
+    },
+  );
+  const stop = () => child.stdin?.end();
+  app.once("quit", stop);
+  child.once("close", () => app.removeListener("quit", stop));
+  child.stdin?.on("error", () => {});
+  child.stderr?.on("data", (data: Buffer) => {
+    console.warn("[popo verification]", data.toString().trim());
+  });
+  child.once("error", (error) => {
+    console.warn("[popo verification] worker could not start:", error.message);
+  });
 }
 
 async function probeCliBinary(

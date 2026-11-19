@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/maintenance"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/internal/notify"
 	"github.com/multica-ai/multica/server/internal/profiling"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/scheduler"
@@ -685,20 +687,32 @@ func main() {
 		os.Exit(1)
 	}
 
+	popoVerificationCodes := service.NewPopoVerificationCodeServiceFromEnv()
+	if local, ok := popoVerificationCodes.(notify.Popo); ok && os.Getenv(notify.DockerPopoVerificationEnv) == "1" {
+		if _, err := exec.LookPath(local.Bin); err != nil {
+			bridge := &notify.DockerPopoVerificationBridge{}
+			if err := bridge.Listen(notify.DockerPopoVerificationSocket); err != nil {
+				slog.Error("could not start the local Docker POPO verification bridge", "error", err)
+			}
+			defer bridge.Close()
+			popoVerificationCodes = bridge
+		}
+	}
 	r, h := NewRouterWithOptions(pool, hub, bus, analyticsClient, storeRedis, RouterOptions{
-		HTTPMetrics:         httpMetrics,
-		BusinessMetrics:     businessMetrics,
-		ChannelLeaseMetrics: channelLeaseMetrics,
-		ChannelLeaseRedis:   channelLeaseRedis,
-		WecomMetrics:        wecomMetrics,
-		DaemonHub:           daemonHub,
-		DaemonWakeup:        daemonWakeup,
-		WecomSenders:        wecomSenders,
-		WecomRelayOutbound:  wecomRelayOutbound,
-		FeatureFlags:        flags,
-		HeartbeatScheduler:  heartbeatScheduler,
-		LLMMaxRetries:       llmMaxRetries,
-		LLMDisableThinking:  llmDisableThinking,
+		HTTPMetrics:           httpMetrics,
+		BusinessMetrics:       businessMetrics,
+		ChannelLeaseMetrics:   channelLeaseMetrics,
+		ChannelLeaseRedis:     channelLeaseRedis,
+		WecomMetrics:          wecomMetrics,
+		DaemonHub:             daemonHub,
+		DaemonWakeup:          daemonWakeup,
+		WecomSenders:          wecomSenders,
+		WecomRelayOutbound:    wecomRelayOutbound,
+		FeatureFlags:          flags,
+		HeartbeatScheduler:    heartbeatScheduler,
+		LLMMaxRetries:         llmMaxRetries,
+		LLMDisableThinking:    llmDisableThinking,
+		PopoVerificationCodes: popoVerificationCodes,
 	})
 	// member_delegation_day exists only for self-host telemetry; DO_NOT_TRACK
 	// stops writing it as well as sending the snapshot.

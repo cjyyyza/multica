@@ -87,6 +87,8 @@ MULTICA_POPO_CLI=true
 
 `MULTICA_POPO_CLI` 默认为 `true`。设为 `false` 可改用 SMTP、Resend 或本地开发日志。本地投递需要在 API 的运行环境中安装 Node.js，并能从 `PATH` 调用已登录的 `popo-cli`。
 
+Docker 与 Multica 桌面端同机部署时，用已登录 POPO CLI 且能访问本机 Docker 的 Windows 用户打开桌面端。桌面的现有 API 地址指向这台 Windows 主机和容器发布的 API 端口。桌面端在登录 Multica 前会自动接通本机 Docker，复用 Windows 登录态发码。
+
 要复用 Windows 登录态，用已登录 POPO CLI 的 Windows 用户运行 `multica popo verification-relay`，并提供 TLS 证书和私钥。通过 `MULTICA_POPO_VERIFICATION_RELAY_URL` 为 API 指定转发的 HTTPS 地址。API 和 Windows 上设置相同的随机密钥 `MULTICA_POPO_VERIFICATION_RELAY_TOKEN`。API 需要信任转发进程的证书。
 
 Multica 将规范化后的邮箱传给 `message_send_p2p`，等待 POPO 确认受理。投递失败或结果不明确时返回错误。用户在 POPO 私聊中查看验证码，邀请邮件由配置的邮件服务发送。

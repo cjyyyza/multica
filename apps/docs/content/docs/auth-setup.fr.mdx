@@ -87,6 +87,8 @@ MULTICA_POPO_CLI=true
 
 `MULTICA_POPO_CLI` vaut `true` par défaut. Définissez-le sur `false` pour utiliser SMTP, Resend ou les journaux de développement local. L'envoi local requiert Node.js et un `popo-cli` authentifié dans le `PATH` du processus API.
 
+Si Docker et Multica Desktop s'exécutent sur le même hôte Windows, ouvrez l'application avec le compte Windows qui accède à Docker et qui a authentifié `popo-cli`. L'URL d'API existante doit viser cet hôte et le port d'API publié. L'application se connecte à Docker avant la connexion à Multica et utilise la session POPO de Windows.
+
 Pour réutiliser une session Windows, exécutez `multica popo verification-relay` depuis le compte Windows qui a authentifié le CLI, avec un certificat TLS et sa clé privée. Définissez `MULTICA_POPO_VERIFICATION_RELAY_URL` sur l'API avec l'origine HTTPS du relais. Utilisez le même jeton aléatoire `MULTICA_POPO_VERIFICATION_RELAY_TOKEN` sur l'API et Windows. L'API doit faire confiance au certificat du relais.
 
 Multica appelle `message_send_p2p` avec l'adresse normalisée et attend l'acceptation de POPO. Tout envoi échoué ou incertain renvoie une erreur. Les utilisateurs trouvent le code dans leur conversation privée POPO. Les invitations utilisent le service d'e-mail configuré.

@@ -5,6 +5,7 @@ const context = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   beforeQuit: null as null | ((event: { preventDefault: () => void }) => void),
   quit: vi.fn(), emit: vi.fn(), dialog: vi.fn(), exec: vi.fn(), health: vi.fn(), readPort: vi.fn(), exists: vi.fn(), install: vi.fn(),
+  spawn: vi.fn(), once: vi.fn(), removeListener: vi.fn(),
   pid: null as number | null,
   autoStart: false, autoStop: true, locale: "en", holdStart: false,
   windows: [] as Array<{
@@ -18,7 +19,7 @@ vi.mock("electron", () => ({
   app: {
     getAppPath: () => "/test/desktop", getPreferredSystemLanguages: () => [context.locale],
     on: (_event: string, handler: (event: { preventDefault: () => void }) => void) => { context.beforeQuit = handler; },
-    quit: context.quit, emit: context.emit,
+    quit: context.quit, emit: context.emit, once: context.once, removeListener: context.removeListener,
   },
   dialog: { showMessageBox: context.dialog },
   BrowserWindow: { getAllWindows: () => context.windows },
@@ -27,7 +28,7 @@ vi.mock("electron", () => ({
     on: vi.fn(),
   },
 }));
-vi.mock("child_process", () => ({ execFile: context.exec }));
+vi.mock("child_process", () => ({ execFile: context.exec, spawn: context.spawn }));
 vi.mock("fs", async (original) => ({ ...await original<typeof import("fs")>(), existsSync: context.exists }));
 vi.mock("fs/promises", async (original) => ({
   ...await original<typeof import("fs/promises")>(),
@@ -97,6 +98,26 @@ describe("desktop quit uses the CLI lifecycle", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
   afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it.runIf(process.platform === "win32")("starts the Docker POPO worker without a Multica login and stops it on quit", async () => {
+    const child = {
+      stdin: { end: vi.fn(), on: vi.fn() },
+      stderr: { on: vi.fn() },
+      once: vi.fn(),
+    };
+    context.spawn.mockReturnValue(child);
+    const { startLocalDockerPopoVerification } = await import("./daemon-manager");
+    startLocalDockerPopoVerification("http://server.example.test:8080");
+    expect(context.spawn).toHaveBeenCalledWith(
+      expect.stringContaining("multica.exe"),
+      ["popo", "verification-docker-worker", "--api-url", "http://server.example.test:8080"],
+      expect.objectContaining({ windowsHide: true, stdio: ["pipe", "ignore", "pipe"] }),
+    );
+    expect(context.exec).not.toHaveBeenCalled();
+    expect(context.once).toHaveBeenCalledWith("quit", expect.any(Function));
+    context.once.mock.calls[0][1]();
+    expect(child.stdin.end).toHaveBeenCalledOnce();
+  });
 
   it("leaves an already prevented quit to the Windows updater", async () => {
     await setup();

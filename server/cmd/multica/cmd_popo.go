@@ -36,7 +36,8 @@ var popoGatewayCmd = &cobra.Command{
 }
 
 func init() {
-	popoCmd.AddCommand(popoStatusCmd, popoGatewayCmd, newPopoVerificationRelayCmd())
+	popoCmd.AddCommand(popoStatusCmd, popoGatewayCmd, newPopoVerificationRelayCmd(),
+		newPopoDockerWorkerCmd(), newPopoDockerStdioCmd())
 }
 
 type popoInstallationJSON struct {

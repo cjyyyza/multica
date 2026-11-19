@@ -1,5 +1,15 @@
 # 用 Windows 上的 POPO CLI 发送 Multica 验证码
 
+## Docker 与 Windows 桌面端同机
+
+将服务端镜像与 Windows 桌面端更新到支持同机发码的版本。在服务器这台 Windows 上，用已登录 POPO CLI、且能访问本机 Docker Desktop 的用户打开 Multica 桌面端。保持桌面端运行，停留在登录页也能发码。
+
+桌面端沿用现有的 API 地址。地址需指向本机 Windows，端口需与 Multica 容器发布的 API 端口一致。一台服务器上的一个匹配容器会在登录前自动接通。Docker 连接使用 Windows 本机命名管道和容器内的私有 socket。[Docker CLI](https://docs.docker.com/reference/cli/docker/)
+
+默认使用 POPO 发码。如果从已配置的 HTTPS 转发迁回同机，清空旧的转发地址和密钥后重建 API 容器。同机模式由镜像和桌面端自动完成接入。
+
+## 跨主机 HTTPS 转发
+
 Docker 中的 Multica API 通过 HTTPS 请求 Windows 上的 `multica popo verification-relay`。转发进程以已经登录 POPO CLI 的 Windows 用户运行。部署需要包含此功能的 Multica 服务端镜像和 Windows `multica.exe`。
 
 ## 启动 Windows 转发

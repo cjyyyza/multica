@@ -99,9 +99,12 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV REMOTE_API_URL=http://127.0.0.1:8080
+ENV MULTICA_POPO_DOCKER_BRIDGE=1
+LABEL io.multica.popo-docker-bridge="1001:1001"
 
 RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 nextjs
+    adduser --system --uid 1001 nextjs && \
+    mkdir -m 0700 /run/multica && chown 1001:1001 /run/multica
 
 # Backend binaries and migrations
 COPY --from=backend-builder /src/server/bin/server ./

@@ -27,6 +27,10 @@ RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/backfill_codex_u
 FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates tzdata
+RUN mkdir -m 0700 /run/multica
+
+ENV MULTICA_POPO_DOCKER_BRIDGE=1
+LABEL io.multica.popo-docker-bridge="0:0"
 
 WORKDIR /app
 

@@ -87,6 +87,8 @@ MULTICA_POPO_CLI=true
 
 `MULTICA_POPO_CLI` のデフォルトは `true` です。`false` に設定すると SMTP、Resend、またはローカル開発ログを使用します。ローカル配信には API の実行環境に Node.js と、`PATH` から実行可能な認証済みの `popo-cli` が必要です。
 
+Docker と Multica デスクトップが同じ Windows ホストで動作する場合は、ローカル Docker にアクセスでき、POPO CLI にログイン済みの Windows ユーザーでアプリを開きます。デスクトップの既存の API URL にはそのホストと公開 API ポートを使用します。アプリは Multica へのログイン前にローカル Docker に接続し、Windows の POPO セッションでコードを配信します。
+
 Windows のログイン状態を利用するには、POPO CLI にログインした Windows ユーザーで `multica popo verification-relay` を実行し、TLS 証明書と秘密鍵を指定します。API の `MULTICA_POPO_VERIFICATION_RELAY_URL` にリレーの HTTPS オリジンを設定します。API と Windows に同じランダムな `MULTICA_POPO_VERIFICATION_RELAY_TOKEN` を設定します。API はリレーの証明書を信頼する必要があります。
 
 Multica は正規化したメールアドレスで `message_send_p2p` を呼び出し、POPO の受付確認を待ちます。送信に失敗した場合や受付を確認できない場合はエラーを返します。認証コードは POPO の個人チャットに届きます。招待メールは設定済みのメールサービスで送信します。

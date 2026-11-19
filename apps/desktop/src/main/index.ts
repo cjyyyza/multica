@@ -18,6 +18,7 @@ import {
   prepareDaemonForUpdateInstall,
   resumeDaemonAfterAbortedUpdateInstall,
   setupDaemonManager,
+  startLocalDockerPopoVerification,
 } from "./daemon-manager";
 import { setupLocalDirectory } from "./local-directory";
 import { setupThemeFolder } from "./theme-folder";
@@ -797,6 +798,9 @@ if (!gotTheLock) {
         appUrl: viteEnv.VITE_APP_URL,
       },
     });
+    if (runtimeConfigResult.ok) {
+      startLocalDockerPopoVerification(runtimeConfigResult.config.apiUrl);
+    }
 
     electronApp.setAppUserModelId(
       is.dev ? "ai.multica.desktop.dev" : "ai.multica.desktop",

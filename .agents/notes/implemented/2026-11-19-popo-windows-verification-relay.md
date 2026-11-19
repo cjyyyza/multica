@@ -10,6 +10,8 @@ API 部署在 Linux 容器，登录态保存在 Windows 的 POPO CLI 用户配�
 
 ## 决策
 
+Docker 与 Windows 桌面端同机的部署采用[同机 Docker 发码](2026-11-19-popo-local-docker-verification.md)。本记录说明显式配置的 HTTPS 投递路径。
+
 用已登录 POPO CLI 的 Windows 用户运行 `multica popo verification-relay`。API 配置 HTTPS 地址和专用共享密钥后，将邮箱和验证码交给该进程。转发端只接受受认证的验证码请求，调用固定的 `message_send_p2p`，在 POPO 确认受理后返回 HTTP 204。API 根据该结果推进填写验证码。验证码保持原来的生成、有效期和校验逻辑。
 
 `message_send_p2p` 的明确业务受理允许空数据和缺省消息 ID，见[已有 POPO 私聊验收样例](../../../server/internal/handler/requirement_external_integration_test.go)。机器人通知仍由其发送路径校验正式回执。转发配置有误、连接失败或受理未确认时，API 返回发送错误。两个转发配置均留空时，API 使用本地 CLI 路径。
