@@ -85,7 +85,11 @@ MULTICA_DEV_VERIFICATION_CODE=
 MULTICA_POPO_CLI=true
 ```
 
-`MULTICA_POPO_CLI` vaut `true` par défaut et utilise `popo-cli` depuis `PATH`. Définissez-le sur `false` pour désactiver la remise POPO et utiliser SMTP, Resend ou le journal de développement. L'hôte de l'API doit disposer de Node.js et d'un profil `popo-cli` authentifié, et le CLI doit être accessible depuis `PATH`. Multica appelle `message_send_p2p` avec l'adresse normalisée comme `receiver` et attend un accusé de message confirmé. Un échec du CLI, un refus, un résultat incertain ou un dépassement de délai renvoie une erreur, sans repli sur l'e-mail ou la sortie standard. Si l'API s'exécute dans un conteneur, le CLI, Node.js et le profil authentifié doivent être disponibles dans ce conteneur ; la session de l'hôte n'est pas partagée automatiquement. POPO CLI prend en charge uniquement les codes de vérification, pas les e-mails d'invitation. Une fois activé, la page de connexion sur le web, le bureau et le mobile invite les utilisateurs à consulter leur conversation privée POPO pour obtenir un code de vérification Multica.
+`MULTICA_POPO_CLI` vaut `true` par défaut. Définissez-le sur `false` pour utiliser SMTP, Resend ou les journaux de développement local. L'envoi local requiert Node.js et un `popo-cli` authentifié dans le `PATH` du processus API.
+
+Pour réutiliser une session Windows, exécutez `multica popo verification-relay` depuis le compte Windows qui a authentifié le CLI, avec un certificat TLS et sa clé privée. Définissez `MULTICA_POPO_VERIFICATION_RELAY_URL` sur l'API avec l'origine HTTPS du relais. Utilisez le même jeton aléatoire `MULTICA_POPO_VERIFICATION_RELAY_TOKEN` sur l'API et Windows. L'API doit faire confiance au certificat du relais.
+
+Multica appelle `message_send_p2p` avec l'adresse normalisée et attend l'acceptation de POPO. Tout envoi échoué ou incertain renvoie une erreur. Les utilisateurs trouvent le code dans leur conversation privée POPO. Les invitations utilisent le service d'e-mail configuré.
 
 ## Code de vérification local fixe
 

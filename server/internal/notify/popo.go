@@ -59,10 +59,11 @@ func (p Popo) call(ctx context.Context, command string, args ...string) (json.Ra
 	if err != nil {
 		return nil, err
 	}
-	return unwrapPopo(raw)
+	// P2P reports submission through the downstream status, even with no data.
+	return unwrapPopo(raw, command != "message_send_p2p")
 }
 
-func unwrapPopo(raw []byte) (json.RawMessage, error) {
+func unwrapPopo(raw []byte, requireData bool) (json.RawMessage, error) {
 	for depth := 0; depth < 8; depth++ {
 		var envelope map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &envelope); err != nil || envelope == nil {
@@ -104,7 +105,7 @@ func unwrapPopo(raw []byte) (json.RawMessage, error) {
 				_ = json.Unmarshal(envelope["message"], &message)
 				return nil, &SendError{Err: fmt.Errorf("POPO refused the request: %s", message)}
 			}
-			if len(envelope["data"]) == 0 || bytes.Equal(envelope["data"], []byte("null")) {
+			if requireData && (len(envelope["data"]) == 0 || bytes.Equal(envelope["data"], []byte("null"))) {
 				return nil, errors.New("POPO returned no result")
 			}
 			return envelope["data"], nil
@@ -354,14 +355,19 @@ func (p Popo) SendP2P(ctx context.Context, receiver, message string) (Receipt, e
 		Success *bool  `json:"success"`
 		MsgID   string `json:"msgId"`
 	}
-	if json.Unmarshal(raw, &result) != nil || result.Success == nil {
-		return receipt, &SendError{Err: errors.New("POPO returned no confirmed message receipt"), Unknown: true}
+	if len(raw) != 0 && json.Unmarshal(raw, &result) != nil {
+		return receipt, &SendError{Err: errors.New("malformed POPO submission acknowledgement"), Unknown: true}
 	}
-	if !*result.Success {
+	if result.Success != nil && !*result.Success {
 		return receipt, &SendError{Err: errors.New("POPO refused the message")}
 	}
-	if result.MsgID == "" {
-		return receipt, &SendError{Err: errors.New("POPO returned no confirmed message receipt"), Unknown: true}
-	}
 	return Receipt{MessageID: result.MsgID, Receiver: receiver}, nil
+}
+
+func (p Popo) SendVerificationCode(ctx context.Context, email, code string) error {
+	message := fmt.Sprintf("Multica 验证码：%s\n用于注册或登录 Multica，10 分钟内有效。如果不是你本人发起，请忽略此消息。", code)
+	if _, err := p.SendP2P(ctx, email, message); err != nil {
+		return fmt.Errorf("send verification code with popo-cli: %w", err)
+	}
+	return nil
 }

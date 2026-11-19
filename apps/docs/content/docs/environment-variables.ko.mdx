@@ -100,11 +100,13 @@ primary와 복제본의 연결 한도는 서로 독립적입니다. 모든 API �
 
 ### POPO CLI 인증 코드
 
-`MULTICA_POPO_CLI`는 기본적으로 `true`이며 `PATH`의 `popo-cli`를 통해 SMTP, Resend 또는 표준 출력 대신 `message_send_p2p`를 직접 사용합니다. `false`로 설정하면 POPO 전송을 비활성화할 수 있습니다. 로봇 브리지는 필요하지 않습니다. 전송 실패 또는 결과 불명확 시 이메일로 대체하지 않습니다. 자세한 내용은 [로그인과 가입](/auth-setup#popo-cli-인증-코드-전송)을 참조하세요.
+POPO 인증 코드는 로컬 CLI 또는 설정된 Windows HTTPS 릴레이에서 전송합니다. 자세한 내용은 [로그인과 가입](/auth-setup#popo-cli-인증-코드-전송)을 참조하세요.
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `MULTICA_POPO_CLI` | `true` | POPO 전송 부울 스위치. `PATH`의 `popo-cli` 사용. API 호스트에는 Node.js와 인증된 CLI 프로필 필요 |
+| `MULTICA_POPO_CLI` | `true` | POPO 인증 코드 전송 활성화 |
+| `MULTICA_POPO_VERIFICATION_RELAY_URL` | 비어 있음 | Windows 인증 코드 릴레이의 HTTPS 주소 |
+| `MULTICA_POPO_VERIFICATION_RELAY_TOKEN` | 비어 있음 | API와 Windows 릴레이가 공유하는 임의 토큰 |
 
 ### Google OAuth
 

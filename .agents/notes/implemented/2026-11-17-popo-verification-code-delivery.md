@@ -10,9 +10,11 @@ Protocol: agent-notes/v1
 
 ## 决策
 
-`MULTICA_POPO_CLI` 启用时，API 通过现有 `notify.Popo` 执行器直接调用 `message_send_p2p`，以规范化登录邮箱作为 `receiver`，并传入 `source=AGENT`。该路径不使用 dj01bot 机器人通道，不需要桥接 ID、机器人 ID 或工作区安装，也不要求 `MULTICA_POPO_ENABLED`。当前默认为启用，设为 `false` 时保留 SMTP、Resend 和开发日志行为；开关语义由 [POPO CLI 布尔开关](2026-11-17-popo-cli-toggle.md) 部分取代，本记录其余投递与回执约束不变。
+本记录的本地 CLI 投递路径继续适用。[Windows POPO 验证码转发](2026-11-19-popo-windows-verification-relay.md) 增加跨主机的投递路径，并更新私聊回执的受理条件。
 
-CLI 在 API 进程所在主机运行，使用其当前登录账号作为发送身份。消息通过权限为 0600 的临时 UTF-8 文本文件传给 CLI，避免命令行转义问题。只有 POPO 返回明确成功和消息 ID 才视为送达；拒绝、调用失败、缺失回执、结果不明和超时均返回发送错误，不回退到邮件或标准输出，也不自动重发。邀请邮件仍使用 EmailService，生产部署文档要求清空固定开发验证码。
+`MULTICA_POPO_CLI` 启用时，`notify.Popo` 执行 `message_send_p2p`，以规范化登录邮箱作为 `receiver`，并传入 `source=AGENT`。发送身份来自部署的 POPO CLI 登录账号。当前默认为启用，设为 `false` 时保留 SMTP、Resend 和开发日志行为，开关语义见 [POPO CLI 布尔开关](2026-11-17-popo-cli-toggle.md)。
+
+本地模式在 API 进程的运行环境调用 CLI。消息通过权限为 0600 的临时 UTF-8 文本文件传给 CLI，避免命令行转义问题。以 POPO 明确业务受理作为用户进入填码的条件。拒绝、调用失败、缺失回执、结果不明和超时均返回发送错误。邀请邮件仍使用 EmailService，生产部署文档要求清空固定开发验证码。
 
 `/api/config` 只暴露 `popo_verification_enabled`，不暴露 CLI 路径或登录账号。Web/Desktop 共享登录页和移动端根据该标志说明验证码会进入 POPO 私聊；旧服务端缺少字段时保持邮箱文案。POPO 消息明确标注为用于注册或登录的 Multica 验证码及 10 分钟有效期，页面不向用户暴露 CLI 实现细节。
 
@@ -26,7 +28,7 @@ API 调用 `use_robot_send_msg`：会引入工作伙伴或机器人发送身份�
 
 ## 后果
 
-内部部署可以使用 API 主机已有的 POPO CLI 登录态发送随机验证码，无需邮件服务器或机器人配置。API 主机因此需要 Node.js、CLI 和已认证配置；容器运行后端时，这些依赖和登录态必须位于容器内，宿主机登录态不会自动共享。直接 CLI 投递与既有机器人通道独立，二者可分别配置。
+内部部署可以使用 API 运行环境中已登录的 POPO CLI，或使用 Windows 上的专用转发进程发送随机验证码。本地模式的 Node.js、CLI 和认证配置都由 API 容器提供。验证码投递与工作区机器人通道各有独立配置。
 
 ## 验证与限制
 

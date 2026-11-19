@@ -227,10 +227,11 @@ services:
       # POPO Open / dj01bot Windows bridge. Set to true to enable pairing
       # and inbound. The API never calls POPO or dj01bot.
       MULTICA_POPO_ENABLED: ${MULTICA_POPO_ENABLED:-}
-      # Direct popo-cli sign-in verification-code delivery. Set to false to
-      # disable. The CLI on PATH and its authenticated profile must exist in
-      # the backend container.
+      # POPO sign-in verification codes. Configure the HTTPS relay to use a
+      # CLI outside the container.
       MULTICA_POPO_CLI: ${MULTICA_POPO_CLI:-true}
+      MULTICA_POPO_VERIFICATION_RELAY_URL: ${MULTICA_POPO_VERIFICATION_RELAY_URL:-}
+      MULTICA_POPO_VERIFICATION_RELAY_TOKEN: ${MULTICA_POPO_VERIFICATION_RELAY_TOKEN:-}
       # Which language the bot's own copy is written in for readers whose
       # language cannot be looked up — a group chat, or anyone not linked to a
       # Multica account yet. A linked person reads their own profile language

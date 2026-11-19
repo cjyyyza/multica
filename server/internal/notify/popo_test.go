@@ -196,7 +196,28 @@ func TestPopoSendP2PUsesDirectAccountCommand(t *testing.T) {
 	}
 }
 
-func TestPopoSendP2PRequiresConfirmedReceipt(t *testing.T) {
+func TestPopoSendP2PAcceptsSubmissionWithoutMessageID(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+	}{
+		{name: "empty submission acknowledgement", raw: []byte(`{"ok":true,"data":{"code":"FABRIC_OK","data":{"code":"FABRIC_OK","data":{"status":1,"message":"success","data":{}}}}}`)},
+		{name: "null payload", raw: popoResponse(nil)},
+		{name: "explicit success", raw: popoResponse(map[string]any{"success": true})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := Popo{Run: func(context.Context, string, []string) ([]byte, error) {
+				return tc.raw, nil
+			}}
+			receipt, err := p.SendP2P(t.Context(), "user@corp.netease.com", "123456")
+			if err != nil || receipt.Receiver != "user@corp.netease.com" || receipt.MessageID != "" {
+				t.Fatalf("receipt = %+v, err = %v", receipt, err)
+			}
+		})
+	}
+}
+
+func TestPopoSendP2PRejectsFailedOrUnconfirmedSubmission(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		raw     []byte
@@ -204,8 +225,8 @@ func TestPopoSendP2PRequiresConfirmedReceipt(t *testing.T) {
 		unknown bool
 	}{
 		{name: "response lost", runErr: errors.New("timeout"), unknown: true},
-		{name: "missing message ID", raw: popoResponse(map[string]any{"success": true}), unknown: true},
-		{name: "missing success", raw: popoResponse(map[string]any{"msgId": "p2p-message-1"}), unknown: true},
+		{name: "missing POPO status", raw: []byte(`{"ok":true,"data":{}}`), unknown: true},
+		{name: "malformed POPO payload", raw: popoResponse([]bool{true}), unknown: true},
 		{name: "business refusal", raw: popoResponse(map[string]any{"success": false}), unknown: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

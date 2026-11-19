@@ -12,9 +12,9 @@ import (
 
 var popoCmd = &cobra.Command{
 	Use:   "popo",
-	Short: "Inspect POPO Windows-bridge installations",
-	Long: `POPO transport is a Windows process that pairs with Multica and
-holds the dj01bot connection. The Go CLI no longer bridges POPO itself.
+	Short: "Manage POPO installations and verification delivery",
+	Long: `POPO chat uses the DJ01Bot Windows bridge. Verification delivery
+can run separately through an authenticated local popo-cli.
 
 Run the Windows bridge:
 
@@ -36,7 +36,7 @@ var popoGatewayCmd = &cobra.Command{
 }
 
 func init() {
-	popoCmd.AddCommand(popoStatusCmd, popoGatewayCmd)
+	popoCmd.AddCommand(popoStatusCmd, popoGatewayCmd, newPopoVerificationRelayCmd())
 }
 
 type popoInstallationJSON struct {

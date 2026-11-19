@@ -100,11 +100,13 @@ primary とレプリカの接続上限は独立しています。全 API プロ�
 
 ### POPO CLI 認証コード
 
-`MULTICA_POPO_CLI` はデフォルトで `true` となり、`PATH` 上の `popo-cli` を通じて SMTP、Resend、標準出力ではなく `message_send_p2p` を直接使用します。`false` に設定すると POPO 配信を無効にできます。ロボットブリッジは不要です。失敗または結果不明の場合にメールへフォールバックしません。詳しくは[ログインと登録](/auth-setup#popo-cli-で認証コードを送信)を参照してください。
+POPO の認証コードはローカル CLI または設定済みの Windows HTTPS リレーで配信します。詳しくは[ログインと登録](/auth-setup#popo-cli-で認証コードを送信)を参照してください。
 
 | 変数 | デフォルト | 説明 |
 |---|---|---|
-| `MULTICA_POPO_CLI` | `true` | POPO 配信のブールスイッチ。`PATH` 上の `popo-cli` を使用。API ホストには Node.js と認証済み CLI プロファイルが必要 |
+| `MULTICA_POPO_CLI` | `true` | POPO による認証コードの配信を有効化 |
+| `MULTICA_POPO_VERIFICATION_RELAY_URL` | 空 | Windows 認証コードリレーの HTTPS オリジン |
+| `MULTICA_POPO_VERIFICATION_RELAY_TOKEN` | 空 | API と Windows リレーで共有するランダムなトークン |
 
 ### Google OAuth
 

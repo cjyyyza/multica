@@ -85,7 +85,11 @@ MULTICA_DEV_VERIFICATION_CODE=
 MULTICA_POPO_CLI=true
 ```
 
-`MULTICA_POPO_CLI` はデフォルトで `true` となり、`PATH` 上の `popo-cli` を使用します。`false` に設定すると POPO 配信を無効にし、SMTP、Resend、または開発ログを使用します。API ホストには Node.js と認証済みの `popo-cli` プロファイルが必要で、CLI を `PATH` から呼び出せる必要があります。Multica は正規化したログインメールアドレスを `receiver` として `message_send_p2p` を呼び出し、確認済みのメッセージレシートを待ちます。CLI の失敗、拒否、結果不明、タイムアウトではエラーを返し、メールや標準出力にはフォールバックしません。API がコンテナで動く場合は、CLI、Node.js、認証済みプロファイルがコンテナ内に必要です。ホストのログイン状態は自動共有されません。POPO CLI が担当するのは認証コードだけで、招待メールは対象外です。有効にすると、Web、デスクトップ、モバイルのログインページで、POPO の個人チャットに送信した Multica の認証コードを確認するよう案内します。
+`MULTICA_POPO_CLI` のデフォルトは `true` です。`false` に設定すると SMTP、Resend、またはローカル開発ログを使用します。ローカル配信には API の実行環境に Node.js と、`PATH` から実行可能な認証済みの `popo-cli` が必要です。
+
+Windows のログイン状態を利用するには、POPO CLI にログインした Windows ユーザーで `multica popo verification-relay` を実行し、TLS 証明書と秘密鍵を指定します。API の `MULTICA_POPO_VERIFICATION_RELAY_URL` にリレーの HTTPS オリジンを設定します。API と Windows に同じランダムな `MULTICA_POPO_VERIFICATION_RELAY_TOKEN` を設定します。API はリレーの証明書を信頼する必要があります。
+
+Multica は正規化したメールアドレスで `message_send_p2p` を呼び出し、POPO の受付確認を待ちます。送信に失敗した場合や受付を確認できない場合はエラーを返します。認証コードは POPO の個人チャットに届きます。招待メールは設定済みのメールサービスで送信します。
 
 ## ローカル固定認証コード
 

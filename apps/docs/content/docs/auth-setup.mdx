@@ -85,7 +85,11 @@ MULTICA_DEV_VERIFICATION_CODE=
 MULTICA_POPO_CLI=true
 ```
 
-`MULTICA_POPO_CLI` is `true` by default and uses `popo-cli` from `PATH`. Set it to `false` to disable POPO delivery and use SMTP, Resend, or the development log. The API host must have Node.js and an authenticated `popo-cli` profile, with the CLI available on `PATH`. Multica invokes `message_send_p2p` with the normalized login email as `receiver` and waits for a confirmed message receipt. A CLI failure, refusal, unknown outcome, or timeout returns an error; it does not fall back to email or stdout. If the API runs in a container, the CLI, Node.js, and its authenticated profile must be available inside that container; a host login is not shared automatically. POPO CLI delivery covers verification codes only, not invitation emails. When enabled, the sign-in page on web, desktop, and mobile directs users to their POPO private chat for a Multica verification code.
+`MULTICA_POPO_CLI` defaults to `true`. Set it to `false` to use SMTP, Resend, or local development logs. Local POPO delivery needs Node.js and an authenticated `popo-cli` on the API process's `PATH`.
+
+To reuse a Windows login, run `multica popo verification-relay` as the Windows user who authenticated the CLI, with a TLS certificate and key. Set `MULTICA_POPO_VERIFICATION_RELAY_URL` on the API to the relay's HTTPS origin. Set the same random `MULTICA_POPO_VERIFICATION_RELAY_TOKEN` on the API and Windows. The API must trust the relay certificate.
+
+Multica calls `message_send_p2p` with the normalized email and waits for POPO to accept the submission. Failed or uncertain submissions return an error. Users get the code in a POPO private chat. Invitations use the configured email service.
 
 ## Fixed local verification code
 

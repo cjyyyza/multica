@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"os"
 	"strings"
 	"testing"
@@ -9,32 +8,9 @@ import (
 	"github.com/multica-ai/multica/server/internal/notify"
 )
 
-type fakePopoP2PSender struct {
-	receiver string
-	message  string
-}
-
-func (f *fakePopoP2PSender) SendP2P(_ context.Context, receiver, message string) (notify.Receipt, error) {
-	f.receiver = receiver
-	f.message = message
-	return notify.Receipt{MessageID: "message-1", Receiver: receiver}, nil
-}
-
-func TestPopoVerificationCodeService(t *testing.T) {
-	cli := &fakePopoP2PSender{}
-	service := &PopoVerificationCodeService{cli: cli}
-	if err := service.SendVerificationCode(context.Background(), "user@corp.netease.com", "123456"); err != nil {
-		t.Fatal(err)
-	}
-	if cli.receiver != "user@corp.netease.com" ||
-		!strings.Contains(cli.message, "Multica 验证码：123456") ||
-		!strings.Contains(cli.message, "用于注册或登录 Multica") ||
-		!strings.Contains(cli.message, "10 分钟内有效") {
-		t.Fatalf("unexpected POPO delivery: %+v", cli)
-	}
-}
-
 func TestPopoVerificationCodeServiceFromEnv(t *testing.T) {
+	t.Setenv(notify.PopoVerificationRelayURLEnv, "")
+	t.Setenv(notify.PopoVerificationRelayTokenEnv, "")
 	tests := []struct {
 		name    string
 		value   string
@@ -56,24 +32,38 @@ func TestPopoVerificationCodeServiceFromEnv(t *testing.T) {
 				}
 			}
 
-			var sender PopoVerificationCodeSender = NewPopoVerificationCodeServiceFromEnv()
+			sender := NewPopoVerificationCodeServiceFromEnv()
 			if tc.wantBin == "" {
 				if sender != nil {
 					t.Fatal("false must disable POPO and preserve email delivery")
 				}
 				return
 			}
-			service, ok := sender.(*PopoVerificationCodeService)
+			cli, ok := sender.(notify.Popo)
 			if !ok {
-				t.Fatalf("expected enabled POPO service, got %T", sender)
-			}
-			cli, ok := service.cli.(notify.Popo)
-			if !ok {
-				t.Fatalf("expected POPO CLI sender, got %T", service.cli)
+				t.Fatalf("expected POPO CLI sender, got %T", sender)
 			}
 			if cli.Bin != tc.wantBin {
 				t.Fatalf("CLI path = %q, want %q", cli.Bin, tc.wantBin)
 			}
 		})
+	}
+}
+
+func TestPopoVerificationRelayConfigurationDoesNotFallBackToLocalCLI(t *testing.T) {
+	t.Setenv("MULTICA_POPO_CLI", "true")
+	t.Setenv(notify.PopoVerificationRelayURLEnv, "http://invalid.test")
+	t.Setenv(notify.PopoVerificationRelayTokenEnv, strings.Repeat("a", 64))
+	sender := NewPopoVerificationCodeServiceFromEnv()
+	if _, local := sender.(notify.Popo); sender == nil || local {
+		t.Fatalf("expected a relay sender, got %T", sender)
+	}
+	err := sender.SendVerificationCode(t.Context(), "user@example.test", "123456")
+	if err == nil || !strings.Contains(err.Error(), "must be an HTTPS origin") {
+		t.Fatalf("expected a relay configuration error, got %v", err)
+	}
+	t.Setenv("MULTICA_POPO_CLI", "false")
+	if sender := NewPopoVerificationCodeServiceFromEnv(); sender != nil {
+		t.Fatalf("false must disable relay delivery, got %T", sender)
 	}
 }

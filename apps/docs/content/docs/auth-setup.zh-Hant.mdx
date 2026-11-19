@@ -85,7 +85,11 @@ MULTICA_DEV_VERIFICATION_CODE=
 MULTICA_POPO_CLI=true
 ```
 
-`MULTICA_POPO_CLI` 預設為 `true`，使用 `PATH` 中的 `popo-cli`。設為 `false` 可關閉 POPO 傳送，改用 SMTP、Resend 或開發日誌。執行 API 的主機必須安裝 Node.js，具有已登入的 `popo-cli` 設定，並確保 CLI 可從 `PATH` 呼叫。Multica 呼叫 `message_send_p2p`，把規範化後的登入信箱作為 `receiver`，並等待確認的訊息回執。CLI 呼叫失敗、對方拒絕、結果不明確或逾時都會返回錯誤，不會回退到郵件或標準輸出。如果 API 執行於容器中，CLI、Node.js 和已登入設定必須位於容器內；宿主機的登入態不會自動共享。POPO CLI 只接管驗證碼，不接管邀請郵件。啟用後，Web、桌面端和行動端登入頁會引導使用者到 POPO 私聊查看 Multica 驗證碼。
+`MULTICA_POPO_CLI` 預設為 `true`。設為 `false` 可改用 SMTP、Resend 或本機開發日誌。本機傳送需要在 API 的執行環境中安裝 Node.js，並能從 `PATH` 呼叫已登入的 `popo-cli`。
+
+要沿用 Windows 的登入狀態，請以已登入 POPO CLI 的 Windows 使用者執行 `multica popo verification-relay`，並提供 TLS 憑證與私密金鑰。透過 `MULTICA_POPO_VERIFICATION_RELAY_URL` 為 API 指定轉送的 HTTPS 位址。API 與 Windows 使用相同的隨機權杖 `MULTICA_POPO_VERIFICATION_RELAY_TOKEN`。API 須信任轉送程序的憑證。
+
+Multica 將正規化後的信箱傳給 `message_send_p2p`，等待 POPO 確認受理。傳送失敗或結果不明時會傳回錯誤。使用者可在 POPO 私聊查看驗證碼，邀請郵件由已設定的郵件服務傳送。
 
 ## 本地固定驗證碼
 

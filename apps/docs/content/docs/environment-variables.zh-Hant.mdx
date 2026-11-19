@@ -100,11 +100,13 @@ MULTICA_PUBLIC_URL=https://api.multica.example.com
 
 ### POPO CLI 驗證碼
 
-`MULTICA_POPO_CLI` 預設為 `true`，透過 `PATH` 中的 `popo-cli` 呼叫 `message_send_p2p` 直接傳送驗證碼，不再使用 SMTP、Resend 或標準輸出，也不使用機器人通道。設為 `false` 可關閉 POPO 傳送。傳送失敗或結果不明確時不會回退到郵件。詳見[登入與註冊](/auth-setup#使用-popo-cli-傳送驗證碼)。
+API 可呼叫本機 CLI 傳送 POPO 驗證碼，或將要求交給已設定的 Windows HTTPS 轉送程序。詳見[登入與註冊](/auth-setup#使用-popo-cli-傳送驗證碼)。
 
 | 變數 | 預設值 | 說明 |
 |---|---|---|
-| `MULTICA_POPO_CLI` | `true` | POPO 傳送布林開關；使用 `PATH` 中的 `popo-cli`；API 主機需要 Node.js 和已登入的 CLI 設定 |
+| `MULTICA_POPO_CLI` | `true` | 啟用 POPO 驗證碼傳送 |
+| `MULTICA_POPO_VERIFICATION_RELAY_URL` | 空白 | Windows 驗證碼轉送的 HTTPS 位址 |
+| `MULTICA_POPO_VERIFICATION_RELAY_TOKEN` | 空白 | API 與 Windows 轉送共用的隨機權杖 |
 
 ### Google OAuth
 
