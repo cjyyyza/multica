@@ -20,7 +20,7 @@ Docker 中的 Multica API 通过 HTTPS 请求 Windows 上的 `multica popo verif
 popo-cli popo team_current_user_info
 ```
 
-为本次部署生成一个随机密钥，例如用 `openssl rand -hex 32`。准备 Windows 转发端的 PEM 证书和私钥。证书的主机名需匹配 Docker 中配置的 URL，签发机构需受 API 容器信任。使用 Docker 可以访问的 Windows 内网地址监听，防火墙只允许 API 所在机器访问该端口。
+为本次部署生成一个随机密钥，例如用 `openssl rand -hex 32`。准备 Windows 转发端的 PEM 证书和私钥。证书的主机名需匹配 Docker 中配置的 URL，签发机构需受 API 容器信任（内网或自签证书可将 CA 挂载进容器信任链，或在容器环境变量设置 `SSL_CERT_FILE` 指向该 CA PEM 文件）。使用 Docker 可以访问的 Windows 内网地址监听，防火墙只允许 API 所在机器访问该端口。
 
 ```powershell
 $env:MULTICA_POPO_VERIFICATION_RELAY_TOKEN = '<部署密钥>'

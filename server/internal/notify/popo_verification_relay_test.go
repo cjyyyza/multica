@@ -77,3 +77,9 @@ func TestPopoVerificationRelayRejectsUnauthorizedOrInvalidRequests(t *testing.T)
 		})
 	}
 }
+
+func TestPopoVerificationRelayHandlerRejectsNilSender(t *testing.T) {
+	if _, err := NewPopoVerificationRelayHandler(strings.Repeat("a", 64), nil); err == nil {
+		t.Fatal("nil sender accepted by verification relay handler")
+	}
+}

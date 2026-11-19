@@ -94,7 +94,10 @@ func (s *popoVerificationRelaySender) SendVerificationCode(ctx context.Context, 
 	if err != nil {
 		return fmt.Errorf("send code via POPO verification relay: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		_ = response.Body.Close()
+	}()
 	if response.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("POPO verification relay returned HTTP %d", response.StatusCode)
 	}
@@ -106,6 +109,9 @@ func (s *popoVerificationRelaySender) SendVerificationCode(ctx context.Context, 
 func NewPopoVerificationRelayHandler(token string, sender PopoVerificationCodeSender) (http.Handler, error) {
 	if !popoVerificationRelayTokenPattern.MatchString(token) {
 		return nil, errPopoVerificationRelayToken
+	}
+	if sender == nil {
+		return nil, errors.New("POPO verification sender is required")
 	}
 	authorization := []byte("Bearer " + token)
 	mux := http.NewServeMux()
