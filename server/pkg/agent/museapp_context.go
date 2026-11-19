@@ -18,6 +18,7 @@ func museappTaskPrompt(prompt string, env map[string]string, opts ExecOptions, g
 		"MULTICA_AUTOPILOT_ID", "MULTICA_AUTOPILOT_RUN_ID",
 		"MULTICA_QUICK_CREATE_TASK_ID", "MULTICA_QUICK_CREATE_ATTACHMENT_IDS",
 		"MULTICA_QUICK_CREATE_DEFAULT_ASSIGNEE_TYPE", "MULTICA_QUICK_CREATE_DEFAULT_ASSIGNEE_ID",
+		"MULTICA_NOTIFY_CONFIG", "MULTICA_POPO_CLI",
 	}
 	values := make(map[string]string, len(keys)+2)
 	for _, key := range keys {

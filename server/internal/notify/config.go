@@ -41,10 +41,11 @@ func (t Target) Validate() error {
 	}
 	seen := map[string]bool{}
 	for _, uid := range t.AtUIDs {
-		if !accountPattern.MatchString(uid) || seen[uid] {
+		normalized := strings.ToLower(uid)
+		if !accountPattern.MatchString(uid) || seen[normalized] {
 			return fmt.Errorf("atUids contains an invalid or duplicate account %q", uid)
 		}
-		seen[uid] = true
+		seen[normalized] = true
 	}
 	return nil
 }

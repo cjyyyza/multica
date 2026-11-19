@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"html"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -47,8 +48,7 @@ func (m Mention) IsMentionAll() bool {
 // hand-rolled scanner.
 // Each link must also use MentionRe's canonical inline source form and have
 // visible label text. Reference links and other Markdown link forms are inert.
-func ParseMentions(content string) []Mention {
-	source := []byte(content)
+func parseMentionAST(source []byte) (ast.Node, map[*ast.Link]text.Segment) {
 	links := &mentionLinkParser{InlineParser: parser.NewLinkParser(), spans: make(map[*ast.Link]text.Segment)}
 	inlineParsers := parser.DefaultInlineParsers()
 	for i := range inlineParsers {
@@ -61,7 +61,12 @@ func ParseMentions(content string) []Mention {
 		parser.WithInlineParsers(inlineParsers...),
 		parser.WithParagraphTransformers(parser.DefaultParagraphTransformers()...),
 	)
-	doc := markdown.Parse(text.NewReader(source))
+	return markdown.Parse(text.NewReader(source)), links.spans
+}
+
+func ParseMentions(content string) []Mention {
+	source := []byte(content)
+	doc, spans := parseMentionAST(source)
 	seen := make(map[string]bool)
 	var result []Mention
 	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -75,7 +80,7 @@ func ParseMentions(content string) []Mention {
 		if !ok {
 			return ast.WalkContinue, nil
 		}
-		mention, ok := parseMentionLink(link, links.spans[link], source)
+		mention, ok := parseMentionLink(link, spans[link], source)
 		if !ok {
 			return ast.WalkContinue, nil
 		}
@@ -88,6 +93,74 @@ func ParseMentions(content string) []Mention {
 		return ast.WalkContinue, nil
 	})
 	return result
+}
+
+// RenderMentionsPlainText rewrites canonical mention:// Markdown links into
+// readable plain text (@Label or Label) while leaving surrounding brackets,
+// regular Markdown links, images, and code spans/blocks untouched.
+func RenderMentionsPlainText(content string) string {
+	if !strings.Contains(content, "mention://") {
+		return content
+	}
+	source := []byte(content)
+	doc, spans := parseMentionAST(source)
+	type replacement struct {
+		start, end int
+		text       string
+	}
+	var edits []replacement
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if _, ok := n.(*ast.Image); ok {
+			return ast.WalkSkipChildren, nil
+		}
+		link, ok := n.(*ast.Link)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		if link.Reference != nil || len(link.Title) != 0 {
+			return ast.WalkContinue, nil
+		}
+		span, ok := spans[link]
+		if !ok || span.Start < 0 || span.Stop > len(source) || span.Start >= span.Stop {
+			return ast.WalkContinue, nil
+		}
+		raw := span.Value(source)
+		m := canonicalMentionRe.FindSubmatchIndex(raw)
+		if m == nil {
+			return ast.WalkContinue, nil
+		}
+		mentionType := string(raw[m[4]:m[5]])
+		mentionID := string(raw[m[6]:m[7]])
+		if string(link.Destination) != "mention://"+mentionType+"/"+mentionID {
+			return ast.WalkContinue, nil
+		}
+		label := string(raw[m[2]:m[3]])
+		if bytes.HasPrefix(raw, []byte("[@")) {
+			label = "@" + label
+		}
+		edits = append(edits, replacement{start: span.Start, end: span.Stop, text: label})
+		return ast.WalkSkipChildren, nil
+	})
+	if len(edits) == 0 {
+		return content
+	}
+	sort.Slice(edits, func(i, j int) bool { return edits[i].start < edits[j].start })
+	var out strings.Builder
+	out.Grow(len(content))
+	last := 0
+	for _, edit := range edits {
+		if edit.start < last {
+			continue
+		}
+		out.WriteString(content[last:edit.start])
+		out.WriteString(edit.text)
+		last = edit.end
+	}
+	out.WriteString(content[last:])
+	return out.String()
 }
 
 // Goldmark links expose their start, but not their end. Record the span while

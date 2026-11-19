@@ -69,6 +69,29 @@ func newNotifyCommand(sender notify.Sender) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if cmd.Flags().Changed("receiver") {
+				receiver, _ := cmd.Flags().GetString("receiver")
+				target.Receiver = strings.TrimSpace(receiver)
+				target.AtUIDs = nil
+			}
+			if cmd.Flags().Changed("at") {
+				atUIDs, _ := cmd.Flags().GetStringArray("at")
+				if len(atUIDs) == 0 {
+					return errors.New("--at requires at least one POPO account")
+				}
+				cleaned := make([]string, 0, len(atUIDs))
+				for _, uid := range atUIDs {
+					uid = strings.TrimSpace(uid)
+					if uid == "" {
+						return errors.New("--at requires a non-empty POPO account")
+					}
+					cleaned = append(cleaned, uid)
+				}
+				target.AtUIDs = cleaned
+			}
+			if err := target.Validate(); err != nil {
+				return err
+			}
 			message, provided, err := resolveTextFlag(cmd, "message")
 			if err != nil {
 				return err
@@ -97,6 +120,8 @@ func newNotifyCommand(sender notify.Sender) *cobra.Command {
 			}
 			return cli.PrintJSON(cmd.OutOrStdout(), receipt)
 		}}
+	send.Flags().String("receiver", "", "Override the POPO receiver (numeric group ID or POPO account); clears configured atUids unless --at is also given")
+	send.Flags().StringArray("at", nil, "Override POPO accounts to @-mention in a group message (repeatable)")
 	send.Flags().String("event", "notice", "Caller-defined event name, e.g. question, result or build.failed")
 	send.Flags().String("title", "", "Optional notification title")
 	send.Flags().String("message", "", "Notification body")

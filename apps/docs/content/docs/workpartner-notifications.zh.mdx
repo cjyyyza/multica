@@ -48,7 +48,7 @@ multica notify config --config /etc/multica/notify.json
 multica notify send --config /etc/multica/notify.json --event question --title "发布窗口确认" --message-file question.txt --url https://your-multica-app.example/team/issues/MUL-123 --idempotency-key MUL-123-question-1
 ```
 
-`event` 由调用者定义，完成、询问、构建失败等调用方共用 `Notification` 和 `Sender` 接口。单独发送不要求 Multica 任务 ID 或凭证。正文使用 `--message`、`--message-file`、`--message-stdin` 三选一；Windows 建议读取已有的 UTF-8 文件。文件和标准输入正文保持原文，实际调用 POPO 时统一使用 UTF-8 临时文件和参数数组。
+`event` 由调用者定义，完成、询问、构建失败等调用方共用 `Notification` 和 `Sender` 接口。单独发送不要求 Multica 任务 ID 或凭证。需要临时发给其他个人或群时，可在 `notify send` 上附加 `--receiver <群号或POPO账号>`（以及可选可重复的 `--at <POPO账号>`）；仅传 `--receiver` 时会自动清空配置目标中原有的 `atUids`，发件工作伙伴仍取自配置。正文使用 `--message`、`--message-file`、`--message-stdin` 三选一；Windows 建议读取已有的 UTF-8 文件。文件和标准输入正文保持原文，实际调用 POPO 时统一使用 UTF-8 临时文件和参数数组。
 
 `--dry-run` 只输出目标和消息，不联网、不写投递记录，也不核验登录、显示名和群成员。通用发送超过 CLI 的 3000 字符预算会报错；长内容请提供摘要及链接。
 
@@ -60,7 +60,7 @@ Windows 上，守护进程管理的智能体通过 `multica issue comment add` �
 
 发件人取配置中 `defaultTarget` 对应目标的 `robotName`，私信接收人取评论中明确 @ 的成员邮箱，不使用配置里的群号或 `atUids`。同一条评论重复 @ 同一成员只发一次。归属 Requirement 的任务仍使用专用通知流程。
 
-消息包含评论原文和任务链接，沿用 `notify send` 的 3000 字符限制及消息 ID 回执校验。这条自动通知路径只尝试一次，不维护 `notify send` 的投递记录。缺少配置或发送失败时，在评论成功后输出警告，不回退个人账号发送，也不自动重试结果未知的投递。
+消息包含渲染为可读 `@名称` 的评论正文和任务链接；超过 3000 字符预算时会自动截断正文并保留任务链接，沿用 `notify send` 的消息 ID 回执校验。这条自动通知路径只尝试一次，不维护 `notify send` 的投递记录。缺少配置或发送失败时，在评论成功后输出警告，不回退个人账号发送，也不自动重试结果未知的投递。
 
 ## 跟踪 Multica 任务
 

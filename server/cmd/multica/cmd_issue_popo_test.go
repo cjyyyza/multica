@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/notify"
@@ -30,9 +31,10 @@ func TestNotifyIssueMentionsViaPOPO(t *testing.T) {
 		bobID   = "33333333-3333-4333-8333-333333333333"
 		agentID = "44444444-4444-4444-8444-444444444444"
 	)
-	content := "[@Alice](mention://member/" + aliceID + ") please answer. " +
+	content := "[P1] See [PR #7](https://example.com/pr/7) and `[@Doc](mention://member/" + aliceID + ")`. " +
+		"[@Alice](mention://member/" + aliceID + ") please answer. " +
 		"cc [@Bob](mention://member/" + bobID + ") and [@Worker](mention://agent/" + agentID + "). " +
-		"Again [@Alice](mention://member/" + aliceID + ")"
+		"Again [@Alice](mention://member/" + strings.ToUpper(aliceID) + ")"
 	srv := newIssuePOPONotificationServer(t, issueID, aliceID, bobID)
 	defer srv.Close()
 	client := cli.NewAPIClient(srv.URL, "ws-1", "mat_test-token")
@@ -56,16 +58,59 @@ func TestNotifyIssueMentionsViaPOPO(t *testing.T) {
 	if calls[0].target.Receiver != "alice@example.com" || calls[1].target.Receiver != "bob@example.com" {
 		t.Fatalf("POPO receivers = %q, %q", calls[0].target.Receiver, calls[1].target.Receiver)
 	}
+	wantBody := "[P1] See [PR #7](https://example.com/pr/7) and `[@Doc](mention://member/" + aliceID + ")`. @Alice please answer. cc @Bob and @Worker. Again @Alice"
 	for _, call := range calls {
 		if call.target.RobotName != "Comment work partner" || len(call.target.AtUIDs) != 0 {
 			t.Errorf("private work partner target = %+v", call.target)
 		}
-		if !strings.Contains(call.notification.Message, content) {
-			t.Errorf("POPO message does not preserve the comment: %q", call.notification.Message)
+		if !strings.HasPrefix(call.notification.Message, wantBody+"\n\nIssue: ") {
+			t.Errorf("POPO message did not render mentions cleanly: %q", call.notification.Message)
 		}
 		if !strings.Contains(call.notification.Message, "https://app.example/team-a/issues/MUL-42") {
 			t.Errorf("POPO message lost the issue link: %q", call.notification.Message)
 		}
+	}
+}
+
+func TestNotifyIssueMentionsViaPOPOTruncatesLongCommentWithinBudget(t *testing.T) {
+	configureIssuePOPONotifications(t)
+	const (
+		issueID = "11111111-1111-4111-8111-111111111111"
+		aliceID = "22222222-2222-4222-8222-222222222222"
+	)
+	content := "[@Alice](mention://member/" + aliceID + ") " + strings.Repeat("详", 3500)
+	srv := newIssuePOPONotificationServer(t, issueID, aliceID, "")
+	defer srv.Close()
+	client := cli.NewAPIClient(srv.URL, "ws-1", "mat_test-token")
+
+	var sentText string
+	sender := notify.Popo{Run: func(_ context.Context, _ string, args []string) ([]byte, error) {
+		for _, arg := range args {
+			if path, ok := strings.CutPrefix(arg, "message=@text:"); ok {
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sentText = string(raw)
+			}
+		}
+		return []byte(`{"ok":true,"code":"FABRIC_OK","data":{"status":1,"data":{"success":true,"msgId":"long-msg-1"}}}`), nil
+	}}
+
+	if err := notifyIssueMentionsViaPOPO(context.Background(), client, issueID, content, sender); err != nil {
+		t.Fatalf("long comment notification failed: %v", err)
+	}
+	if runes := utf8.RuneCountInString(sentText); runes > 3000 || runes == 0 {
+		t.Fatalf("sent text rune count = %d, want 1..3000", runes)
+	}
+	if !strings.HasPrefix(sentText, "@Alice ") {
+		t.Errorf("expected readable mention prefix, got %q", sentText[:min(40, len(sentText))])
+	}
+	if !strings.Contains(sentText, "内容较长，请打开 Multica 查看全文") {
+		t.Errorf("expected truncation notice in POPO message")
+	}
+	if !strings.HasSuffix(sentText, "\n\nIssue: https://app.example/team-a/issues/MUL-42") {
+		t.Errorf("expected preserved issue link suffix, got tail %q", sentText[max(0, len(sentText)-80):])
 	}
 }
 

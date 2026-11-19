@@ -435,3 +435,64 @@ func TestHasMentionAll(t *testing.T) {
 		})
 	}
 }
+
+func TestRenderMentionsPlainText(t *testing.T) {
+	const (
+		memberID = "22222222-2222-4222-8222-222222222222"
+		agentID  = "44444444-4444-4444-8444-444444444444"
+		issueID  = "11111111-1111-4111-8111-111111111111"
+	)
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "plain text unchanged",
+			content: "plain comment [P1] without mentions",
+			want:    "plain comment [P1] without mentions",
+		},
+		{
+			name:    "member agent and issue mentions",
+			content: "[@Alice](mention://member/" + memberID + ") and [@Worker](mention://agent/" + agentID + ") see [MUL-42](mention://issue/" + issueID + ")",
+			want:    "@Alice and @Worker see MUL-42",
+		},
+		{
+			name:    "leading bracket tag on same line preserved",
+			content: "[P1] 请 [@Alice](mention://member/" + memberID + ") 确认",
+			want:    "[P1] 请 @Alice 确认",
+		},
+		{
+			name:    "task checklist item before mention preserved",
+			content: "- [x] 构建已完成，请 [@Alice](mention://member/" + memberID + ") 验收",
+			want:    "- [x] 构建已完成，请 @Alice 验收",
+		},
+		{
+			name:    "preceding markdown link on same line preserved",
+			content: "见 [PR #42](https://example.com/pr/42)，请 [@Alice](mention://member/" + memberID + ") 确认",
+			want:    "见 [PR #42](https://example.com/pr/42)，请 @Alice 确认",
+		},
+		{
+			name:    "nested brackets inside mention label",
+			content: "hi [@David[TF]](mention://member/" + memberID + ")!",
+			want:    "hi @David[TF]!",
+		},
+		{
+			name:    "inline code and fenced code blocks untouched",
+			content: "Use `[@Alice](mention://member/" + memberID + ")` and ping [@Alice](mention://member/" + memberID + ")\n```\n[@Worker](mention://agent/" + agentID + ")\n```",
+			want:    "Use `[@Alice](mention://member/" + memberID + ")` and ping @Alice\n```\n[@Worker](mention://agent/" + agentID + ")\n```",
+		},
+		{
+			name:    "blockquote mention rendered and image untouched",
+			content: "> [@Alice](mention://member/" + memberID + ")\n![@Img](mention://member/" + memberID + ")",
+			want:    "> @Alice\n![@Img](mention://member/" + memberID + ")",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := RenderMentionsPlainText(tt.content); got != tt.want {
+				t.Errorf("RenderMentionsPlainText() =\n%q\nwant:\n%q", got, tt.want)
+			}
+		})
+	}
+}

@@ -53,8 +53,20 @@ func TestMuseAppTaskPromptRunsCLIWithTaskContext(t *testing.T) {
 }
 
 func TestMuseAppTaskPromptPowerShellContext(t *testing.T) {
-	prompt := museappTaskPrompt("task", map[string]string{"MULTICA_CLI_PATH": `C:\User's Files\multica.exe`, "MULTICA_DAEMON_PORT": "19514"}, ExecOptions{}, "windows")
-	if !strings.Contains(prompt, `$env:MULTICA_DAEMON_PORT = '19514'`) || !strings.Contains(prompt, `& 'C:\User''s Files\multica.exe' @args }`) {
-		t.Fatalf("missing quoted PowerShell context: %s", prompt)
+	prompt := museappTaskPrompt("task", map[string]string{
+		"MULTICA_CLI_PATH":      `C:\User's Files\multica.exe`,
+		"MULTICA_DAEMON_PORT":   "19514",
+		"MULTICA_NOTIFY_CONFIG": `C:\etc\multica\notify.json`,
+		"MULTICA_POPO_CLI":      "false",
+	}, ExecOptions{}, "windows")
+	for _, want := range []string{
+		`$env:MULTICA_DAEMON_PORT = '19514'`,
+		`$env:MULTICA_NOTIFY_CONFIG = 'C:\etc\multica\notify.json'`,
+		`$env:MULTICA_POPO_CLI = 'false'`,
+		`& 'C:\User''s Files\multica.exe' @args }`,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("missing quoted PowerShell context %q: %s", want, prompt)
+		}
 	}
 }

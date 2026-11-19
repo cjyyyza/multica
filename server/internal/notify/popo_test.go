@@ -254,3 +254,220 @@ func TestPopoSendP2PRejectsInvalidReceiverWithoutCLI(t *testing.T) {
 		t.Fatal("group ID accepted as a P2P account")
 	}
 }
+
+func TestResolvePopoWrapperScript(t *testing.T) {
+	t.Run("default npm layout", func(t *testing.T) {
+		dir := t.TempDir()
+		wrapper := filepath.Join(dir, "popo-cli.cmd")
+		script := filepath.Join(dir, "node_modules", "@popo", "cli", "bin", "popo.js")
+		if err := os.MkdirAll(filepath.Dir(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(script, []byte("console.log('ok')"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(wrapper, []byte("@echo off\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := resolvePopoWrapperScript(wrapper)
+		if !ok || got != script {
+			t.Fatalf("resolvePopoWrapperScript = (%q, %v), want (%q, true)", got, ok, script)
+		}
+	})
+
+	t.Run("pnpm cmd shim", func(t *testing.T) {
+		dir := t.TempDir()
+		wrapper := filepath.Join(dir, "popo-cli.cmd")
+		script := filepath.Join(dir, "global", "5", "node_modules", "@popo", "cli", "bin", "popo.mjs")
+		if err := os.MkdirAll(filepath.Dir(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(script, []byte("console.log('ok')"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		shim := "@SETLOCAL\r\n\"%_prog%\"  \"%dp0%\\global\\5\\node_modules\\@popo\\cli\\bin\\popo.mjs\" %*\r\n"
+		if err := os.WriteFile(wrapper, []byte(shim), 0600); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := resolvePopoWrapperScript(wrapper)
+		if !ok || got != script {
+			t.Fatalf("resolvePopoWrapperScript = (%q, %v), want (%q, true)", got, ok, script)
+		}
+	})
+
+	t.Run("ps1 shim", func(t *testing.T) {
+		dir := t.TempDir()
+		wrapper := filepath.Join(dir, "popo-cli.ps1")
+		script := filepath.Join(dir, "custom", "bin", "popo.js")
+		if err := os.MkdirAll(filepath.Dir(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(script, []byte("console.log('ok')"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		shim := "& \"node$exe\"  \"$basedir/custom/bin/popo.js\" $args\n"
+		if err := os.WriteFile(wrapper, []byte(shim), 0600); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := resolvePopoWrapperScript(wrapper)
+		if !ok || got != script {
+			t.Fatalf("resolvePopoWrapperScript = (%q, %v), want (%q, true)", got, ok, script)
+		}
+	})
+
+	t.Run("shim entry takes precedence over stale default layout", func(t *testing.T) {
+		dir := t.TempDir()
+		wrapper := filepath.Join(dir, "popo-cli.cmd")
+		staleDefault := filepath.Join(dir, "node_modules", "@popo", "cli", "bin", "popo.js")
+		activeScript := filepath.Join(dir, "global", "5", "node_modules", "@popo", "cli", "bin", "popo.mjs")
+		for _, script := range []string{staleDefault, activeScript} {
+			if err := os.MkdirAll(filepath.Dir(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(script, []byte("console.log('ok')"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		shim := "@SETLOCAL\r\n\"%_prog%\"  \"%dp0%\\global\\5\\node_modules\\@popo\\cli\\bin\\popo.mjs\" %*\r\n"
+		if err := os.WriteFile(wrapper, []byte(shim), 0600); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := resolvePopoWrapperScript(wrapper)
+		if !ok || got != activeScript {
+			t.Fatalf("resolvePopoWrapperScript = (%q, %v), want (%q, true)", got, ok, activeScript)
+		}
+	})
+
+	t.Run("unknown wrapper fails", func(t *testing.T) {
+		dir := t.TempDir()
+		wrapper := filepath.Join(dir, "popo-cli.cmd")
+		if err := os.WriteFile(wrapper, []byte("@echo off\necho missing\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := resolvePopoWrapperScript(wrapper); ok {
+			t.Fatalf("unexpected resolved wrapper: %q", got)
+		}
+	})
+}
+
+func TestPopoMatchesMentionAccountsCaseInsensitively(t *testing.T) {
+	target := Target{RobotName: "DeepSeek Harness", Receiver: "8493291", AtUIDs: []string{"YuJian01@corp.netease.com"}}
+	var sentAtUIDs []string
+	popo := Popo{Run: func(_ context.Context, _ string, args []string) ([]byte, error) {
+		switch args[1] {
+		case "userinfo_search":
+			return popoResponse(popoLookup("yujian01@corp.netease.com", "鲣鱼(俞坚)")), nil
+		case "team_info_query":
+			return popoResponse(map[string]any{"tid": "8493291", "members": []any{map[string]any{"email": "YUJIAN01@CORP.NETEASE.COM"}}}), nil
+		case "use_robot_send_msg":
+			atPath := strings.TrimPrefix(argValue(args, "atUids"), "@file:")
+			raw, err := os.ReadFile(atPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(raw, &sentAtUIDs); err != nil {
+				t.Fatal(err)
+			}
+			return popoResponse(map[string]any{"success": true, "msgId": "case-msg"}), nil
+		default:
+			t.Fatalf("unexpected command %s", args[1])
+			return nil, nil
+		}
+	}}
+	receipt, err := popo.Send(context.Background(), target, Notification{Message: "hello"})
+	if err != nil || receipt.MessageID != "case-msg" {
+		t.Fatalf("case-insensitive mention send: receipt=%+v err=%v", receipt, err)
+	}
+	wantUIDs := []string{"yujian01@corp.netease.com"}
+	if !reflect.DeepEqual(sentAtUIDs, wantUIDs) || !reflect.DeepEqual(receipt.AtUIDs, wantUIDs) {
+		t.Fatalf("canonical atUids = sent:%v receipt:%v, want %v", sentAtUIDs, receipt.AtUIDs, wantUIDs)
+	}
+}
+
+func TestRunPopoNonZeroExitDiagnosticsAndRefusalClassification(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("explicit downstream refusal on non-zero exit stays retryable", func(t *testing.T) {
+		t.Setenv("MULTICA_TEST_POPO_HELPER", "refusal")
+		_, err := runPopo(context.Background(), exe, []string{"-test.run=^TestPopoHelperProcess$"})
+		var sendErr *SendError
+		if !errors.As(err, &sendErr) || sendErr.Unknown {
+			t.Fatalf("err = %v, want non-unknown SendError", err)
+		}
+		if !strings.Contains(err.Error(), "robot not found") {
+			t.Fatalf("err = %q, want downstream refusal message", err.Error())
+		}
+	})
+	t.Run("stderr diagnostics preserved while unknown send stays unknown", func(t *testing.T) {
+		t.Setenv("MULTICA_TEST_POPO_HELPER", "stderr")
+		_, err := runPopo(context.Background(), exe, []string{"-test.run=^TestPopoHelperProcess$"})
+		if err == nil || !strings.Contains(err.Error(), "not logged in") {
+			t.Fatalf("err = %v, want stderr diagnostic", err)
+		}
+		var sendErr *SendError
+		if errors.As(err, &sendErr) {
+			t.Fatalf("raw stderr failure must stay unclassified until Send marks Unknown: %v", err)
+		}
+	})
+	t.Run("non-JSON stdout does not swallow stderr diagnostics", func(t *testing.T) {
+		t.Setenv("MULTICA_TEST_POPO_HELPER", "stdout-noise-and-stderr")
+		_, err := runPopo(context.Background(), exe, []string{"-test.run=^TestPopoHelperProcess$"})
+		if err == nil || !strings.Contains(err.Error(), "not logged in") {
+			t.Fatalf("err = %v, want stderr diagnostic preserved", err)
+		}
+		var sendErr *SendError
+		if errors.As(err, &sendErr) {
+			t.Fatalf("non-JSON stdout + stderr failure must stay unclassified: %v", err)
+		}
+	})
+	t.Run("JSON envelope failure preserves both envelope reason and stderr", func(t *testing.T) {
+		t.Setenv("MULTICA_TEST_POPO_HELPER", "json-error-and-stderr")
+		_, err := runPopo(context.Background(), exe, []string{"-test.run=^TestPopoHelperProcess$"})
+		if err == nil || !strings.Contains(err.Error(), "without a confirmed POPO outcome") || !strings.Contains(err.Error(), "token expired") {
+			t.Fatalf("err = %v, want both envelope error and stderr diagnostic", err)
+		}
+		var sendErr *SendError
+		if errors.As(err, &sendErr) {
+			t.Fatalf("unconfirmed envelope failure must stay unclassified: %v", err)
+		}
+	})
+	t.Run("non-JSON stdout diagnostic used when stderr is empty", func(t *testing.T) {
+		t.Setenv("MULTICA_TEST_POPO_HELPER", "stdout-only-error")
+		_, err := runPopo(context.Background(), exe, []string{"-test.run=^TestPopoHelperProcess$"})
+		if err == nil || !strings.Contains(err.Error(), "please run popo login") {
+			t.Fatalf("err = %v, want sanitized stdout diagnostic", err)
+		}
+		var sendErr *SendError
+		if errors.As(err, &sendErr) {
+			t.Fatalf("stdout-only failure must stay unclassified: %v", err)
+		}
+	})
+}
+
+func TestPopoHelperProcess(t *testing.T) {
+	mode := os.Getenv("MULTICA_TEST_POPO_HELPER")
+	if mode == "" {
+		return
+	}
+	switch mode {
+	case "refusal":
+		_, _ = os.Stdout.WriteString(`{"ok":true,"data":{"status":0,"message":"robot not found"}}`)
+		os.Exit(1)
+	case "stderr":
+		_, _ = os.Stderr.WriteString("Error: not logged in\nrun popo login first\n")
+		os.Exit(1)
+	case "stdout-noise-and-stderr":
+		_, _ = os.Stdout.WriteString("Checking popo profile...\n")
+		_, _ = os.Stderr.WriteString("Error: not logged in\n")
+		os.Exit(1)
+	case "json-error-and-stderr":
+		_, _ = os.Stdout.WriteString(`{"ok":false,"code":"FABRIC_ERROR"}`)
+		_, _ = os.Stderr.WriteString("token expired\n")
+		os.Exit(1)
+	case "stdout-only-error":
+		_, _ = os.Stdout.WriteString("Error: please run popo login\n")
+		os.Exit(1)
+	}
+}

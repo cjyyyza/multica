@@ -10,11 +10,11 @@ POPO「连接智能体」接入的 DSH 等工作伙伴具有发送身份。协�
 
 ## 决策
 
-[正式 CLI](../../../server/cmd/multica/cmd_notify.go) 提供 `notify send`，接收任意事件名、标题、正文和链接；[通知包](../../../server/internal/notify/popo.go) 的 `Notification`、`Sender` 与任务状态解耦。调用 `use_robot_send_msg` 时始终使用配置中的完整工作伙伴名称，群内提醒同时带实际 UID 和查回的显示名，不回退个人发送接口。
+[正式 CLI](../../../server/cmd/multica/cmd_notify.go) 提供 `notify send`，接收任意事件名、标题、正文和链接，并支持通过 `--receiver` 与可重复的 `--at` 临时覆写收件人与群 `@` 列表（仅指定 `--receiver` 时清空配置目标的原有 `atUids`，发件工作伙伴名仍来自配置）；[通知包](../../../server/internal/notify/popo.go) 的 `Notification`、`Sender` 与任务状态解耦。调用 `use_robot_send_msg` 时始终使用配置中的完整工作伙伴名称，群内提醒按大小写不敏感查回规范 UID 与显示名并在配置校验阶段去重，不回退个人发送接口；Windows 包装脚本优先解析 shim 指向的 Node 入口再回退默认 npm 目录，非零退出时优先保留明确的下游业务拒绝并同时保留精简 `stderr`/非 JSON 诊断而不放松 `unknown` 防重发边界。
 
 通知配置按命名目标保存工作伙伴、接收群或账号、被 @ 的账号及可选网页地址。服务器通过 `--config` 或 `MULTICA_NOTIFY_CONFIG` 指向部署环境的独立 JSON；协调智能体也可在自己的 AGENTS.md 使用单一 `multica-notify` JSON 代码块，由 `--agents-file` 选择。两个文件参数互斥，显式参数优先于环境变量，选定文件失败不回退到仓库指令，不跨项目合并。仅未选择文件且没有配置环境变量时查找最近的 AGENTS.md。凭证不写入路由 JSON、Markdown 或投递记录，仓库根 AGENTS.md 不承载运行时通知配置。
 
-[评论成员提及通知](../../../server/cmd/multica/cmd_issue_popo.go) 也复用 `notify.Popo`：Windows 执行智能体成功发表评论后，以 `MULTICA_NOTIFY_CONFIG` 指定的部署 JSON 中默认目标的 `robotName` 发私信，接收人仍由被提及成员邮箱决定，不继承群号或群 @ 列表。守护进程显式传递部署配置路径和 `MULTICA_POPO_CLI` 布尔开关，保持其余 `MULTICA_*` 环境隔离；开关默认启用，设为 `false` 时跳过该通知，启用时固定使用 `PATH` 中的 `popo-cli`。该自动路径不查找仓库 AGENTS.md，不回退个人账号，不维护通知投递账本或自动重试；配置或发送失败只警告，不改变评论结果，Requirement 所属任务继续排除。
+[评论成员提及通知](../../../server/cmd/multica/cmd_issue_popo.go) 也复用 `notify.Popo`：Windows 执行智能体成功发表评论后，以 `MULTICA_NOTIFY_CONFIG` 指定的部署 JSON 中默认目标的 `robotName` 发私信，接收人仍由被提及成员邮箱决定，不继承群号或群 @ 列表，正文基于 CommonMark AST 将规范 `mention://` 链接渲染为可读名称（保留同行方括号、普通链接和代码片段）并在超出 3000 字符预算时自动截断保留任务链接。守护进程与各后端白名单（含 Hermes 与 MuseApp）显式传递部署配置路径和 `MULTICA_POPO_CLI` 布尔开关，保持其余 `MULTICA_*` 环境隔离；开关默认启用，设为 `false` 时跳过该通知，启用时固定使用 `PATH` 中的 `popo-cli`。该自动路径不查找仓库 AGENTS.md，不回退个人账号，不维护通知投递账本或自动重试；配置或发送失败只警告，不改变评论结果，Requirement 所属任务继续排除。
 
 `notify watch` 是该通用发送入口的一个调用方。它用显式成员凭证读取已有 Requirement 或普通 Issue API，拒绝随 Run 结束而失效的任务凭证。服务器使用默认前台模式交给进程管理器托管，[systemd 模板](../../../examples/workpartner-notifications/multica-notify@.service) 按 Requirement 实例保留状态目录并在异常退出时恢复。协调智能体直接启动时也可使用[现有进程脱离机制](../../../server/cmd/multica/cmd_notify_background.go)，取得监听锁后才返回启动回执；子进程使用已解析的绝对配置路径，不因工作目录或环境变量变化选错配置。通知进程不在 DSH 模型轮次里维持等待，不改服务端数据库或增加公共回调接口。
 
@@ -40,7 +40,7 @@ POPO「连接智能体」接入的 DSH 等工作伙伴具有发送身份。协�
 
 ## 验证与限制
 
-评论私信切换至共享发送器及部署环境传递的改动尚未运行测试，按用户要求暂缓；既有验证记录不覆盖这些改动，也不证明真实 POPO 已送达。
+2026-11-19，Windows agent CLI guard 下已通过 `./internal/util`、`./internal/notify` 全包单测，以及 `./cmd/multica`（`notify`、评论 POPO 提及与 `popo verification-relay`）、`./internal/service`、`./internal/daemon`、`./internal/daemon/execenv`、`./pkg/agent` 相关定向回归、`go vet` 与 `check_agent_notes.py`；不含真实 POPO 端到端发送验收、全量 Go 套件或前端/文档站点构建验证。
 
 2026-11-12，[配置、POPO 适配、投递与监听测试](../../../server/internal/notify/watch_test.go) 和[CLI 回归](../../../server/cmd/multica/cmd_notify_test.go) 覆盖命名路由、真实 @ 参数、中文文件、严格凭证、普通任务与 Requirement 归属、不同问题、候选与返工状态、重启回放、未知回执及恢复。Windows 检查使用 agent CLI guard，默认测试不访问用户安装的 Agent 或 POPO CLI。
 

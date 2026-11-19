@@ -48,7 +48,7 @@ The app URL is the browser-facing base URL, which may differ from the API server
 multica notify send --config /etc/multica/notify.json --event question --title "Release window" --message-file question.txt --url https://your-multica-app.example/team/issues/MUL-123 --idempotency-key MUL-123-question-1
 ```
 
-`event` is a caller-defined string. Completion, questions, build failures and other callers share the same `Notification` and `Sender` interface; no task ID or Multica credential is required for a standalone send. The body supports `--message`, `--message-file` or `--message-stdin`. On Windows, prefer an existing UTF-8 file. File/stdin content is preserved, and the POPO invocation always uses UTF-8 temporary files and argument vectors.
+`event` is a caller-defined string. Completion, questions, build failures and other callers share the same `Notification` and `Sender` interface; no task ID or Multica credential is required for a standalone send. To reach a dynamic person or group while keeping the configured work partner identity, pass `--receiver <group-id-or-account>` (and optional repeatable `--at <account>` for groups) to `notify send`; supplying `--receiver` without `--at` clears any configured `atUids`. The body supports `--message`, `--message-file` or `--message-stdin`. On Windows, prefer an existing UTF-8 file. File/stdin content is preserved, and the POPO invocation always uses UTF-8 temporary files and argument vectors.
 
 `--dry-run` prints the target and notification without network calls or delivery writes; it does not verify POPO login, mention names or group membership. Notifications exceeding the CLI's 3000-character budget are rejected. Send a summary and link for longer content.
 
@@ -60,7 +60,7 @@ On Windows, comments posted by daemon-managed agents through `multica issue comm
 
 The sender uses `robotName` from the configured `defaultTarget`; each explicitly mentioned member's email supplies the private receiver. The configured group's `receiver` and `atUids` are not used. Repeated mentions of one member in a comment send only one message. Requirement-owned issues keep their dedicated notification flow.
 
-The message contains the comment and issue link and uses the same 3000-character budget and confirmed message receipt checks as `notify send`. This automatic path attempts delivery once without maintaining the `notify send` delivery store. Missing configuration or a send failure prints a warning after the comment succeeds; it never falls back to personal-account sending or automatically retries an unknown outcome.
+The message contains the comment (with `mention://` links rendered as readable names) and the issue link. Long comments are truncated to fit within the 3000-character budget while keeping the issue link, using the same confirmed message receipt checks as `notify send`. This automatic path attempts delivery once without maintaining the `notify send` delivery store. Missing configuration or a send failure prints a warning after the comment succeeds; it never falls back to personal-account sending or automatically retries an unknown outcome.
 
 ## Follow a Multica task
 

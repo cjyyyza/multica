@@ -40,7 +40,8 @@ func TestConfigRoutingAndValidation(t *testing.T) {
 		"missing default":       configMarkdown(strings.Replace(configJSON, `"defaultTarget":"team"`, `"defaultTarget":"missing"`, 1)),
 		"unresolved group name": configMarkdown(strings.Replace(configJSON, `"8493291"`, `"测试"`, 1)),
 		"private mentions":      configMarkdown(strings.Replace(configJSON, `"8493291"`, `"yujian01@corp.netease.com"`, 1)),
-		"duplicate mentions":    configMarkdown(strings.Replace(configJSON, `["yujian01@corp.netease.com"]`, `["yujian01@corp.netease.com","yujian01@corp.netease.com"]`, 1)),
+		"duplicate mentions":      configMarkdown(strings.Replace(configJSON, `["yujian01@corp.netease.com"]`, `["yujian01@corp.netease.com","yujian01@corp.netease.com"]`, 1)),
+		"case duplicate mentions": configMarkdown(strings.Replace(configJSON, `["yujian01@corp.netease.com"]`, `["YuJian01@corp.netease.com","yujian01@corp.netease.com"]`, 1)),
 		"invalid mention":       configMarkdown(strings.Replace(configJSON, `["yujian01@corp.netease.com"]`, `["俞坚"]`, 1)),
 		"credential in app URL": configMarkdown(strings.Replace(configJSON, `"version":1`, `"version":1,"appUrl":"https://member:token@multica.example"`, 1)),
 	} {

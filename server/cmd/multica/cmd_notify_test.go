@@ -289,3 +289,100 @@ func TestNotifySendUsesDeploymentJSONWithoutAgentInstructions(t *testing.T) {
 		t.Fatalf("server notification: %+v", sender)
 	}
 }
+
+func TestNotifySendDynamicReceiverAndMentions(t *testing.T) {
+	agentsFile, stateDir := notifyCLISetup(t)
+
+	t.Run("override receiver with private account clears configured group mentions", func(t *testing.T) {
+		sender := &notifyTestSender{}
+		command := newNotifyCommand(sender)
+		command.SetOut(io.Discard)
+		command.SetArgs([]string{
+			"send", "--agents-file", agentsFile, "--state-dir", stateDir,
+			"--receiver", "alice@corp.netease.com",
+			"--message", "请补充 dump 复现步骤",
+			"--idempotency-key", "dynamic-dm-1",
+		})
+		if err := command.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if sender.calls != 1 || sender.target.RobotName != "DeepSeek Harness" || sender.target.Receiver != "alice@corp.netease.com" || len(sender.target.AtUIDs) != 0 {
+			t.Fatalf("dynamic private target = %+v (calls=%d)", sender.target, sender.calls)
+		}
+	})
+
+	t.Run("same idempotency key rejects changing dynamic receiver", func(t *testing.T) {
+		sender := &notifyTestSender{}
+		command := newNotifyCommand(sender)
+		command.SetOut(io.Discard)
+		command.SetErr(io.Discard)
+		command.SetArgs([]string{
+			"send", "--agents-file", agentsFile, "--state-dir", stateDir,
+			"--receiver", "bob@corp.netease.com",
+			"--message", "请补充 dump 复现步骤",
+			"--idempotency-key", "dynamic-dm-1",
+		})
+		if err := command.Execute(); err == nil {
+			t.Fatal("reusing idempotency key for a different receiver succeeded")
+		}
+		if sender.calls != 0 {
+			t.Fatalf("conflicting key sent %d messages", sender.calls)
+		}
+	})
+
+	t.Run("override group receiver and mentions", func(t *testing.T) {
+		sender := &notifyTestSender{}
+		command := newNotifyCommand(sender)
+		command.SetOut(io.Discard)
+		command.SetArgs([]string{
+			"send", "--agents-file", agentsFile, "--state-dir", stateDir,
+			"--receiver", "999888",
+			"--at", "alice@corp.netease.com",
+			"--at", "bob@corp.netease.com",
+			"--message", "修复已 shelve，请验证",
+			"--idempotency-key", "dynamic-group-1",
+		})
+		if err := command.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if sender.calls != 1 || sender.target.Receiver != "999888" || len(sender.target.AtUIDs) != 2 || sender.target.AtUIDs[0] != "alice@corp.netease.com" || sender.target.AtUIDs[1] != "bob@corp.netease.com" {
+			t.Fatalf("dynamic group target = %+v", sender.target)
+		}
+	})
+
+	t.Run("override mentions only keeps configured group", func(t *testing.T) {
+		sender := &notifyTestSender{}
+		command := newNotifyCommand(sender)
+		command.SetOut(io.Discard)
+		command.SetArgs([]string{
+			"send", "--agents-file", agentsFile, "--state-dir", stateDir,
+			"--at", "bob@corp.netease.com",
+			"--message", "群内定向提醒",
+			"--idempotency-key", "dynamic-at-only-1",
+		})
+		if err := command.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if sender.calls != 1 || sender.target.Receiver != "8493291" || len(sender.target.AtUIDs) != 1 || sender.target.AtUIDs[0] != "bob@corp.netease.com" {
+			t.Fatalf("at-only target = %+v", sender.target)
+		}
+	})
+
+	t.Run("rejects mentions on private receiver or blank receiver", func(t *testing.T) {
+		for _, extra := range [][]string{
+			{"--receiver", "alice@corp.netease.com", "--at", "bob@corp.netease.com"},
+			{"--receiver", ""},
+			{"--at", ""},
+		} {
+			sender := &notifyTestSender{}
+			command := newNotifyCommand(sender)
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			args := append([]string{"send", "--agents-file", agentsFile, "--state-dir", stateDir, "--message", "hi"}, extra...)
+			command.SetArgs(args)
+			if err := command.Execute(); err == nil || sender.calls != 0 {
+				t.Fatalf("invalid dynamic flags %v: err=%v calls=%d", extra, err, sender.calls)
+			}
+		}
+	})
+}

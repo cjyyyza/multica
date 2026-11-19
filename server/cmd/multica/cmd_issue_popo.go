@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
@@ -33,12 +34,36 @@ func maybeNotifyIssueMentionsViaPOPO(client *cli.APIClient, issueID, content str
 	}
 }
 
+const popoCommentMaxRunes = 3000
+
+func formatIssueCommentForPOPO(content, issueLink string) string {
+	body := util.RenderMentionsPlainText(content)
+	suffix := "\n\nIssue: " + issueLink
+	suffixRunes := utf8.RuneCountInString(suffix)
+	if utf8.RuneCountInString(body)+suffixRunes <= popoCommentMaxRunes {
+		return body + suffix
+	}
+	ellipsis := "\n…（内容较长，请打开 Multica 查看全文）"
+	budget := popoCommentMaxRunes - suffixRunes - utf8.RuneCountInString(ellipsis)
+	if budget <= 0 {
+		return strings.TrimLeft(suffix, "\n")
+	}
+	return string([]rune(body)[:budget]) + ellipsis + suffix
+}
+
 func notifyIssueMentionsViaPOPO(ctx context.Context, client *cli.APIClient, issueID, content string, sender notify.Sender) error {
+	seen := make(map[string]bool)
 	var recipientIDs []string
 	for _, mention := range util.ParseMentions(content) {
-		if mention.Type == "member" {
-			recipientIDs = append(recipientIDs, mention.ID)
+		if mention.Type != "member" {
+			continue
 		}
+		normalized := strings.ToLower(mention.ID)
+		if seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		recipientIDs = append(recipientIDs, normalized)
 	}
 	if len(recipientIDs) == 0 {
 		return nil
@@ -97,10 +122,10 @@ func notifyIssueMentionsViaPOPO(ctx context.Context, client *cli.APIClient, issu
 	}
 	emails := make(map[string]string, len(members))
 	for _, member := range members {
-		emails[member.UserID] = strings.TrimSpace(member.Email)
+		emails[strings.ToLower(member.UserID)] = strings.TrimSpace(member.Email)
 	}
 
-	notification := notify.Notification{Message: content + "\n\nIssue: " + issueLink}
+	notification := notify.Notification{Message: formatIssueCommentForPOPO(content, issueLink)}
 	var sendErrors []error
 	for _, recipientID := range recipientIDs {
 		receiver := emails[recipientID]
