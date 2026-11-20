@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/daemon/p4cache"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -41,11 +42,21 @@ func (d *Daemon) handleP4Content(ctx context.Context, rt Runtime, requestID stri
 			err = fmt.Errorf("Perforce is not available in this workspace")
 		} else {
 			input.workspaceID = input.WorkspaceID
-			ref, allowed := d.authorizedP4PollRef(ctx, input.P4Depots, input.p4OpenChangelist)
+			ref, userFromCL, allowed := d.authorizedP4Ref(ctx, input.P4Depots, input.p4OpenChangelist)
 			if !allowed {
 				err = fmt.Errorf("no configured Perforce resource authorizes this read")
 			} else {
-				result, err = d.p4Cache.ReadChangelistContent(ctx, ref, input.Number, input.File, input.AllowWorkspace && (input.DaemonID == "" || input.DaemonID == d.cfg.DaemonID))
+				allowWorkspace := input.AllowWorkspace && (input.DaemonID == "" || input.DaemonID == d.cfg.DaemonID)
+				result, err = d.p4Cache.ReadChangelistContent(ctx, ref, input.Number, input.File, allowWorkspace)
+				if err != nil && userFromCL && p4cache.IsAuthError(err) {
+					// Legacy rows reported before daemon_id resolution can carry
+					// another machine's P4USER; fall back to this host's own login.
+					hostRef := ref
+					hostRef.User = ""
+					if hostResult, hostErr := d.p4Cache.ReadChangelistContent(ctx, hostRef, input.Number, input.File, allowWorkspace); hostErr == nil {
+						result, err = hostResult, nil
+					}
+				}
 			}
 		}
 	}

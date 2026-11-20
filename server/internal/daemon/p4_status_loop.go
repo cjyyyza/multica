@@ -284,6 +284,11 @@ func (d *Daemon) p4WorkspaceIDs() []string {
 // p4PollRef selects only a resource configured for this poll's workspace.
 // The changelist row can name a server/review, but cannot authorize either.
 func p4PollRef(depots []P4DepotData, cl p4OpenChangelist) (p4depot.Ref, bool) {
+	ref, _, ok := p4PollRefForDaemon(depots, cl, "")
+	return ref, ok
+}
+
+func p4PollRefForDaemon(depots []P4DepotData, cl p4OpenChangelist, daemonID string) (p4depot.Ref, bool, bool) {
 	var selected p4depot.Ref
 	found := false
 	for _, depot := range depots {
@@ -306,18 +311,25 @@ func p4PollRef(depots []P4DepotData, cl p4OpenChangelist) (p4depot.Ref, bool) {
 		}
 	}
 	if !found {
-		return p4depot.Ref{}, false
+		return p4depot.Ref{}, false, false
 	}
-	// Saved context can fill omissions, never authorize a server or replace
-	// the current configured account, charset, or review origin.
-	if selected.User == "" {
-		selected.User = strings.TrimSpace(cl.P4User)
+	userFromCL := false
+	// Saved context can fill omissions on the reporting daemon, never authorize
+	// a server or replace the current configured account, charset, or review
+	// origin. Another daemon must use its own Perforce login instead of
+	// impersonating the changelist author's account.
+	sameDaemon := cl.DaemonID == "" || daemonID == "" || cl.DaemonID == daemonID
+	if selected.User == "" && sameDaemon {
+		if savedUser := strings.TrimSpace(cl.P4User); savedUser != "" {
+			selected.User = savedUser
+			userFromCL = true
+		}
 	}
 	if selected.Charset == "" {
 		selected.Charset = strings.TrimSpace(cl.Charset)
 	}
 	selected, err := p4depot.Normalize(selected)
-	return selected, err == nil
+	return selected, userFromCL, err == nil
 }
 
 func (d *Daemon) claimP4Poll(ctx context.Context, workspaceID, id string, generation int64) (int64, bool) {
@@ -329,11 +341,16 @@ func (d *Daemon) claimP4Poll(ctx context.Context, workspaceID, id string, genera
 }
 
 func (d *Daemon) authorizedP4PollRef(ctx context.Context, depots []P4DepotData, cl p4OpenChangelist) (p4depot.Ref, bool) {
-	if ref, ok := p4PollRef(depots, cl); ok {
-		return ref, true
+	ref, _, ok := d.authorizedP4Ref(ctx, depots, cl)
+	return ref, ok
+}
+
+func (d *Daemon) authorizedP4Ref(ctx context.Context, depots []P4DepotData, cl p4OpenChangelist) (p4depot.Ref, bool, bool) {
+	if ref, userFromCL, ok := p4PollRefForDaemon(depots, cl, d.cfg.DaemonID); ok {
+		return ref, userFromCL, true
 	}
 	if cl.Client == "" || cl.DaemonID == "" || !p4depot.ClusterKey(cl.ServerKey, cl.Port) {
-		return p4depot.Ref{}, false
+		return p4depot.Ref{}, false, false
 	}
 	for _, data := range depots {
 		if !p4depot.SameTransport(data.Port, cl.Port) {
@@ -341,14 +358,14 @@ func (d *Daemon) authorizedP4PollRef(ctx context.Context, depots []P4DepotData, 
 		}
 		probe := cl
 		probe.Port = data.Port
-		ref, ok := p4PollRef([]P4DepotData{data}, probe)
+		ref, userFromCL, ok := p4PollRefForDaemon([]P4DepotData{data}, probe, d.cfg.DaemonID)
 		if !ok {
 			continue
 		}
 		key, err := d.p4Cache.ServerKey(ctx, ref)
 		if err == nil && key == cl.ServerKey {
-			return ref, true
+			return ref, userFromCL, true
 		}
 	}
-	return p4depot.Ref{}, false
+	return p4depot.Ref{}, false, false
 }

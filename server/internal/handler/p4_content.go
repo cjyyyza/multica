@@ -1,14 +1,38 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+// resolveP4ChangelistDaemonID returns the reporting daemon's ID. PAT/JWT
+// daemons leave p4_changelist.daemon_id empty on task reports, so fall back to
+// the originating task's runtime to route reads back to the machine that holds
+// the client and its Perforce login.
+func (h *Handler) resolveP4ChangelistDaemonID(ctx context.Context, cl db.P4Changelist) string {
+	if id := strings.TrimSpace(cl.DaemonID); id != "" {
+		return id
+	}
+	if !cl.TaskID.Valid {
+		return ""
+	}
+	task, err := h.Queries.GetAgentTask(ctx, cl.TaskID)
+	if err != nil || !task.RuntimeID.Valid {
+		return ""
+	}
+	rt, err := h.getAgentRuntime(ctx, obsmetrics.RuntimeLookupSourceDaemonAPI, task.RuntimeID)
+	if err != nil || rt.WorkspaceID != cl.WorkspaceID {
+		return ""
+	}
+	return strings.TrimSpace(rt.DaemonID.String)
+}
 
 func (h *Handler) loadIssueP4Content(w http.ResponseWriter, r *http.Request) (db.Issue, db.P4Changelist, bool) {
 	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
@@ -52,6 +76,7 @@ func (h *Handler) RequestIssueP4Content(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to list Perforce daemons")
 		return
 	}
+	originDaemonID := h.resolveP4ChangelistDaemonID(r.Context(), cl)
 	var selected *db.AgentRuntime
 	best := -1
 	for i := range runtimes {
@@ -63,7 +88,7 @@ func (h *Handler) RequestIssueP4Content(w http.ResponseWriter, r *http.Request) 
 		if rt.OwnerID == userID {
 			rank++
 		}
-		if cl.DaemonID != "" && rt.DaemonID.String == cl.DaemonID {
+		if originDaemonID != "" && rt.DaemonID.String == originDaemonID {
 			rank += 2
 		}
 		if rank > best {
@@ -148,16 +173,17 @@ func (h *Handler) GetDaemonP4ContentContext(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "failed to resolve Perforce resources")
 		return
 	}
-	if !p4PollResourceAllowed(cl.Port, cl.ServerKey, cl.Client, cl.DaemonID, depots) {
+	originDaemonID := h.resolveP4ChangelistDaemonID(r.Context(), cl)
+	if !p4PollResourceAllowed(cl.Port, cl.ServerKey, cl.Client, originDaemonID, depots) {
 		writeError(w, http.StatusForbidden, "no current Perforce resource authorizes this read")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"workspace_id": req.WorkspaceID, "id": cl.ID, "port": cl.Port, "server_key": cl.ServerKey,
-		"client": cl.Client, "daemon_id": cl.DaemonID, "p4_user": cl.P4User, "charset": cl.Charset,
+		"client": cl.Client, "daemon_id": originDaemonID, "p4_user": cl.P4User, "charset": cl.Charset,
 		"number": cl.Number, "original_number": cl.OriginalNumber, "p4_depots": depots, "file": req.File,
 		// Private working files stay owner-only even on a shared runtime.
-		"allow_workspace": req.UserID == uuidToString(rt.OwnerID) && (cl.DaemonID == "" || cl.DaemonID == rt.DaemonID.String),
+		"allow_workspace": req.UserID == uuidToString(rt.OwnerID) && (originDaemonID == "" || originDaemonID == rt.DaemonID.String),
 	})
 }
 

@@ -63,9 +63,15 @@ func main() {
 		f.Close()
 	}
 	rest := []string{}
+	user := os.Getenv("P4USER")
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "-p", "-u", "-c", "-C":
+		case "-u":
+			if i+1 < len(args) {
+				user = args[i+1]
+			}
+			i++
+		case "-p", "-c", "-C":
 			i++
 		case "-ztag":
 		default:
@@ -75,6 +81,10 @@ func main() {
 	}
 	if len(rest) == 0 {
 		panic("no p4 command")
+	}
+	if authUser := os.Getenv("P4_FAKE_AUTH_USER"); authUser != "" && rest[0] != "info" && rest[0] != "set" && user != authUser {
+		fmt.Fprintln(os.Stderr, "Perforce password (P4PASSWD) invalid or unset.")
+		os.Exit(1)
 	}
 	joined := " " + strings.Join(rest, " ") + " "
 	switch rest[0] {

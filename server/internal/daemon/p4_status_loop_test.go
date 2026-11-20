@@ -160,3 +160,22 @@ func TestP4PollRefRejectsMalformedPersistedContext(t *testing.T) {
 		}
 	}
 }
+
+func TestP4PollRefForDaemonSkipsForeignChangelistUser(t *testing.T) {
+	depots := []P4DepotData{{Port: "p4:1666", Depot: "//depot"}}
+	cl := p4OpenChangelist{Port: "p4:1666", DaemonID: "origin-daemon", P4User: "origin-user"}
+
+	ref, userFromCL, ok := p4PollRefForDaemon(depots, cl, "other-daemon")
+	if !ok || ref.User != "" || userFromCL {
+		t.Fatalf("foreign daemon adopted changelist user: ref=%+v userFromCL=%v ok=%v", ref, userFromCL, ok)
+	}
+	ref, userFromCL, ok = p4PollRefForDaemon(depots, cl, "origin-daemon")
+	if !ok || ref.User != "origin-user" || !userFromCL {
+		t.Fatalf("same daemon lost changelist user: ref=%+v userFromCL=%v ok=%v", ref, userFromCL, ok)
+	}
+	configured := []P4DepotData{{Port: "p4:1666", Depot: "//depot", User: "configured-user"}}
+	ref, userFromCL, ok = p4PollRefForDaemon(configured, cl, "other-daemon")
+	if !ok || ref.User != "configured-user" || userFromCL {
+		t.Fatalf("configured depot user was not preserved: ref=%+v userFromCL=%v ok=%v", ref, userFromCL, ok)
+	}
+}

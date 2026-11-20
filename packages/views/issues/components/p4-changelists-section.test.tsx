@@ -115,10 +115,12 @@ describe("P4ChangelistsSection", () => {
 
   it("opens from the file count and lets a failed read be retried", async () => {
     apiMock.listIssueP4Changelists.mockResolvedValue({ changelists: [changelist()] });
-    apiMock.requestIssueP4Content.mockRejectedValueOnce(new Error("daemon offline"));
+    apiMock.requestIssueP4Content.mockRejectedValueOnce(new Error("Perforce password (P4PASSWD) invalid or unset."));
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "2 files" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("updated daemon");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("updated daemon");
+    expect(alert).toHaveTextContent("Perforce password (P4PASSWD) invalid or unset.");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("+new")).toBeInTheDocument();
   });

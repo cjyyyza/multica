@@ -37,7 +37,7 @@ export function P4ChangelistContentDialog({ issueId, changelist }: { issueId: st
         ) : null}
       </DialogHeader>
       {listing.isPending ? <LoadingContent /> : listing.isError ? (
-        <ContentError onRetry={() => void listing.refetch()} />
+        <ContentError error={listing.error} onRetry={() => void listing.refetch()} />
       ) : files.length === 0 ? (
         <p className="p-6 text-caption text-muted-foreground">{t(($) => $.p4.content_empty)}</p>
       ) : (
@@ -74,7 +74,7 @@ export function P4ChangelistContentDialog({ issueId, changelist }: { issueId: st
               </Button>
             </div>
             <div className="min-h-0 flex-1 overflow-auto" tabIndex={0}>
-              {diff.isPending ? <LoadingContent /> : diff.isError ? <ContentError onRetry={() => void diff.refetch()} />
+              {diff.isPending ? <LoadingContent /> : diff.isError ? <ContentError error={diff.error} onRetry={() => void diff.refetch()} />
                 : diff.data ? <ChangelistDiff content={diff.data} /> : null}
             </div>
           </section>
@@ -89,9 +89,22 @@ function LoadingContent() {
   return <div role="status" className="flex items-center gap-2 p-6 text-caption text-muted-foreground"><Loader2 className="size-4 animate-spin" />{t(($) => $.p4.content_loading)}</div>;
 }
 
-function ContentError({ onRetry }: { onRetry: () => void }) {
+function ContentError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
   const { t } = useT("issues");
-  return <div className="space-y-3 p-6"><p role="alert" className="text-caption text-muted-foreground">{t(($) => $.p4.content_failed)}</p><Button variant="outline" size="sm" onClick={onRetry}>{t(($) => $.p4.content_retry)}</Button></div>;
+  const detail = error instanceof Error ? error.message.trim() : "";
+  return (
+    <div className="space-y-3 p-6">
+      <div role="alert" className="space-y-1">
+        <p className="text-caption text-muted-foreground">{t(($) => $.p4.content_failed)}</p>
+        {detail ? (
+          <p className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words font-mono text-micro text-muted-foreground" dir="ltr">
+            {detail}
+          </p>
+        ) : null}
+      </div>
+      <Button variant="outline" size="sm" onClick={onRetry}>{t(($) => $.p4.content_retry)}</Button>
+    </div>
+  );
 }
 
 function fileActionLabel(action: string, t: ReturnType<typeof useT<"issues">>["t"]): string {

@@ -112,6 +112,56 @@ func TestP4ContentRequestRoundTripAndIsolation(t *testing.T) {
 	testutil.Call(t, h.GetDaemonP4ContentContext, p4DaemonRequest(http.MethodGet, "/", nil, "22222222-2222-4222-8222-222222222222", "p4-content-daemon", "runtimeId", runtime, "requestId", request.ID)).Want(http.StatusNotFound)
 }
 
+func TestP4ContentRoutesAndScopesPATReportedChangelistByTaskRuntime(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database unavailable")
+	}
+	h := *testHandler
+	h.P4ContentStore = NewP4ContentStore(nil)
+	caps := testutil.Raw(`'{"capabilities":["p4-content-v1"]}'::jsonb`)
+	otherRuntime := dbfx.Runtime(t, "p4 earlier runtime", testutil.Cols{"daemon_id": "other-pat-daemon", "status": "online", "metadata": caps})
+	originRuntime := dbfx.Runtime(t, "p4 origin runtime", testutil.Cols{"daemon_id": "origin-pat-daemon", "status": "online", "metadata": caps})
+	project := p4ConfiguredProject(t, "p4 pat content", p4TestPort)
+	issue := dbfx.Issue(t, "p4 pat content", testutil.Cols{"project_id": project})
+	agent := dbfx.Agent(t, "p4 pat content agent", originRuntime)
+	task := dbfx.Task(t, agent, testutil.Cols{"runtime_id": originRuntime, "issue_id": issue, "status": "running"})
+
+	// PAT/JWT-authenticated daemons report changelists with X-User-ID and no
+	// daemon-token context, leaving p4_changelist.daemon_id empty.
+	patReport := testutil.WithURLParams(newRequest(http.MethodPost, "/", reportBody(895000+int(p4LeaseTestNumber.Add(1)), 0, nil)), "taskId", task)
+	var cl P4ChangelistResponse
+	testutil.Call(t, h.ReportTaskP4Changelist, patReport).Want(http.StatusOK).JSON(&cl)
+
+	var request P4ContentRequest
+	testutil.Call(t, h.RequestIssueP4Content, p4UserRequest(http.MethodPost, "/", map[string]any{}, issue, "changelistId", cl.ID)).Want(http.StatusOK).JSON(&request)
+	if request.RuntimeID != originRuntime {
+		t.Fatalf("selected runtime %s, want originating task runtime %s (earlier runtime was %s)", request.RuntimeID, originRuntime, otherRuntime)
+	}
+	var readContext struct {
+		DaemonID       string `json:"daemon_id"`
+		AllowWorkspace bool   `json:"allow_workspace"`
+	}
+	originContextReq := testutil.WithURLParams(newRequest(http.MethodGet, "/", nil), "runtimeId", originRuntime, "requestId", request.ID)
+	testutil.Call(t, h.GetDaemonP4ContentContext, originContextReq).Want(http.StatusOK).JSON(&readContext)
+	if readContext.DaemonID != "origin-pat-daemon" || !readContext.AllowWorkspace {
+		t.Fatalf("origin read context = %+v", readContext)
+	}
+
+	// When the originating machine is offline, another online daemon serves the
+	// read, receives the originating daemon_id, and cannot read local workspace files.
+	dbfx.Exec(t, "UPDATE agent_runtime SET status = 'offline' WHERE id = $1", originRuntime)
+	var fallbackRequest P4ContentRequest
+	testutil.Call(t, h.RequestIssueP4Content, p4UserRequest(http.MethodPost, "/", map[string]any{}, issue, "changelistId", cl.ID)).Want(http.StatusOK).JSON(&fallbackRequest)
+	if fallbackRequest.RuntimeID != otherRuntime {
+		t.Fatalf("fallback runtime = %s, want %s", fallbackRequest.RuntimeID, otherRuntime)
+	}
+	otherContextReq := testutil.WithURLParams(newRequest(http.MethodGet, "/", nil), "runtimeId", otherRuntime, "requestId", fallbackRequest.ID)
+	testutil.Call(t, h.GetDaemonP4ContentContext, otherContextReq).Want(http.StatusOK).JSON(&readContext)
+	if readContext.DaemonID != "origin-pat-daemon" || readContext.AllowWorkspace {
+		t.Fatalf("fallback read context = %+v", readContext)
+	}
+}
+
 func TestRedisP4ContentStoreSharesRequests(t *testing.T) {
 	rdb := newRedisTestClient(t)
 	ctx := context.Background()

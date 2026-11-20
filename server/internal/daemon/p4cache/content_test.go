@@ -102,3 +102,29 @@ func TestReadChangelistContentPendingAndLimits(t *testing.T) {
 		t.Fatalf("unbounded diff: length=%d truncated=%t error=%v", len(result.Diff), result.Truncated, err)
 	}
 }
+
+func TestIsAuthError(t *testing.T) {
+	for _, msg := range []string{
+		"Perforce password (P4PASSWD) invalid or unset.",
+		"Your session has expired, please login again.",
+		"Your session was logged out, please login again.",
+		"User alice doesn't exist.",
+	} {
+		if !IsAuthError(fmt.Errorf("%s", msg)) {
+			t.Errorf("IsAuthError(%q) = false, want true", msg)
+		}
+	}
+	for _, msg := range []string{
+		"",
+		"Client 'alice_DEV' doesn't exist.",
+		"Connect to server failed; check $P4PORT.",
+		"Change 1001 unknown.",
+	} {
+		if IsAuthError(fmt.Errorf("%s", msg)) {
+			t.Errorf("IsAuthError(%q) = true, want false", msg)
+		}
+	}
+	if IsAuthError(nil) {
+		t.Error("IsAuthError(nil) = true, want false")
+	}
+}

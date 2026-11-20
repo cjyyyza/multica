@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -16,6 +17,14 @@ import (
 )
 
 const p4ContentLimit = 512 * 1024
+
+var p4AuthFailed = regexp.MustCompile(`(?i)(P4PASSWD\)\s+invalid or unset|session has expired|session was logged out|please login again|password must be set before access|user\s+\S+\s+doesn't exist)`)
+
+// IsAuthError reports whether a Perforce error came from a missing, invalid,
+// or expired user ticket rather than a server or transport failure.
+func IsAuthError(err error) bool {
+	return err != nil && p4AuthFailed.MatchString(err.Error())
+}
 
 type contentBuffer struct {
 	buffer    bytes.Buffer
